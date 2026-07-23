@@ -8,9 +8,11 @@ import type { InlineKeyboardMarkup } from 'telegraf/types';
 // ── Helper ────────────────────────────────────────────────
 
 type IKB = InlineKeyboardMarkup['inline_keyboard'][number][number];
+type ButtonStyle = 'primary' | 'success' | 'danger';
+type StyledIKB = IKB & { style?: ButtonStyle };
 
-function btn(text: string, callback_data: string): IKB {
-  return { text, callback_data };
+function btn(text: string, callback_data: string, style?: ButtonStyle): IKB {
+  return { text, callback_data, ...(style ? { style } : {}) } as StyledIKB;
 }
 
 function urlBtn(text: string, url: string): IKB {
@@ -67,7 +69,7 @@ export function sessionsListKeyboard(
   if (start + pageSize < sessions.length) nav.push(btn('Next ▶', `sessions:list:${page + 1}`));
   if (nav.length > 0) rows.push(nav);
 
-  rows.push([btn('➕ New Session', 'session:new'), btn('🔙 Back', 'menu:main')]);
+  rows.push([btn('➕ New Session', 'session:new', 'success'), btn('🔙 Back', 'menu:main')]);
 
   return { inline_keyboard: rows };
 }
@@ -75,10 +77,10 @@ export function sessionsListKeyboard(
 export function sessionMenuKeyboard(sessionId: string): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
-      [btn('📊 Info', `session:${sessionId}:info`), btn('📋 Groups', `session:${sessionId}:groups`)],
-      [btn('❄️ Freeze', `session:${sessionId}:freeze`), btn('🔥 Unfreeze', `session:${sessionId}:unfreeze`)],
-      [btn('🔄 Re-Init', `session:${sessionId}:reinit`), btn('🗑 Purge', `session:${sessionId}:purge`)],
-      [btn('🌉 Bridge', `session:${sessionId}:bridge`), btn('🔙 Back', 'sessions:list')],
+      [btn('📊 Info', `session:${sessionId}:info`, 'primary'), btn('📋 Groups', `session:${sessionId}:groups`, 'primary')],
+      [btn('❄️ Freeze', `session:${sessionId}:freeze`, 'danger'), btn('🔥 Unfreeze', `session:${sessionId}:unfreeze`, 'success')],
+      [btn('🔄 Re-Init', `session:${sessionId}:reinit`, 'primary'), btn('🗑 Purge', `session:${sessionId}:purge`, 'danger')],
+      [btn('🌉 Bridge', `session:${sessionId}:bridge`, 'primary'), btn('🔙 Back', 'sessions:list')],
     ],
   };
 }
@@ -86,7 +88,7 @@ export function sessionMenuKeyboard(sessionId: string): InlineKeyboardMarkup {
 export function sessionPairKeyboard(sessionId: string): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
-      [btn('📷 QR Code', `pair:qr:${sessionId}`), btn('🔑 Pairing Code', `pair:code:${sessionId}`)],
+      [btn('📷 QR Code', `pair:qr:${sessionId}`, 'primary'), btn('🔑 Pairing Code', `pair:code:${sessionId}`, 'primary')],
       [btn('🔙 Back', 'sessions:list')],
     ],
   };
@@ -109,9 +111,9 @@ export function bucketMenuKeyboard(filterRunning: boolean): InlineKeyboardMarkup
   return {
     inline_keyboard: [
       [btn('📥 Main', 'bucket:view:main'), btn('✅ Active', 'bucket:view:active'), btn('💀 Dead', 'bucket:view:dead')],
-      [filterRunning ? btn('⏹ Stop Filter', 'bucket:filter:stop') : btn('▶️ Start Filter', 'bucket:filter:start')],
-      [btn('📤 Export TXT', 'bucket:export:txt'), btn('📊 Export CSV', 'bucket:export:csv'), btn('🌐 Export HTML', 'bucket:export:html')],
-      [btn('🗑 Purge Dead', 'bucket:purge:dead'), btn('🔀 Merge', 'bucket:merge')],
+      [filterRunning ? btn('⏹ Stop Filter', 'bucket:filter:stop', 'danger') : btn('▶️ Start Filter', 'bucket:filter:start', 'success')],
+      [btn('📤 Export TXT', 'bucket:export:txt', 'primary'), btn('📊 Export CSV', 'bucket:export:csv', 'primary'), btn('🌐 Export HTML', 'bucket:export:html', 'primary')],
+      [btn('🗑 Purge Dead', 'bucket:purge:dead', 'danger'), btn('🔀 Merge', 'bucket:merge', 'primary')],
       [btn('🔙 Back', 'menu:main')],
     ],
   };
@@ -177,11 +179,11 @@ export function adminUserKeyboard(telegramId: string, isBanned: boolean): Inline
     inline_keyboard: [
       [
         isBanned
-          ? btn('✅ Unban', `admin:unban:${telegramId}`)
-          : btn('🚫 Ban', `admin:ban:${telegramId}`),
-        btn('🔍 Inspect', `admin:inspect:${telegramId}`),
+          ? btn('✅ Unban', `admin:unban:${telegramId}`, 'success')
+          : btn('🚫 Ban', `admin:ban:${telegramId}`, 'danger'),
+        btn('🔍 Inspect', `admin:inspect:${telegramId}`, 'primary'),
       ],
-      [btn('🗑 Purge Sessions', `admin:purge_sessions:${telegramId}`)],
+      [btn('🗑 Purge Sessions', `admin:purge_sessions:${telegramId}`, 'danger')],
       [btn('🔙 Back', 'admin:users:0')],
     ],
   };
@@ -194,7 +196,7 @@ export function confirmKeyboard(
   noCallback: string
 ): InlineKeyboardMarkup {
   return {
-    inline_keyboard: [[btn('✅ Confirm', yesCallback), btn('❌ Cancel', noCallback)]],
+    inline_keyboard: [[btn('✅ Confirm', yesCallback, 'success'), btn('❌ Cancel', noCallback, 'danger')]],
   };
 }
 
