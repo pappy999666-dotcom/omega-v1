@@ -185,3 +185,7 @@
 {"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:41:48.629Z"}
 {"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:42:18.664Z"}
 {"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:42:48.696Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:43:18.723Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:43:48.753Z"}
+{"groupJid":"120363426577170609@g.us","level":"info","message":"[EventHandler] Command: .ping","sessionId":"1_8831887192_2347034171763","timestamp":"2026-07-23T09:43:59.702Z"}
+{"groupJid":"120363426577170609@g.us","level":"info","message":"[EventHandler] Command: .menu","sessionId":"1_8831887192_2347034171763","timestamp":"2026-07-23T09:44:08.501Z"}
