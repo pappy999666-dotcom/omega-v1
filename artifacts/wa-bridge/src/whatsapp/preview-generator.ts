@@ -83,38 +83,20 @@ export async function hydratedMessage(
   text: string,
   existingPreview?: { url?: string; title?: string; description?: string }
 ): Promise<AnyMessageContent> {
-  // Passthrough mode — preview metadata already exists
-  if (existingPreview?.url) {
-    return {
-      text,
-      linkPreview: {
-        url: existingPreview.url,
-        title: existingPreview.title ?? '',
-        description: existingPreview.description ?? '',
-        matchedText: existingPreview.url,
-        canonicalUrl: existingPreview.url,
-      },
-    };
-  }
+  const url = existingPreview?.url ?? extractFirstUrl(text);
+  if (!url) return { text };
 
-  // Hydration mode — detect raw URL and fetch metadata
-  const url = extractFirstUrl(text);
-  if (url) {
-    const meta = await fetchLinkMeta(url);
-    if (meta) {
-      return {
-        text,
-        linkPreview: {
-          url: meta.url,
-          title: meta.title ?? '',
-          description: meta.description ?? '',
-          matchedText: meta.url,
-          canonicalUrl: meta.url,
-        },
-      };
-    }
-  }
+  // Baileys expects the link-preview-js field names, notably `matched-text`.
+  // If no complete preview was supplied, leave linkPreview undefined so the
+  // socket's native getUrlInfo pipeline builds thumbnails and HQ media fields.
+  if (!existingPreview?.url) return { text };
 
-  // Fallback — plain text
-  return { text };
+  return {
+    text,
+    linkPreview: {
+      'matched-text': existingPreview.url,
+      title: existingPreview.title ?? '',
+      description: existingPreview.description ?? '',
+    },
+  } as AnyMessageContent;
 }
