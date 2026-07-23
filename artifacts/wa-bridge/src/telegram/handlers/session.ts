@@ -12,6 +12,7 @@ import {
   loadSessionMeta,
   purgeSession as wsPurgeSession,
   loadConfig,
+  updateSessionMeta,
 } from '../../services/workspace.js';
 import {
   initSocket,
@@ -32,6 +33,8 @@ import {
   confirmKeyboard,
   backKeyboard,
   bridgeExitKeyboard,
+  linkCollectionKeyboard,
+  joinManagerKeyboard,
 } from '../ui/keyboards.js';
 import {
   sessionCard,
@@ -43,6 +46,12 @@ import {
   noticeCard,
 } from '../../utils/formatter.js';
 import { logger } from '../../utils/logger.js';
+import {
+  getJoinManagerState,
+  pauseJoinManager,
+  startJoinManager,
+  stopJoinManager,
+} from '../../services/join-manager.js';
 
 // ── Session ID Generator ──────────────────────────────────
 
@@ -395,6 +404,54 @@ export async function handlePurgeConfirm(
     `${header('Session Purged', '🗑')}\n\n${H.code(sessionId)} has been permanently deleted.`,
     { parse_mode: 'HTML', reply_markup: backKeyboard('sessions:list') }
   ).catch(() => {});
+}
+
+// ── Per-session Automation ────────────────────────────────
+
+export async function handleLinkCollection(
+  ctx: Context & { telegramId: string },
+  sessionId: string,
+  enabled?: boolean
+): Promise<void> {
+  let meta = loadSessionMeta(ctx.telegramId, sessionId);
+  if (!meta) return;
+  if (enabled !== undefined) meta = updateSessionMeta(ctx.telegramId, sessionId, { linkCollectionEnabled: enabled }) ?? meta;
+  await ctx.editMessageText(
+    card('Session Link Collection', '🔗', [
+      ['Session', meta.label || meta.phone],
+      ['Status', meta.linkCollectionEnabled ? 'Enabled' : 'Disabled'],
+      ['Links collected', String(meta.linksCollected ?? 0)],
+      ['Destination', 'Main bucket'],
+    ], 'Invite links from every message are collected silently only for this session.'),
+    { parse_mode: 'HTML', reply_markup: linkCollectionKeyboard(sessionId, Boolean(meta.linkCollectionEnabled)) }
+  ).catch(() => {});
+}
+
+export async function handleJoinManager(
+  ctx: Context & { telegramId: string },
+  sessionId: string,
+  operation?: 'start' | 'pause' | 'stop'
+): Promise<void> {
+  const socket = getSocket(sessionId);
+  if (operation === 'start') {
+    if (!socket) {
+      await ctx.answerCbQuery('Session is not connected', { show_alert: true }).catch(() => {});
+    } else {
+      void startJoinManager(ctx.telegramId, sessionId, socket);
+    }
+  } else if (operation === 'pause') pauseJoinManager(ctx.telegramId, sessionId);
+  else if (operation === 'stop') stopJoinManager(ctx.telegramId, sessionId);
+
+  const state = getJoinManagerState(ctx.telegramId, sessionId);
+  const logs = state.logs.slice(-8).map((line, index) => `${index + 1}. ${escape(line)}`).join('\n') || 'No activity yet.';
+  await ctx.editMessageText([
+    card('Link Join Manager', '🚪', [
+      ['Source', 'Active bucket'], ['Status', state.status],
+      ['Progress', `${state.cursor}/${state.total}`], ['Joined', String(state.joined)],
+      ['Skipped', String(state.skipped)], ['Failed', String(state.failed)],
+    ], state.currentLink ? `Current: ${state.currentLink}` : 'Jobs are isolated per session and stop after five restriction failures.'),
+    H.blockquote(logs, true),
+  ].join('\n\n'), { parse_mode: 'HTML', reply_markup: joinManagerKeyboard(sessionId, state.status) }).catch(() => {});
 }
 
 // ── Bridge Mode ───────────────────────────────────────────

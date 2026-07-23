@@ -63,9 +63,11 @@ export function parseCommand(
 
   // Typo-tolerance: try to match against known commands
   if (!KNOWN_COMMANDS.includes(command)) {
+    // Always-listen mode must be exact so ordinary conversation cannot wake the bot.
+    if (nullPrefix) return null;
     const fuzzy = fuzzyMatchCommand(command, KNOWN_COMMANDS, 1);
     if (fuzzy) command = fuzzy;
-    else return null; // Unknown command, not even close
+    else return null;
   }
 
   return {

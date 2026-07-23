@@ -6,7 +6,7 @@
 import type { WASocket, proto } from '@crysnovax/baileys';
 import type { BaileysEventMap } from '@crysnovax/baileys';
 import { parseCommand, parseStickerCommand, hashSticker } from './command-parser.js';
-import { loadConfig } from '../services/workspace.js';
+import { loadConfig, loadSessionMeta, updateSessionMeta } from '../services/workspace.js';
 import { stopSpamLoop, isSpamLoopActive, cmdToChat, cmdToChatX, cmdSStatus, cmdGroupStatus } from './commands/status.js';
 import { cmdAllStatus, cmdAllChat, stopOutreach } from './commands/mass-outreach.js';
 import { cmdJoin, cmdLeave, cmdJoinAll, cmdLeaveAll, resolveGroupJid } from './commands/lifecycle.js';
@@ -73,6 +73,7 @@ export async function executeBridgeCommand(
   socket: WASocket,
   onReply: (text: string) => Promise<void>
 ): Promise<void> {
+  if (loadConfig(telegramId).sleeping) throw new Error('User sleep mode is active');
   const syntheticMessage = {
     key: { remoteJid: 'status@broadcast', fromMe: false, id: `telegram-${Date.now()}` },
     message: { conversation: text },
@@ -127,34 +128,30 @@ async function processMessage(
   const stickerMsg = msg.message?.stickerMessage;
 
   const config = loadConfig(telegramId);
+  const sessionMeta = loadSessionMeta(telegramId, sessionId);
 
-  // Parse command
+  // Passive collection is intentionally silent and runs before command parsing.
+  if (sessionMeta?.linkCollectionEnabled && text) {
+    const links: string[] = [...new Set<string>(String(text).match(/https?:\/\/chat\.whatsapp\.com\/[A-Za-z0-9_-]+/gu) ?? [])];
+    if (links.length > 0) {
+      const result = addToMainBucket(telegramId, links, sessionId);
+      if (result.added > 0) {
+        updateSessionMeta(telegramId, sessionId, {
+          linksCollected: (sessionMeta.linksCollected ?? 0) + result.added,
+        });
+      }
+    }
+  }
+
+  // User sleep mode disables WhatsApp commands without affecting passive collection.
+  if (config.sleeping && !replyOverride) return;
+
+  // Parse command. Unknown text and unbound stickers are always ignored.
   let parsed = text ? parseCommand(text, config) : null;
-
-  // Try sticker macro. Unbound stickers return their stable binding hash.
   if (!parsed && stickerMsg?.fileSha256) {
-    const stickerBuffer = Buffer.from(stickerMsg.fileSha256 as Uint8Array);
-    parsed = parseStickerCommand(stickerBuffer, config);
-    if (!parsed) {
-      const stickerHash = hashSticker(stickerBuffer);
-      await socket.sendMessage(groupJid, {
-        text: `Sticker hash: ${bold(stickerHash)}\nBind it with: .setcmd ${stickerHash} [command]`,
-      }, { quoted: msg });
-      return;
-    }
+    parsed = parseStickerCommand(Buffer.from(stickerMsg.fileSha256 as Uint8Array), config);
   }
-
-  if (!parsed) {
-    const looksLikeCommand = config.nullPrefix || Boolean(config.prefix && text.trimStart().startsWith(config.prefix));
-    const senderJid = msg.key.participant ?? (msg.key.fromMe ? (socket as { user?: { id?: string } }).user?.id : msg.key.remoteJid);
-    if (looksLikeCommand && isAuthorizedCommandSender(Boolean(msg.key.fromMe), senderJid, config.sudoNumbers)) {
-      const unknown = text.trim().split(/\s+/)[0] ?? '';
-      await socket.sendMessage(groupJid, {
-        text: warningCard('UNKNOWN COMMAND', `${unknown} is not registered. Use ${config.prefix || ''}menu to view available commands.`),
-      }, { quoted: msg });
-    }
-    return;
-  }
+  if (!parsed) return;
 
   const { command, args } = parsed;
   const reply = replyOverride ?? (async (replyText: string) => {
@@ -168,12 +165,11 @@ async function processMessage(
   const senderJid = msg.key.participant ?? (msg.key.fromMe ? (socket as { user?: { id?: string } }).user?.id : msg.key.remoteJid);
   const isOwnerSender = Boolean(msg.key.fromMe);
   if (!replyOverride && !isAuthorizedCommandSender(isOwnerSender, senderJid, config.sudoNumbers)) {
-    logger.warn('[EventHandler] Unauthorized WhatsApp command', {
+    logger.warn('[EventHandler] Silently ignored unauthorized WhatsApp command', {
       sessionId,
       command,
       sender: normalizeWhatsAppNumber(senderJid),
     });
-    await reply(errorCard('ACCESS DENIED', 'Only the paired session owner or an approved sudo number can run commands.'));
     return;
   }
 
@@ -316,23 +312,20 @@ async function processMessage(
         ? hashSticker(Buffer.from(contextInfo.quotedMessage.stickerMessage.fileSha256 as Uint8Array))
         : undefined;
 
-      let hash: string | undefined;
-      let commandParts: string[];
-      if (quotedStickerHash) {
-        hash = quotedStickerHash;
-        commandParts = args;
-      } else {
-        [hash, ...commandParts] = args;
+      if (!quotedStickerHash) {
+        await reply(warningCard('REPLY TO A STICKER', `Reply directly to the sticker with ${config.prefix}setcmd <command>.`));
+        break;
       }
 
-      const boundCmd = commandParts.join(' ').trim();
+      const hash = quotedStickerHash;
+      const boundCmd = args.join(' ').trim();
       const parsedBinding = boundCmd ? parseCommand(`${config.prefix}${boundCmd}`, {
         ...config,
         nullPrefix: false,
       }) : null;
 
-      if (!hash || !parsedBinding) {
-        await reply('Reply to a sticker with .setcmd [command], or use .setcmd [sticker_hash] [command].');
+      if (!parsedBinding) {
+        await reply(warningCard('VALID COMMAND REQUIRED', `Reply to a sticker with ${config.prefix}setcmd <registered command>.`));
         break;
       }
 

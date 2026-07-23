@@ -11,6 +11,10 @@ export interface UserConfig {
   nullPrefix: boolean;          // Always-listen mode
   stickerMacros: Record<string, string>; // sticker hash → command
   sudoNumbers?: string[];        // normalized WhatsApp numbers allowed to run commands
+  defaultLinkCollection?: boolean;
+  notificationsEnabled?: boolean;
+  autoValidationEnabled?: boolean;
+  sleeping?: boolean;
   statusDesignEnabled?: boolean; // unique per-GC designs for mass status campaigns
   statusDesignTheme?: string; // preferred theme for single-GC status designs
   statusDesignStickyThemes?: Record<string, string>; // group JID → preferred theme
@@ -29,6 +33,24 @@ export interface SessionMeta {
   lastSeen?: number;
   errorCount: number;
   autoJoinDone: boolean;
+  linkCollectionEnabled?: boolean;
+  linksCollected?: number;
+  joinManager?: JoinManagerState;
+}
+
+export interface JoinManagerState {
+  status: 'idle' | 'running' | 'paused' | 'stopped' | 'completed' | 'restricted';
+  cursor: number;
+  total: number;
+  joined: number;
+  skipped: number;
+  failed: number;
+  consecutiveRestrictions: number;
+  currentLink?: string;
+  lastError?: string;
+  startedAt?: number;
+  updatedAt: number;
+  logs: string[];
 }
 
 export interface BucketEntry {
@@ -40,6 +62,7 @@ export interface BucketEntry {
   validatedAt?: number;
   status: 'unvalidated' | 'active' | 'dead';
   deadReason?: string;
+  sourceSessionId?: string;
 }
 
 export interface Workspace {

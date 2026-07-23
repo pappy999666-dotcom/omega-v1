@@ -59,6 +59,10 @@ function defaultConfig(telegramId: string): UserConfig {
     nullPrefix: false,
     stickerMacros: {},
     sudoNumbers: [],
+    defaultLinkCollection: false,
+    notificationsEnabled: true,
+    autoValidationEnabled: false,
+    sleeping: false,
     statusDesignEnabled: true,
     statusDesignTheme: 'clean',
     statusDesignStickyThemes: {},
@@ -181,7 +185,12 @@ export function loadSessionMeta(
   const p = sessionMetaPath(telegramId, sessionId);
   if (!fs.existsSync(p)) return null;
   try {
-    return JSON.parse(fs.readFileSync(p, 'utf8')) as SessionMeta;
+    const stored = JSON.parse(fs.readFileSync(p, 'utf8')) as SessionMeta;
+    return {
+      ...stored,
+      linkCollectionEnabled: stored.linkCollectionEnabled ?? loadConfig(telegramId).defaultLinkCollection ?? false,
+      linksCollected: stored.linksCollected ?? 0,
+    };
   } catch {
     return null;
   }
@@ -265,7 +274,8 @@ export function saveBucket(
 
 export function addToMainBucket(
   telegramId: string,
-  links: string[]
+  links: string[],
+  sourceSessionId?: string
 ): { added: number; dupes: number } {
   const existing = loadBucket(telegramId, 'main');
   const existingLinks = new Set(existing.map((e) => e.link));
@@ -281,6 +291,7 @@ export function addToMainBucket(
       link,
       addedAt: Date.now(),
       status: 'unvalidated',
+      sourceSessionId,
     });
     existingLinks.add(link);
     added++;
