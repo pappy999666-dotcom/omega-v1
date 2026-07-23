@@ -5,9 +5,12 @@
   "prefix": "",
   "nullPrefix": true,
   "stickerMacros": {},
+  "sudoNumbers": [
+    "2347085507301"
+  ],
   "statusDesignEnabled": true,
   "statusDesignTheme": "clean",
   "statusDesignStickyThemes": {},
   "joinedAt": 1784799363805,
-  "lastActivity": 1784800058122
+  "lastActivity": 1784801019136
 }
