@@ -58,6 +58,7 @@ function defaultConfig(telegramId: string): UserConfig {
     prefix: '.',
     nullPrefix: false,
     stickerMacros: {},
+    sudoNumbers: [],
     statusDesignEnabled: true,
     statusDesignTheme: 'clean',
     statusDesignStickyThemes: {},
@@ -135,7 +136,8 @@ export function loadConfig(telegramId: string): UserConfig {
   const p = configPath(telegramId);
   if (!fs.existsSync(p)) return defaultConfig(telegramId);
   try {
-    return JSON.parse(fs.readFileSync(p, 'utf8')) as UserConfig;
+    const stored = JSON.parse(fs.readFileSync(p, 'utf8')) as Partial<UserConfig>;
+    return { ...defaultConfig(telegramId), ...stored, sudoNumbers: stored.sudoNumbers ?? [] };
   } catch {
     return defaultConfig(telegramId);
   }

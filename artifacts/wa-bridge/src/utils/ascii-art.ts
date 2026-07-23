@@ -1,5 +1,5 @@
 // ============================================================
-// WA-Bridge — ASCII Art & WhatsApp Message Styling
+// WA-Bridge — Native WhatsApp Message Styling
 // WhatsApp supports *bold*, _italic_, ~strikethrough~, ```code```
 // ============================================================
 
@@ -11,57 +11,38 @@ export interface AsciiBoxOptions {
   width?: number;
 }
 
-/**
- * Renders a bordered ASCII box for WhatsApp messages.
- *
- * Example output:
- * ╔══════════════════════╗
- * ║   🤖  BOT CONTROL   ║
- * ╠══════════════════════╣
- * ║ Status    │ Online   ║
- * ╚══════════════════════╝
- */
+export const bold = (value: string): string => `*${value}*`;
+export const italic = (value: string): string => `_${value}_`;
+export const mono = (value: string): string => `\`\`\`${value}\`\`\``;
+export const strike = (value: string): string => `~${value}~`;
+export const quote = (value: string): string => value.split('\n').map((line) => `> ${line}`).join('\n');
+
+/** Compact, native WhatsApp card. Kept under the legacy name for API compatibility. */
 export function asciiBox(opts: AsciiBoxOptions): string {
-  const { title, rows, footer, emoji = '', width = 30 } = opts;
-
-  const inner = width - 2;
-  const padRow = (s: string) => s.padEnd(inner).slice(0, inner);
-  const hLine = '═'.repeat(inner);
-  const midLine = `╠${hLine}╣`;
-
-  const titleStr = emoji ? `${emoji}  ${title}  ${emoji}` : `  ${title}  `;
-  const centeredTitle = titleStr.padStart((inner + titleStr.length) / 2).padEnd(inner);
-
-  const lines: string[] = [
-    `╔${hLine}╗`,
-    `║${centeredTitle}║`,
-    midLine,
-  ];
-
-  for (const [label, value] of rows) {
-    const combined = ` ${label.padEnd(12)} │ ${value}`;
-    lines.push(`║${padRow(combined)}║`);
-  }
-
-  if (footer) {
-    lines.push(midLine);
-    const footerStr = `  ${footer}  `;
-    const centeredFooter = footerStr.padStart((inner + footerStr.length) / 2).padEnd(inner);
-    lines.push(`║${centeredFooter}║`);
-  }
-
-  lines.push(`╚${hLine}╝`);
-  return lines.join('\n');
+  const heading = `${opts.emoji ? `${opts.emoji} ` : ''}${bold(opts.title)}`;
+  const rows = opts.rows.map(([label, value]) => `${bold(`${label}:`)} ${value}`);
+  return [heading, '', ...rows, opts.footer ? `\n${quote(opts.footer)}` : '']
+    .filter(Boolean)
+    .join('\n');
 }
 
-/**
- * Simple divider line.
- */
-export const divider = (char = '─', len = 30) => char.repeat(len);
+/** Lightweight spacing divider; intentionally contains no box-drawing artwork. */
+export const divider = (): string => '';
 
-/**
- * Result summary box for mass operations (allstatus, allchat, joinall).
- */
+export function successCard(title: string, message: string, rows: [string, string][] = []): string {
+  return asciiBox({ title, emoji: '✅', rows, footer: message });
+}
+
+export function warningCard(title: string, message: string, rows: [string, string][] = []): string {
+  return asciiBox({ title, emoji: '⚠️', rows, footer: message });
+}
+
+export function errorCard(title: string, message: string, details?: string): string {
+  return [asciiBox({ title, emoji: '❌', rows: [], footer: message }), details ? `\n${mono(details)}` : '']
+    .filter(Boolean)
+    .join('\n');
+}
+
 export function resultBox(opts: {
   op: string;
   success: number;
@@ -71,21 +52,19 @@ export function resultBox(opts: {
   duration: string;
 }): string {
   return asciiBox({
-    title: opts.op.toUpperCase() + ' RESULT',
+    title: `${opts.op.toUpperCase()} RESULT`,
     emoji: '📊',
     rows: [
-      ['✅ Success', String(opts.success)],
-      ['❌ Failed', String(opts.failed)],
-      ['⏭ Skipped', String(opts.skipped)],
-      ['🚦 R-Limited', String(opts.rateLimited)],
-      ['⏱ Duration', opts.duration],
+      ['Successful', String(opts.success)],
+      ['Failed', String(opts.failed)],
+      ['Skipped', String(opts.skipped)],
+      ['Rate limited', String(opts.rateLimited)],
+      ['Duration', opts.duration],
     ],
+    footer: 'Operation complete.',
   });
 }
 
-/**
- * Session info box.
- */
 export function sessionBox(opts: {
   sessionId: string;
   phone: string;
@@ -97,53 +76,22 @@ export function sessionBox(opts: {
     emoji: '📱',
     rows: [
       ['ID', opts.sessionId],
-      ['Phone', opts.phone],
+      ['Owner', opts.phone],
       ['Status', opts.status.toUpperCase()],
       ['Groups', String(opts.groups)],
     ],
   });
 }
 
-/**
- * Bold text for WhatsApp.
- */
-export const bold = (s: string) => `*${s}*`;
-
-/**
- * Italic text for WhatsApp.
- */
-export const italic = (s: string) => `_${s}_`;
-
-/**
- * Monospace/code text for WhatsApp.
- */
-export const mono = (s: string) => `\`\`\`${s}\`\`\``;
-
-/**
- * Strikethrough for WhatsApp.
- */
-export const strike = (s: string) => `~${s}~`;
-
-/**
- * Format a menu for WhatsApp.
- */
 export function whatsappMenu(
   title: string,
   sections: { heading: string; items: { cmd: string; desc: string }[] }[]
 ): string {
-  const lines: string[] = [
-    bold(`╔══ ${title.toUpperCase()} ══╗`),
-    '',
-  ];
-
+  const lines: string[] = [`${bold(title.toUpperCase())}`, '', quote('Choose a command below. Commands can also be triggered from bound stickers.'), ''];
   for (const section of sections) {
-    lines.push(bold(`▌ ${section.heading}`));
-    for (const item of section.items) {
-      lines.push(`  ${bold(item.cmd)} — ${italic(item.desc)}`);
-    }
+    lines.push(bold(section.heading));
+    for (const item of section.items) lines.push(`${bold(item.cmd)}\n${italic(item.desc)}`);
     lines.push('');
   }
-
-  lines.push(italic('Powered by WA-Bridge 🚀'));
-  return lines.join('\n');
+  return lines.join('\n').trim();
 }

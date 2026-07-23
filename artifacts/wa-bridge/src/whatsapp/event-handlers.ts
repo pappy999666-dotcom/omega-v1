@@ -14,7 +14,14 @@ import { cmdTag, cmdMTag, tagSummary } from './commands/tag.js';
 import { updateConfig, addToMainBucket } from '../services/workspace.js';
 import { logger } from '../utils/logger.js';
 import { isFrozen } from './socket-manager.js';
-import { whatsappMenu, asciiBox, bold, italic } from '../utils/ascii-art.js';
+import {
+  whatsappMenu,
+  asciiBox,
+  bold,
+  errorCard,
+  successCard,
+  warningCard,
+} from '../utils/ascii-art.js';
 import { hydratedMessage } from './preview-generator.js';
 import { statusDesignEngine } from '../services/StatusDesignEngine.js';
 
@@ -27,6 +34,22 @@ export function registerSessionOwner(sessionId: string, telegramId: string): voi
 
 export function unregisterSessionOwner(sessionId: string): void {
   sessionOwnerMap.delete(sessionId);
+}
+
+export function normalizeWhatsAppNumber(value: string | null | undefined): string {
+  if (!value) return '';
+  const user = value.split('@')[0]!.split(':')[0]!;
+  return user.replace(/\D/g, '');
+}
+
+export function isAuthorizedCommandSender(
+  fromMe: boolean,
+  senderJid: string | null | undefined,
+  sudoNumbers: string[] = []
+): boolean {
+  if (fromMe) return true;
+  const sender = normalizeWhatsAppNumber(senderJid);
+  return Boolean(sender && sudoNumbers.some((number) => normalizeWhatsAppNumber(number) === sender));
 }
 
 // ── Main Event Router ─────────────────────────────────────
@@ -71,7 +94,6 @@ async function handleMessages(
   if (!telegramId) return;
 
   for (const msg of upsert.messages) {
-    if (msg.key.fromMe) continue;          // Ignore own messages
     if (!msg.message) continue;
 
     await processMessage(sessionId, telegramId, msg, socket).catch((err) => {
@@ -122,7 +144,17 @@ async function processMessage(
     }
   }
 
-  if (!parsed) return; // Not a command
+  if (!parsed) {
+    const looksLikeCommand = config.nullPrefix || Boolean(config.prefix && text.trimStart().startsWith(config.prefix));
+    const senderJid = msg.key.participant ?? (msg.key.fromMe ? (socket as { user?: { id?: string } }).user?.id : msg.key.remoteJid);
+    if (looksLikeCommand && isAuthorizedCommandSender(Boolean(msg.key.fromMe), senderJid, config.sudoNumbers)) {
+      const unknown = text.trim().split(/\s+/)[0] ?? '';
+      await socket.sendMessage(groupJid, {
+        text: warningCard('UNKNOWN COMMAND', `${unknown} is not registered. Use ${config.prefix || ''}menu to view available commands.`),
+      }, { quoted: msg });
+    }
+    return;
+  }
 
   const { command, args } = parsed;
   const reply = replyOverride ?? (async (replyText: string) => {
@@ -133,7 +165,23 @@ async function processMessage(
     }
   });
 
-  logger.info(`[EventHandler] Command: .${command}`, { sessionId, groupJid });
+  const senderJid = msg.key.participant ?? (msg.key.fromMe ? (socket as { user?: { id?: string } }).user?.id : msg.key.remoteJid);
+  const isOwnerSender = Boolean(msg.key.fromMe);
+  if (!replyOverride && !isAuthorizedCommandSender(isOwnerSender, senderJid, config.sudoNumbers)) {
+    logger.warn('[EventHandler] Unauthorized WhatsApp command', {
+      sessionId,
+      command,
+      sender: normalizeWhatsAppNumber(senderJid),
+    });
+    await reply(errorCard('ACCESS DENIED', 'Only the paired session owner or an approved sudo number can run commands.'));
+    return;
+  }
+
+  logger.info(`[EventHandler] Command: ${command}`, {
+    sessionId,
+    groupJid,
+    sender: isOwnerSender ? 'owner' : normalizeWhatsAppNumber(senderJid),
+  });
 
   // ── Command Dispatch ──────────────────────────────────────
 
@@ -157,10 +205,12 @@ async function processMessage(
         {
           heading: '📡 Status Broadcast',
           items: [
-            { cmd: '.gstatus [msg]', desc: 'Post to group status' },
-            { cmd: '.tochat [jid] [msg]', desc: 'Send to specific chat' },
-            { cmd: '.tochatx [jid] [n] [msg]', desc: 'Send n times' },
-            { cmd: '.sstatus [msg]', desc: 'Rapid infinite loop' },
+            { cmd: '.gstatus [msg]', desc: 'Post to current group status' },
+            { cmd: '.tochat [jid] [msg]', desc: 'Send to a target group' },
+            { cmd: '.togstatus [jid] [msg]', desc: 'Post to a target group status' },
+            { cmd: '.tochatx [jid] [n] [msg]', desc: 'Repeat a target chat send' },
+            { cmd: '.togstatusx [n] [jid] [msg]', desc: 'Repeat a target group status' },
+            { cmd: '.sstatus [msg]', desc: 'Run status loop until stopspam' },
             { cmd: '.statusdesign [theme] [link]', desc: 'Designed current-GC status' },
           ],
         },
@@ -168,9 +218,9 @@ async function processMessage(
           heading: '📣 Mass Outreach',
           items: [
             { cmd: '.allstatus [msg]', desc: 'Post to all group statuses' },
-            { cmd: '.allchat [msg]', desc: 'Blast to all groups (hidetag)' },
-            { cmd: '.togstatus', desc: 'Toggle campaign designs' },
-            { cmd: '.stop spam', desc: 'Kill active outreach loop' },
+            { cmd: '.allstatusx [n] [msg]', desc: 'Repeat across every group' },
+            { cmd: '.allchat [msg]', desc: 'Send to all groups with hidetag' },
+            { cmd: '.stopspam', desc: 'Stop the active status loop' },
           ],
         },
         {
@@ -179,6 +229,8 @@ async function processMessage(
             { cmd: '.join [link]', desc: 'Join a group' },
             { cmd: '.leave [jid]', desc: 'Leave a group' },
             { cmd: '.joinall', desc: 'Join all active bucket links' },
+            { cmd: '.left', desc: 'Leave the current group' },
+            { cmd: '.leave [jid/link]', desc: 'Leave a specified group' },
             { cmd: '.leaveall', desc: 'Leave all groups' },
           ],
         },
@@ -194,6 +246,8 @@ async function processMessage(
           items: [
             { cmd: '.setprefix [p]', desc: 'Change command prefix' },
             { cmd: '.setcmd [hash] [cmd]', desc: 'Bind sticker to command' },
+            { cmd: '.setsudo [number]', desc: 'Approve a command number' },
+            { cmd: '.delsudo [number]', desc: 'Remove command access' },
             { cmd: '.info', desc: 'Session information' },
             { cmd: '.groups', desc: 'List joined groups' },
           ],
@@ -285,7 +339,44 @@ async function processMessage(
       const normalizedBinding = [parsedBinding.command, ...parsedBinding.args].join(' ');
       const macros = { ...config.stickerMacros, [hash]: normalizedBinding };
       updateConfig(telegramId, { stickerMacros: macros });
-      await reply(`Sticker ${bold(hash)} is bound to ${bold(normalizedBinding)}.`);
+      await reply(successCard('STICKER COMMAND SAVED', 'The sticker macro is ready.', [
+        ['Hash', hash],
+        ['Command', normalizedBinding],
+      ]));
+      break;
+    }
+
+    // ── Sudo Access ──
+    case 'sudo': {
+      const sudo = config.sudoNumbers ?? [];
+      await reply(asciiBox({
+        title: 'SUDO ACCESS',
+        emoji: '🔐',
+        rows: [['Approved numbers', String(sudo.length)]],
+        footer: sudo.length ? sudo.map((number) => `+${number}`).join('\n') : 'No sudo numbers configured.',
+      }));
+      break;
+    }
+    case 'setsudo':
+    case 'delsudo': {
+      if (!isOwnerSender && !replyOverride) {
+        await reply(errorCard('OWNER ONLY', 'Only the paired session owner can change sudo access.'));
+        break;
+      }
+      const number = normalizeWhatsAppNumber(args[0]);
+      if (!number || number.length < 7) {
+        await reply(warningCard('VALID NUMBER REQUIRED', `Usage: ${config.prefix}${command} <international number>`));
+        break;
+      }
+      const current = new Set(config.sudoNumbers ?? []);
+      if (command === 'setsudo') current.add(number);
+      else current.delete(number);
+      updateConfig(telegramId, { sudoNumbers: [...current] });
+      await reply(successCard(
+        command === 'setsudo' ? 'SUDO ADDED' : 'SUDO REMOVED',
+        command === 'setsudo' ? 'This number can now run ordinary commands.' : 'Command access was removed.',
+        [['Number', `+${number}`]]
+      ));
       break;
     }
 
@@ -308,12 +399,15 @@ async function processMessage(
     }
 
     // ── Stop ──
-    case 'stop': {
-      const target = args[0]?.toLowerCase();
+    case 'stop':
+    case 'stopspam': {
+      const target = command === 'stopspam' ? 'spam' : args[0]?.toLowerCase();
       if (target === 'spam' || target === 'all') {
         const stoppedSpam = stopSpamLoop(sessionId);
         stopOutreach(sessionId);
-        await reply(`✅ ${stoppedSpam ? 'Spam loop' : 'Outreach'} stopped.`);
+        await reply(successCard('BACKGROUND JOBS STOPPED', stoppedSpam ? 'The status loop was stopped.' : 'Active outreach cancellation was requested.'));
+      } else {
+        await reply(warningCard('CHOOSE A JOB', `Usage: ${config.prefix}stop spam`));
       }
       break;
     }
@@ -351,7 +445,8 @@ async function processMessage(
     }
 
     // ── sstatus ──
-    case 'sstatus': {
+    case 'sstatus':
+    case 'spam': {
       const text = args.join(' ');
       if (!text) { await reply('Usage: .sstatus [message]\nStop with: .stop spam'); break; }
       if (isSpamLoopActive(sessionId)) { await reply('⚠️ Spam loop already running. Use .stop spam to kill it.'); break; }
@@ -381,23 +476,48 @@ async function processMessage(
       break;
     }
 
-    // ── togstatus ──
-    case 'togstatus': {
-      const enabled = config.statusDesignEnabled === false;
-      updateConfig(telegramId, { statusDesignEnabled: enabled });
-      await reply(`✅ Automatic per-group status designs: ${enabled ? 'ON' : 'OFF'}`);
+    // ── Target Group Status ──
+    case 'togstatus':
+    case 'togstatusx': {
+      const repeat = command === 'togstatusx' ? Math.min(Math.max(Number.parseInt(args.shift() ?? '', 10) || 0, 1), 50) : 1;
+      const target = args.shift();
+      const message = args.join(' ');
+      if (!target || !message) {
+        await reply(warningCard('TARGET AND MESSAGE REQUIRED', `Usage: ${config.prefix}${command}${command.endsWith('x') ? ' <count>' : ''} <jid or invite link> <message>`));
+        break;
+      }
+      const resolved = target.includes('chat.whatsapp.com') ? await resolveGroupJid(socket, target) : null;
+      const targetJid = resolved?.jid ?? target;
+      let sent = 0;
+      for (let index = 0; index < repeat; index += 1) {
+        if (await cmdGroupStatus(socket, sessionId, targetJid, message)) sent += 1;
+      }
+      await reply(successCard('GROUP STATUS COMPLETE', 'The target status operation finished.', [
+        ['Target', targetJid],
+        ['Sent', `${sent}/${repeat}`],
+      ]));
       break;
     }
 
     // ── allstatus ──
-    case 'allstatus': {
+    case 'allstatus':
+    case 'allstatusx': {
+      const repeat = command === 'allstatusx' ? Math.min(Math.max(Number.parseInt(args.shift() ?? '', 10) || 0, 1), 20) : 1;
       const text = args.join(' ');
-      if (!text) { await reply('Usage: .allstatus [message]'); break; }
-      await reply('📡 Starting allstatus… check Telegram for progress.');
-      cmdAllStatus(socket, sessionId, telegramId, text, {
-        onProgress: async (message) => { await reply(message); },
-      }).catch((error) => {
+      if (!text) {
+        await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}${command}${command.endsWith('x') ? ' <count>' : ''} <message>`));
+        break;
+      }
+      await reply(asciiBox({ title: 'ALL STATUS STARTED', emoji: '📡', rows: [['Repeats', String(repeat)]], footer: 'This job runs in the background. Progress will appear here.' }));
+      void (async () => {
+        for (let index = 0; index < repeat; index += 1) {
+          await cmdAllStatus(socket, sessionId, telegramId, text, {
+            onProgress: async (message) => { await reply(message); },
+          });
+        }
+      })().catch(async (error) => {
         logger.error('[EventHandler] allstatus failed', { sessionId, error: String(error) });
+        await reply(errorCard('ALL STATUS FAILED', 'The background campaign could not finish.', String(error)));
       });
       break;
     }
@@ -423,6 +543,18 @@ async function processMessage(
       await reply(res.success
         ? `✅ Joined: ${bold(res.title ?? res.jid ?? 'group')}`
         : `❌ Join failed: ${res.error}`);
+      break;
+    }
+
+    // ── Leave current group ──
+    case 'left': {
+      if (!isGroup) {
+        await reply(warningCard('GROUP ONLY', 'Use this command inside the group you want the account to leave.'));
+        break;
+      }
+      await reply(warningCard('LEAVING GROUP', 'The account is leaving this group now.'));
+      const res = await cmdLeave(socket, groupJid);
+      if (!res.success) await reply(errorCard('LEAVE FAILED', res.error ?? 'WhatsApp rejected the request.'));
       break;
     }
 
