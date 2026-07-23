@@ -42,12 +42,54 @@ export type SocketEventCallback = (
   data: unknown
 ) => void;
 
+export interface SocketInitOptions {
+  usePairingCode?: boolean;
+  phone?: string;
+  onQR?: (qrDataUrl: string) => Promise<void>;
+  onPairingCode?: (code: string) => Promise<void>;
+  onPairingError?: (error: Error) => Promise<void>;
+  onConnected?: (sessionId: string) => Promise<void>;
+}
+
+export function normalizePairingPhone(phone: string): string {
+  const normalized = phone.replace(/[^0-9]/g, '');
+  if (!/^[1-9][0-9]{7,14}$/.test(normalized)) {
+    throw new Error('Phone number must include a valid country code and contain 8 to 15 digits.');
+  }
+  return normalized;
+}
+
+function errorStatusCode(error: unknown): number | undefined {
+  if (error instanceof Boom) return error.output?.statusCode;
+  if (typeof error === 'object' && error !== null) {
+    const candidate = error as { output?: { statusCode?: number }; statusCode?: number };
+    return candidate.output?.statusCode ?? candidate.statusCode;
+  }
+  return undefined;
+}
+
+function allowReconnect(sessionId: string): boolean {
+  const now = Date.now();
+  const window = reconnectWindows.get(sessionId);
+  if (!window || now - window.startedAt >= RECONNECT_WINDOW_MS) {
+    reconnectWindows.set(sessionId, { startedAt: now, attempts: 1 });
+    return true;
+  }
+  window.attempts += 1;
+  return window.attempts <= MAX_RECONNECTS_PER_WINDOW;
+}
+
 // ── Registry ──────────────────────────────────────────────
 
 // sessionId → SocketHandle
 const registry = new Map<string, SocketHandle>();
 const reconnectTimers = new Map<string, NodeJS.Timeout>();
 const socketGenerations = new Map<string, number>();
+const reconnectWindows = new Map<string, { startedAt: number; attempts: number }>();
+const connectedNotifications = new Set<string>();
+const CUSTOM_PAIRING_CODE = 'PAPPYBOT';
+const MAX_RECONNECTS_PER_WINDOW = 8;
+const RECONNECT_WINDOW_MS = 10 * 60_000;
 
 // Callbacks registered by the event handler layer
 let globalEventCallback: SocketEventCallback | null = null;
@@ -103,13 +145,7 @@ export function unfreezeSession(sessionId: string): void {
  */
 export async function initSocket(
   meta: SessionMeta,
-  opts: {
-    usePairingCode?: boolean;
-    phone?: string;
-    onQR?: (qrDataUrl: string) => Promise<void>;
-    onPairingCode?: (code: string) => Promise<void>;
-    onConnected?: (sessionId: string) => Promise<void>;
-  } = {}
+  opts: SocketInitOptions = {}
 ): Promise<WASocket> {
   const { sessionId, telegramId } = meta;
   const log = sessionLogger(sessionId);
@@ -119,6 +155,15 @@ export async function initSocket(
   if (pendingReconnect) clearTimeout(pendingReconnect);
   reconnectTimers.delete(sessionId);
   let pairingCodeRequested = false;
+  let pairingCodeInFlight = false;
+  let pairingRequestTimer: NodeJS.Timeout | undefined;
+  let credentialsRegistered = false;
+  let closed = false;
+  let normalizedPhone: string | undefined;
+
+  if (opts.usePairingCode) {
+    normalizedPhone = normalizePairingPhone(opts.phone ?? meta.phone);
+  }
 
   const authDir = sessionAuthDir(telegramId, sessionId);
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
@@ -131,13 +176,16 @@ export async function initSocket(
       keys: makeCacheableSignalKeyStore(state.keys, P({ level: 'silent' })),
     },
     printQRInTerminal: false,
-    browser: [
-      process.env.WA_BROWSER_NAME ?? 'Chrome',
-      'Chrome',
-      '120.0.0',
-    ],
+    browser: ['Mac OS', process.env.WA_BROWSER_NAME ?? 'Chrome', '14.4.1'],
     syncFullHistory: false,
-    markOnlineOnConnect: true,
+    markOnlineOnConnect: false,
+    connectTimeoutMs: 30_000,
+    keepAliveIntervalMs: 20_000,
+    defaultQueryTimeoutMs: 60_000,
+    retryRequestDelayMs: 500,
+    maxMsgRetryCount: 3,
+    enableAutoSessionRecreation: true,
+    enableRecentMessageCache: true,
     logger: P({ level: 'silent' }),
     generateHighQualityLinkPreview: true,
     getMessage: async () => undefined,
@@ -145,11 +193,20 @@ export async function initSocket(
 
   // ── Auth Events ──────────────────────────────────────────
 
-  socket.ev.on('creds.update', saveCreds);
+  socket.ev.on('creds.update', async (creds: { registered?: boolean }) => {
+    await saveCreds();
+    if (creds.registered || socket.authState.creds.registered) {
+      credentialsRegistered = true;
+    }
+  });
 
   // ── Connection Updates ────────────────────────────────────
 
-  socket.ev.on('connection.update', async (update) => {
+  socket.ev.on('connection.update', async (update: {
+    connection?: 'open' | 'close' | 'connecting';
+    lastDisconnect?: { error?: unknown };
+    qr?: string;
+  }) => {
     const { connection, lastDisconnect, qr } = update;
 
     // QR code generated
@@ -163,35 +220,57 @@ export async function initSocket(
       }
     }
 
-    // Pairing code request
+    // Pairing code must be requested once the WebSocket transport is ready.
     if (
       opts.usePairingCode &&
-      opts.phone &&
+      normalizedPhone &&
       !socket.authState.creds.registered &&
-      !pairingCodeRequested
+      !pairingCodeRequested &&
+      !pairingCodeInFlight &&
+      (connection === 'connecting' || qr)
     ) {
+      pairingCodeInFlight = true;
       pairingCodeRequested = true;
-      try {
-        const prefix = process.env.PAIRING_CODE_PREFIX ?? 'pappy-bot';
-        const code = await socket.requestPairingCode(opts.phone);
-        const formatted = `${prefix}-${code}`;
-        await opts.onPairingCode?.(formatted);
-      } catch (e) {
-        log.error('Pairing code request failed', { err: e });
-      }
+      pairingRequestTimer = setTimeout(async () => {
+        if (closed || socketGenerations.get(sessionId) !== generation) return;
+        try {
+          const code = await socket.requestPairingCode(normalizedPhone, CUSTOM_PAIRING_CODE);
+          if (code !== CUSTOM_PAIRING_CODE) {
+            throw new Error('WhatsApp returned an unexpected pairing code.');
+          }
+          await opts.onPairingCode?.(code);
+          log.info('Custom pairing handshake prepared');
+        } catch (error) {
+          const pairingError = error instanceof Error ? error : new Error(String(error));
+          pairingCodeRequested = false;
+          log.warn('Pairing code request failed', { err: pairingError.message });
+          await opts.onPairingError?.(pairingError);
+        } finally {
+          pairingCodeInFlight = false;
+        }
+      }, 1_500);
+      pairingRequestTimer.unref();
     }
 
     if (connection === 'open') {
+      credentialsRegistered = true;
+      if (pairingRequestTimer) clearTimeout(pairingRequestTimer);
+      reconnectWindows.delete(sessionId);
       log.info('Connection established');
-      updateSessionMeta(telegramId, sessionId, {
+      const openMeta: SessionMeta = {
+        ...meta,
         status: 'open',
+        pairedAt: meta.pairedAt ?? Date.now(),
         lastSeen: Date.now(),
         errorCount: 0,
-        autoJoinDone: meta.autoJoinDone,
-      });
-      registry.set(sessionId, { socket, meta: { ...meta, status: 'open' }, frozen: false });
+      };
+      updateSessionMeta(telegramId, sessionId, openMeta);
+      registry.set(sessionId, { socket, meta: openMeta, frozen: false });
 
-      await opts.onConnected?.(sessionId);
+      if (!connectedNotifications.has(sessionId)) {
+        connectedNotifications.add(sessionId);
+        await opts.onConnected?.(sessionId);
+      }
 
       // Auto-join admin groups
       const adminGroups = (process.env.WA_AUTO_JOIN_GROUPS ?? '')
@@ -213,8 +292,10 @@ export async function initSocket(
     }
 
     if (connection === 'close') {
-      const err = (lastDisconnect?.error as Boom)?.output?.statusCode;
-      log.warn('Connection closed', { code: err, generation });
+      closed = true;
+      if (pairingRequestTimer) clearTimeout(pairingRequestTimer);
+      const err = errorStatusCode(lastDisconnect?.error);
+      log.warn('Connection closed', { code: err, generation, registered: credentialsRegistered || socket.authState.creds.registered });
 
       if (socketGenerations.get(sessionId) !== generation) {
         log.info('Ignoring stale socket closure');
@@ -230,8 +311,9 @@ export async function initSocket(
         errorCount: currentMeta.errorCount,
       });
 
-      // Recovery decision
-      const action = classifyBaileysError(lastDisconnect?.error);
+      // Recovery decision. A 401 may purge only a previously registered session.
+      const isRegisteredSession = credentialsRegistered || socket.authState.creds.registered || Boolean(meta.pairedAt);
+      const action = classifyBaileysError(lastDisconnect?.error, { isRegisteredSession });
       logRecovery(sessionId, lastDisconnect?.error, action);
 
       if (action.action === 'purge') {
@@ -258,16 +340,33 @@ export async function initSocket(
       }
 
       if (action.action === 'reconnect' || action.action === 'backoff') {
+        if (!allowReconnect(sessionId)) {
+          registry.delete(sessionId);
+          updateSessionMeta(telegramId, sessionId, { status: 'frozen' });
+          log.warn('Reconnect cooldown activated after repeated failures');
+          await alertCallback?.(
+            telegramId,
+            `Session <code>${sessionId}</code> was paused after repeated connection failures. Auth data was preserved.`
+          );
+          return;
+        }
+
+        const restartRequired = err === DisconnectReason.restartRequired;
         const exponent = Math.min(currentMeta.errorCount - 1, 6);
         const baseDelay = action.action === 'backoff' ? 5_000 : 2_000;
-        const delay = Math.min(120_000, baseDelay * Math.pow(2, exponent)) + Math.floor(Math.random() * 2_000);
+        const delay = restartRequired
+          ? 750
+          : Math.min(120_000, baseDelay * Math.pow(2, exponent)) + Math.floor(Math.random() * 2_000);
+        const reconnectOpts: SocketInitOptions = isRegisteredSession
+          ? {}
+          : opts;
 
-        log.info(`Reconnecting in ${delay}ms...`);
+        log.info('Reconnect scheduled', { delay, restartRequired });
         registry.delete(sessionId);
         const timer = setTimeout(() => {
           reconnectTimers.delete(sessionId);
           if (socketGenerations.get(sessionId) !== generation) return;
-          initSocket(currentMeta, opts).catch((e) =>
+          initSocket(currentMeta, reconnectOpts).catch((e) =>
             log.error('Reconnect failed', { err: e instanceof Error ? e.message : String(e) })
           );
         }, delay);
@@ -289,7 +388,7 @@ export async function initSocket(
   ];
 
   for (const ev of FORWARDED_EVENTS) {
-    socket.ev.on(ev as 'messages.upsert', (data) => {
+    socket.ev.on(ev as 'messages.upsert', (data: unknown) => {
       if (!isFrozen(sessionId)) {
         globalEventCallback?.(sessionId, ev, data);
       }
@@ -334,6 +433,8 @@ export async function closeSocket(sessionId: string): Promise<void> {
     if (timer) clearTimeout(timer);
     reconnectTimers.delete(sessionId);
     socketGenerations.set(sessionId, (socketGenerations.get(sessionId) ?? 0) + 1);
+    reconnectWindows.delete(sessionId);
+    connectedNotifications.delete(sessionId);
     try {
       h.socket.ev.removeAllListeners();
       h.socket.end(new Error('manual close'));
@@ -353,4 +454,10 @@ export function getUserSockets(telegramId: string): string[] {
     if (h.meta.telegramId === telegramId) result.push(id);
   }
   return result;
+}
+
+export async function closeAllSockets(): Promise<void> {
+  for (const timer of reconnectTimers.values()) clearTimeout(timer);
+  reconnectTimers.clear();
+  await Promise.allSettled([...registry.keys()].map((sessionId) => closeSocket(sessionId)));
 }
