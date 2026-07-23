@@ -97,8 +97,8 @@ export function sessionPairKeyboard(sessionId: string): InlineKeyboardMarkup {
 export function pairingCodeKeyboard(code: string): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
-      [copyBtn('📋 Copy Code', code)],
-      [btn('🔄 New Code', 'pair:refresh'), btn('🔙 Cancel', 'sessions:list')],
+      [copyBtn('📋 Copy Exact Code', code)],
+      [btn('🔙 Cancel', 'sessions:list')],
     ],
   };
 }

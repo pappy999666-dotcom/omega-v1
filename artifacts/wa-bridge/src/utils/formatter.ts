@@ -134,14 +134,15 @@ export function pairingCodeCard(phone: string, code: string): string {
     '',
     kv('Phone:', phone),
     '',
-    H.bold('Your pairing code:'),
+    H.bold('Your exact pairing code:'),
     H.code(code),
+    H.italic('Display label: PAPPY-BOT'),
     '',
     H.blockquote(
       `Open WhatsApp → Linked Devices → Link a Device → Enter Code`
     ),
     '',
-    H.italic('⚠️ Code expires in 60 seconds. Request a new one if needed.'),
+    H.italic('Enter or copy PAPPYBOT exactly, without the hyphen.'),
   ].join('\n');
 }
 

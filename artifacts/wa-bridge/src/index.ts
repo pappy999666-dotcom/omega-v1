@@ -11,7 +11,7 @@ import { startOutreachWorker } from './services/workers/outreach-worker.js';
 import { startValidatorWorker } from './services/workers/validator-worker.js';
 import { startLifecycleWorker } from './services/workers/lifecycle-worker.js';
 import { startOmniWorker } from './services/workers/omni-worker.js';
-import { setAlertCallback, setEventCallback, getUserSockets, getSocket } from './whatsapp/socket-manager.js';
+import { setAlertCallback, setEventCallback, getUserSockets, getSocket, closeAllSockets } from './whatsapp/socket-manager.js';
 import { handleWAEvent, registerSessionOwner } from './whatsapp/event-handlers.js';
 import { createBot, createAlertSender } from './telegram/bot.js';
 import { getAllUserIds, loadAllSessions } from './services/workspace.js';
@@ -136,6 +136,7 @@ async function bootstrap(): Promise<void> {
     logger.info(`[Shutdown] ${signal} received — shutting down gracefully...`);
 
     bot.stop(signal);
+    await closeAllSockets();
     await shutdownQueues();
 
     logger.info('[Shutdown] Goodbye!');
@@ -156,8 +157,8 @@ async function restoreSessions(): Promise<void> {
     const sessions = loadAllSessions(telegramId);
 
     for (const meta of Object.values(sessions)) {
-      // Only restore sessions that were previously open
-      if (meta.status !== 'open' && meta.status !== 'connecting') continue;
+      // Restore only sessions that completed pairing. Pending pairing attempts must not revive on boot.
+      if (meta.status !== 'open' || !meta.pairedAt) continue;
 
       try {
         registerSessionOwner(meta.sessionId, telegramId);

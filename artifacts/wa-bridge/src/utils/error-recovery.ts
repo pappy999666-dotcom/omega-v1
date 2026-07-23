@@ -7,9 +7,14 @@ import { logger } from './logger.js';
 
 export type BaileysErrorCode =
   | 401   // Unauthorized — session revoked
+  | 403   // Forbidden
   | 408   // Timeout — connection timeout
+  | 411   // Multi-device mismatch
+  | 428   // Connection closed
   | 440   // Conflict — logged in elsewhere
-  | 500   // Internal error
+  | 500   // Bad session / internal error
+  | 503   // Service unavailable
+  | 515   // Restart required after pairing
   | 'Bad MAC'       // Crypto mismatch — corrupted auth
   | 'Connection Failure'
   | 'Rate Limit'
@@ -28,17 +33,75 @@ export interface RecoveryAction {
  * Classify a Baileys/WA error and return the appropriate recovery action.
  * This is the central error recovery decision tree.
  */
-export function classifyBaileysError(err: unknown): RecoveryAction {
+export function classifyBaileysError(
+  err: unknown,
+  context: { isRegisteredSession?: boolean } = {}
+): RecoveryAction {
   const msg = err instanceof Error ? err.message : String(err);
-  const code = (err as { output?: { statusCode?: number } })?.output?.statusCode;
+  const candidate = err as { output?: { statusCode?: number }; statusCode?: number };
+  const code = candidate?.output?.statusCode ?? candidate?.statusCode;
 
-  // ── 401 Unauthorized — session invalidated on server ──
+  // A pairing rejection must never delete an unregistered auth directory.
   if (code === 401 || msg.includes('401') || msg.includes('Not Authorized')) {
+    return context.isRegisteredSession
+      ? {
+          action: 'purge',
+          reason: '401 Unauthorized — registered session revoked by WhatsApp',
+          alertUser: true,
+          purgeSession: true,
+        }
+      : {
+          action: 'freeze',
+          reason: 'Pairing was rejected or expired — auth state preserved for a fresh attempt',
+          alertUser: true,
+        };
+  }
+
+  if (code === 515) {
     return {
-      action: 'purge',
-      reason: '401 Unauthorized — session revoked by WhatsApp',
+      action: 'reconnect',
+      reason: '515 Restart Required — completing the successful pairing handshake',
+      alertUser: false,
+    };
+  }
+
+  if (code === 428) {
+    return {
+      action: 'reconnect',
+      reason: '428 Connection Closed — rebuilding the socket',
+      alertUser: false,
+    };
+  }
+
+  if (code === 411) {
+    return {
+      action: 'backoff',
+      reason: '411 Multi-device mismatch — preserving auth and retrying safely',
       alertUser: true,
-      purgeSession: true,
+    };
+  }
+
+  if (code === 403) {
+    return {
+      action: 'freeze',
+      reason: '403 Forbidden — session paused without deleting credentials',
+      alertUser: true,
+    };
+  }
+
+  if (code === 500) {
+    return {
+      action: 'backoff',
+      reason: '500 Bad Session — preserving credentials and retrying with cooldown',
+      alertUser: true,
+    };
+  }
+
+  if (code === 503) {
+    return {
+      action: 'backoff',
+      reason: '503 WhatsApp service unavailable — delayed retry scheduled',
+      alertUser: false,
     };
   }
 

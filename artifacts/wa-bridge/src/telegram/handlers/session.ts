@@ -21,6 +21,7 @@ import {
   unfreezeSession,
   getUserSockets,
   getSocket,
+  normalizePairingPhone,
 } from '../../whatsapp/socket-manager.js';
 import { registerSessionOwner } from '../../whatsapp/event-handlers.js';
 import {
@@ -186,35 +187,82 @@ export async function handlePairingCode(
   sessionId: string,
   phone: string
 ): Promise<void> {
-  const meta: SessionMeta = loadSessionMeta(ctx.telegramId, sessionId) ?? {
-    sessionId,
-    telegramId: ctx.telegramId,
-    phone,
+  let normalizedPhone: string;
+  try {
+    normalizedPhone = normalizePairingPhone(phone);
+  } catch (error) {
+    await ctx.reply(`${header('Invalid Phone Number', '🔴')}\n\n${H.code(error instanceof Error ? error.message : String(error))}`, {
+      parse_mode: 'HTML',
+    });
+    return;
+  }
+
+  const existing = loadSessionMeta(ctx.telegramId, sessionId);
+  if (existing?.status === 'open') {
+    await ctx.reply(`Session ${H.code(sessionId)} is already connected.`, { parse_mode: 'HTML' });
+    return;
+  }
+
+  const meta: SessionMeta = {
+    ...(existing ?? {
+      sessionId,
+      telegramId: ctx.telegramId,
+      phone: normalizedPhone,
+      autoJoinDone: false,
+    }),
+    phone: normalizedPhone,
     status: 'connecting',
     pairMethod: 'code',
     errorCount: 0,
-    autoJoinDone: false,
   };
 
   saveSessionMeta(meta);
   registerSessionOwner(sessionId, ctx.telegramId);
-
-  await initSocket(meta, {
-    usePairingCode: true,
-    phone,
-    onPairingCode: async (code) => {
-      await ctx.reply(pairingCodeCard(phone, code), {
-        parse_mode: 'HTML',
-        reply_markup: pairingCodeKeyboard(code),
-      });
-    },
-    onConnected: async () => {
-      await ctx.reply(
-        `${header('Session Connected!', '🟢')}\n\nPhone: ${H.code(phone)}`,
-        { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId) }
-      );
-    },
+  const progress = await ctx.reply(`${header('Preparing Pairing', '🔄')}\n\nRequesting the secure PAPPY-BOT code...`, {
+    parse_mode: 'HTML',
   });
+
+  try {
+    await reinitSocket(meta, {
+      usePairingCode: true,
+      phone: normalizedPhone,
+      onPairingCode: async (code) => {
+        await ctx.telegram.editMessageText(
+          ctx.chat!.id,
+          progress.message_id,
+          undefined,
+          pairingCodeCard(normalizedPhone, code),
+          { parse_mode: 'HTML', reply_markup: pairingCodeKeyboard(code) }
+        );
+      },
+      onPairingError: async (error) => {
+        await ctx.telegram.editMessageText(
+          ctx.chat!.id,
+          progress.message_id,
+          undefined,
+          `${header('Pairing Request Failed', '🔴')}\n\n${H.code(error.message)}\n\nNo WhatsApp session data was deleted.`,
+          { parse_mode: 'HTML', reply_markup: sessionPairKeyboard(sessionId) }
+        ).catch(() => {});
+      },
+      onConnected: async () => {
+        await ctx.telegram.editMessageText(
+          ctx.chat!.id,
+          progress.message_id,
+          undefined,
+          `${header('Session Connected!', '🟢')}\n\nPhone: ${H.code(normalizedPhone)}`,
+          { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId) }
+        ).catch(() => {});
+      },
+    });
+  } catch (error) {
+    await ctx.telegram.editMessageText(
+      ctx.chat!.id,
+      progress.message_id,
+      undefined,
+      `${header('Pairing Failed', '🔴')}\n\n${H.code(error instanceof Error ? error.message : String(error))}`,
+      { parse_mode: 'HTML', reply_markup: sessionPairKeyboard(sessionId) }
+    ).catch(() => {});
+  }
 }
 
 // ── Session Info ──────────────────────────────────────────
