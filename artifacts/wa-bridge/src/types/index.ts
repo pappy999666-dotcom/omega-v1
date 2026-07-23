@@ -1,0 +1,131 @@
+// ============================================================
+// WA-Bridge — Shared TypeScript Types
+// ============================================================
+
+export interface UserConfig {
+  telegramId: string;
+  username?: string;
+  isBanned: boolean;
+  isOwner: boolean;
+  prefix: string;               // Custom command prefix
+  nullPrefix: boolean;          // Always-listen mode
+  stickerMacros: Record<string, string>; // sticker hash → command
+  joinedAt: number;
+  lastActivity: number;
+}
+
+export interface SessionMeta {
+  sessionId: string;            // e.g. "1_{tg_id}_{phone}"
+  telegramId: string;
+  phone: string;
+  label?: string;
+  status: 'connecting' | 'open' | 'frozen' | 'banned' | 'error' | 'closed';
+  pairMethod: 'qr' | 'code';
+  pairedAt?: number;
+  lastSeen?: number;
+  errorCount: number;
+  autoJoinDone: boolean;
+}
+
+export interface BucketEntry {
+  link: string;
+  jid?: string;
+  title?: string;
+  memberCount?: number;
+  addedAt: number;
+  validatedAt?: number;
+  status: 'unvalidated' | 'active' | 'dead';
+  deadReason?: string;
+}
+
+export interface Workspace {
+  telegramId: string;
+  config: UserConfig;
+  sessions: Record<string, SessionMeta>;
+  mainBucket: BucketEntry[];
+  activeBucket: BucketEntry[];
+  deadBucket: BucketEntry[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface JobPayload {
+  telegramId: string;
+  sessionId: string;
+  type: JobType;
+  data: Record<string, unknown>;
+  chatId?: number;              // Telegram chat for progress updates
+  messageId?: number;           // Message to edit with status
+}
+
+export type JobType =
+  | 'allstatus'
+  | 'allchat'
+  | 'sstatus'
+  | 'joinall'
+  | 'leaveall'
+  | 'validate_links'
+  | 'tochatx'
+  | 'omni_bridge';
+
+export interface JobResult {
+  success: number;
+  failed: number;
+  skipped: number;
+  rateLimited: number;
+  details: string[];
+  duration: number;
+}
+
+export interface CircuitState {
+  state: 'closed' | 'open' | 'half-open';
+  failures: number;
+  lastFailure: number;
+  openedAt?: number;
+}
+
+export interface ValidationResult {
+  link: string;
+  jid?: string;
+  title?: string;
+  memberCount?: number;
+  description?: string;
+  isValid: boolean;
+  reason?: string;
+}
+
+export interface ParsedCommand {
+  prefix: string;
+  command: string;
+  args: string[];
+  raw: string;
+  fromSticker?: boolean;
+  stickerHash?: string;
+}
+
+export interface TelegramContext {
+  telegramId: string;
+  username?: string;
+  isOwner: boolean;
+  workspace: Workspace;
+}
+
+export interface OutreachOptions {
+  message: string;
+  mediaUrl?: string;
+  mediaType?: 'image' | 'video' | 'document' | 'audio';
+  caption?: string;
+  viewOnce?: boolean;
+  link?: string;
+}
+
+export interface AsciiBlock {
+  title: string;
+  rows: [string, string][];     // [label, value] pairs
+  footer?: string;
+}
+
+// Circuit breaker key pattern: `cb:{telegramId}:{sessionId}:{domain}`
+// Workspace path pattern: `workspaces/{telegramId}/`
+// Session path: `workspaces/{telegramId}/sessions/{sessionId}/auth/`
+// Buckets: `workspaces/{telegramId}/buckets/{main|active|dead}.json`

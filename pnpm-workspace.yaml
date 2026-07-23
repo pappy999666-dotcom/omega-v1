@@ -33,6 +33,19 @@ minimumReleaseAgeExclude:
   # this setting guards against does not apply to our own packages.
   - '@replit/*'
   - stripe-replit-sync
+  # WA-Bridge deps — pinned to audited versions, excluded from age check
+  - '@whiskeysockets/baileys'
+  - bullmq
+  - ioredis
+  - telegraf
+  - qrcode
+  - link-preview-js
+  - fast-levenshtein
+  - p-queue
+  - p-retry
+  - p-limit
+  - winston
+  - winston-daily-rotate-file
 
 packages:
   - artifacts/*

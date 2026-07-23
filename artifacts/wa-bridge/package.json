@@ -1,0 +1,53 @@
+{
+  "name": "@workspace/wa-bridge",
+  "version": "1.0.0",
+  "description": "Telegram ↔ WhatsApp Automation Bridge — Production-Grade Multi-Device Control Center",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc --noEmit && node build.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "6.7.22",
+    "telegraf": "^4.16.3",
+    "bullmq": "^5.56.3",
+    "ioredis": "^5.6.1",
+    "qrcode": "^1.5.4",
+    "qrcode-terminal": "^0.12.0",
+    "sharp": "^0.34.2",
+    "axios": "^1.9.0",
+    "winston": "^3.17.0",
+    "winston-daily-rotate-file": "^5.0.0",
+    "dotenv": "^16.5.0",
+    "uuid": "^11.1.0",
+    "node-cache": "^5.1.2",
+    "mime-types": "^3.0.1",
+    "fast-levenshtein": "^3.0.0",
+    "p-queue": "^8.1.0",
+    "p-retry": "^6.2.1",
+    "p-limit": "^6.2.0",
+    "crypto-js": "^4.2.0",
+    "@hapi/boom": "^10.0.1",
+    "link-preview-js": "^3.0.5",
+    "archiver": "^7.0.1",
+    "csv-stringify": "^6.5.2",
+    "node-fetch": "^3.3.2",
+    "cheerio": "^1.0.0",
+    "pino": "^9.7.0",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/qrcode": "^1.5.5",
+    "@types/mime-types": "^2.1.4",
+    "@types/fast-levenshtein": "^0.0.4",
+    "@types/archiver": "^6.0.3",
+    "@types/crypto-js": "^4.2.2",
+    "tsx": "catalog:",
+    "typescript": "^5.9.3",
+    "esbuild": "0.27.3"
+  }
+}
