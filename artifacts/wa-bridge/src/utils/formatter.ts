@@ -41,6 +41,34 @@ export function kv(label: string, value: string, pad = 12): string {
   return `${H.bold(label.padEnd(pad))} ${value}`;
 }
 
+export function safe(value: unknown): string {
+  return escape(String(value ?? ''));
+}
+
+export function card(title: string, emoji: string, rows: Array<[string, string]>, guidance?: string): string {
+  const content = rows.map(([label, value]) => kv(`${safe(label)}:`, safe(value))).join('\n');
+  return [
+    header(safe(title), emoji),
+    content ? `\n${content}` : '',
+    guidance ? `\n\n${H.blockquote(safe(guidance))}` : '',
+  ].join('');
+}
+
+export function noticeCard(
+  title: string,
+  message: string,
+  tone: 'info' | 'success' | 'warning' | 'error' = 'info',
+  details?: string
+): string {
+  const icons = { info: 'ℹ️', success: '✅', warning: '⚠️', error: '❌' } as const;
+  return [
+    header(safe(title), icons[tone]),
+    '',
+    H.blockquote(safe(message)),
+    details ? `\n${H.blockquote(H.pre(details, 'log'), true)}` : '',
+  ].join('\n');
+}
+
 /** Rich expandable blockquote for logs/errors */
 export function errorBlock(error: string, context?: string): string {
   const body = context ? `${context}\n\n${error}` : error;
@@ -51,6 +79,7 @@ export function errorBlock(error: string, context?: string): string {
 
 export function sessionCard(opts: {
   sessionId: string;
+  label?: string;
   phone: string;
   status: string;
   paired: boolean;
@@ -67,11 +96,13 @@ export function sessionCard(opts: {
   }[opts.status] ?? '⚪';
 
   const lines = [
-    header(`Session: ${opts.sessionId}`, statusEmoji),
+    header(`Session: ${safe(opts.label || opts.phone || opts.sessionId)}`, statusEmoji),
     '',
-    kv('Phone:', opts.phone),
-    kv('Status:', `${statusEmoji} ${opts.status.toUpperCase()}`),
+    kv('Owner:', safe(opts.phone)),
+    kv('Status:', `${statusEmoji} ${safe(opts.status.toUpperCase())}`),
     kv('Paired:', opts.paired ? '✅ Yes' : '❌ No'),
+    '',
+    H.blockquote(`Session ID\n${H.code(safe(opts.sessionId))}`, true),
   ];
 
   if (opts.groups !== undefined) lines.push(kv('Groups:', String(opts.groups)));

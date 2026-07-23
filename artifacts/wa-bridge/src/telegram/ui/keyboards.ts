@@ -11,17 +11,47 @@ type IKB = InlineKeyboardMarkup['inline_keyboard'][number][number];
 type ButtonStyle = 'primary' | 'success' | 'danger';
 type StyledIKB = IKB & { style?: ButtonStyle };
 
-function btn(text: string, callback_data: string, style?: ButtonStyle): IKB {
-  return { text, callback_data, ...(style ? { style } : {}) } as StyledIKB;
+function btn(text: string, callback_data: string, style: ButtonStyle = 'primary'): IKB {
+  return { text, callback_data, style } as StyledIKB;
 }
 
-function urlBtn(text: string, url: string): IKB {
-  return { text, url };
+function urlBtn(text: string, url: string, style: ButtonStyle = 'primary'): IKB {
+  return { text, url, style } as StyledIKB;
 }
 
-function copyBtn(text: string, copy_text: string): IKB {
+function copyBtn(text: string, copy_text: string, style: ButtonStyle = 'primary'): IKB {
   // Telegram API 9.0+ copy_text button
-  return { text, copy_text: { text: copy_text } } as IKB;
+  return { text, copy_text: { text: copy_text }, style } as IKB;
+}
+
+export function backKeyboard(callback = 'menu:main'): InlineKeyboardMarkup {
+  return { inline_keyboard: [[btn('🔙 Back', callback)]] };
+}
+
+export function bridgeExitKeyboard(): InlineKeyboardMarkup {
+  return { inline_keyboard: [[btn('❌ Exit Bridge', 'bridge:exit', 'danger')]] };
+}
+
+export function helpKeyboard(): InlineKeyboardMarkup {
+  return backKeyboard('menu:main');
+}
+
+export function statusKeyboard(): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [btn('🔄 Refresh', 'status:overview', 'success')],
+      [btn('🔙 Back', 'menu:main')],
+    ],
+  };
+}
+
+export function stickerMacrosKeyboard(): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [btn('📖 Binding Help', 'help:stickers')],
+      [btn('🔙 Back', 'settings:menu')],
+    ],
+  };
 }
 
 // ── Main Menu ─────────────────────────────────────────────
@@ -43,7 +73,7 @@ export function mainMenuKeyboard(isOwner: boolean): InlineKeyboardMarkup {
 // ── Sessions ──────────────────────────────────────────────
 
 export function sessionsListKeyboard(
-  sessions: { id: string; phone: string; status: string }[],
+  sessions: { id: string; phone: string; label?: string; status: string }[],
   page = 0,
   pageSize = 5
 ): InlineKeyboardMarkup {
@@ -60,7 +90,7 @@ export function sessionsListKeyboard(
       banned: '💀',
     }[s.status] ?? '⚪';
 
-    return [btn(`${statusIcon} ${s.phone}`, `session:${s.id}:menu`)];
+    return [btn(`${statusIcon} ${s.label || s.phone}`, `session:${s.id}:menu`)];
   });
 
   // Pagination
@@ -89,8 +119,14 @@ export function sessionPairKeyboard(sessionId: string): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [btn('📷 QR Code', `pair:qr:${sessionId}`, 'primary'), btn('🔑 Pairing Code', `pair:code:${sessionId}`, 'primary')],
-      [btn('🔙 Back', 'sessions:list')],
+      [btn('❌ Cancel', 'session:new:cancel', 'danger')],
     ],
+  };
+}
+
+export function sessionWizardKeyboard(): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [[btn('❌ Cancel Setup', 'session:new:cancel', 'danger')]],
   };
 }
 
@@ -139,12 +175,22 @@ export function bucketViewKeyboard(
 
 // ── Admin ─────────────────────────────────────────────────
 
-export function adminPanelKeyboard(): InlineKeyboardMarkup {
+export function adminPanelKeyboard(paused = false, maintenance = false): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [btn('👥 Users', 'admin:users:0'), btn('🌐 Master Bucket', 'admin:master:bucket')],
-      [btn('📡 Omni-Bridge', 'admin:omni'), btn('⏸ Global Pause', 'admin:pause')],
-      [btn('🔧 Maintenance', 'admin:maintenance'), btn('📊 Platform Stats', 'admin:stats')],
+      [
+        btn('📡 Omni-Bridge', 'admin:omni'),
+        paused
+          ? btn('▶️ Resume Traffic', 'admin:pause:off', 'success')
+          : btn('⏸ Global Pause', 'admin:pause:on', 'danger'),
+      ],
+      [
+        maintenance
+          ? btn('✅ End Maintenance', 'admin:maintenance:off', 'success')
+          : btn('🔧 Maintenance', 'admin:maintenance:on', 'danger'),
+        btn('📊 Platform Stats', 'admin:stats'),
+      ],
       [btn('🔙 Back', 'menu:main')],
     ],
   };

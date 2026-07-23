@@ -8,12 +8,18 @@ import { loadConfig, updateConfig, purgeAllSessions, loadBucket, getAllUserIds }
 import { getAllSockets } from '../../whatsapp/socket-manager.js';
 import { getMasterActiveBucket, exportBucket } from '../../services/tri-bucket.js';
 import { enqueueJob, omniQueue } from '../../services/queue.js';
-import { setMaintenanceMode, setGlobalPause } from '../middlewares/auth.js';
+import {
+  setMaintenanceMode,
+  setGlobalPause,
+  isMaintenanceMode,
+  isGlobalPaused,
+} from '../middlewares/auth.js';
 import {
   adminPanelKeyboard,
   adminUsersKeyboard,
   adminUserKeyboard,
   confirmKeyboard,
+  backKeyboard,
 } from '../ui/keyboards.js';
 import { header, H, kv, bucketCard } from '../../utils/formatter.js';
 import { logger } from '../../utils/logger.js';
@@ -32,13 +38,14 @@ export async function handleAdminPanel(ctx: Context): Promise<void> {
     kv('Platform:', '🟢 Online'),
   ].join('\n');
 
+  const keyboard = adminPanelKeyboard(isGlobalPaused(), isMaintenanceMode());
   if (ctx.callbackQuery) {
     await ctx.editMessageText(text, {
       parse_mode: 'HTML',
-      reply_markup: adminPanelKeyboard(),
+      reply_markup: keyboard,
     }).catch(() => {});
   } else {
-    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: adminPanelKeyboard() });
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
   }
 }
 
@@ -117,7 +124,7 @@ export async function handleInspectUser(ctx: Context, targetId: string): Promise
 
   await ctx.editMessageText(text, {
     parse_mode: 'HTML',
-    reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: `admin:user:${targetId}` }]] },
+    reply_markup: backKeyboard(`admin:user:${targetId}`),
   }).catch(() => {});
 }
 
@@ -144,7 +151,7 @@ export async function handlePurgeConfirm(ctx: Context, targetId: string): Promis
   await ctx.answerCbQuery('Sessions purged').catch(() => {});
   await ctx.editMessageText(
     `${header('Purged', '🗑')}\n\nAll sessions for ${H.code(targetId)} have been deleted.`,
-    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'admin:users:0' }]] } }
+    { parse_mode: 'HTML', reply_markup: backKeyboard('admin:users:0') }
   ).catch(() => {});
 }
 
@@ -167,10 +174,10 @@ export async function handleMasterBucket(ctx: Context): Promise<void> {
     parse_mode: 'HTML',
     reply_markup: {
       inline_keyboard: [
-        [{ text: '📤 Export TXT', callback_data: 'admin:master:export:txt' }],
-        [{ text: '🔙 Back', callback_data: 'admin:panel' }],
+        [{ text: '📤 Export TXT', callback_data: 'admin:master:export:txt', style: 'primary' }],
+        ...backKeyboard('admin:panel').inline_keyboard,
       ],
-    },
+    } as never,
   }).catch(() => {});
 }
 
@@ -182,7 +189,7 @@ export async function handleOmniBridge(ctx: Context & { telegramId: string }): P
     `Send a command to execute across ALL active sessions simultaneously.\n\n` +
     `${H.blockquote('Available commands:\n• broadcast [message] — send to groups\n• status [text] — post to status')}\n\n` +
     `Reply with: ${H.code('/omni [command] [text]')}`,
-    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'admin:panel' }]] } }
+    { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') }
   ).catch(() => {});
 }
 
@@ -212,7 +219,7 @@ export async function handleGlobalPause(ctx: Context, paused: boolean): Promise<
   await ctx.answerCbQuery(paused ? 'Global pause ON' : 'Global pause OFF').catch(() => {});
   await ctx.editMessageText(
     `${header('Global Pause', paused ? '⏸' : '▶️')}\n\nAll user traffic is ${paused ? H.bold('PAUSED') : H.bold('RESUMED')}.`,
-    { parse_mode: 'HTML', reply_markup: adminPanelKeyboard() }
+    { parse_mode: 'HTML', reply_markup: adminPanelKeyboard(paused, isMaintenanceMode()) }
   ).catch(() => {});
 }
 
@@ -221,7 +228,7 @@ export async function handleMaintenanceToggle(ctx: Context, enabled: boolean): P
   await ctx.answerCbQuery(enabled ? 'Maintenance ON' : 'Maintenance OFF').catch(() => {});
   await ctx.editMessageText(
     `${header('Maintenance Mode', enabled ? '🔧' : '✅')}\n\n${enabled ? 'Bot is now in maintenance mode.' : 'Bot is back online.'}`,
-    { parse_mode: 'HTML', reply_markup: adminPanelKeyboard() }
+    { parse_mode: 'HTML', reply_markup: adminPanelKeyboard(isGlobalPaused(), enabled) }
   ).catch(() => {});
 }
 
@@ -251,7 +258,7 @@ export async function handlePlatformStats(ctx: Context): Promise<void> {
 
   await ctx.editMessageText(text, {
     parse_mode: 'HTML',
-    reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'admin:panel' }]] },
+    reply_markup: backKeyboard('admin:panel'),
   }).catch(() => {});
 }
 
