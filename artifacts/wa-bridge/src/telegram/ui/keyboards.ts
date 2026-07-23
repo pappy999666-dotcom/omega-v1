@@ -73,7 +73,7 @@ export function mainMenuKeyboard(isOwner: boolean): InlineKeyboardMarkup {
 // ── Sessions ──────────────────────────────────────────────
 
 export function sessionsListKeyboard(
-  sessions: { id: string; phone: string; status: string }[],
+  sessions: { id: string; phone: string; label?: string; status: string }[],
   page = 0,
   pageSize = 5
 ): InlineKeyboardMarkup {
@@ -90,7 +90,7 @@ export function sessionsListKeyboard(
       banned: '💀',
     }[s.status] ?? '⚪';
 
-    return [btn(`${statusIcon} ${s.phone}`, `session:${s.id}:menu`)];
+    return [btn(`${statusIcon} ${s.label || s.phone}`, `session:${s.id}:menu`)];
   });
 
   // Pagination
@@ -119,8 +119,14 @@ export function sessionPairKeyboard(sessionId: string): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [btn('📷 QR Code', `pair:qr:${sessionId}`, 'primary'), btn('🔑 Pairing Code', `pair:code:${sessionId}`, 'primary')],
-      [btn('🔙 Back', 'sessions:list')],
+      [btn('❌ Cancel', 'session:new:cancel', 'danger')],
     ],
+  };
+}
+
+export function sessionWizardKeyboard(): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [[btn('❌ Cancel Setup', 'session:new:cancel', 'danger')]],
   };
 }
 

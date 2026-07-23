@@ -4,6 +4,13 @@
 // ============================================================
 
 import type { Context, MiddlewareFn } from 'telegraf';
+
+export interface SessionOnboardingDraft {
+  stage: 'name' | 'phone' | 'method';
+  label?: string;
+  phone?: string;
+  sessionId?: string;
+}
 import { loadConfig, initWorkspace } from '../../services/workspace.js';
 import { logger } from '../../utils/logger.js';
 
@@ -55,15 +62,18 @@ export function authMiddleware(): MiddlewareFn<Context> {
 
     // Ban check
     if (config.isBanned && !isOwner) {
-      await ctx.reply('🚫 You are banned from using this bot.').catch(() => {});
+      await ctx.reply(
+        '🚫 <b>Access Denied</b>\n<code>──────────────────────────────</code>\n\n<blockquote>Your account is banned from using this bot.</blockquote>',
+        { parse_mode: 'HTML' }
+      ).catch(() => {});
       return;
     }
 
     // Maintenance mode — owner only
     if (maintenanceMode && !isOwner) {
       await ctx.reply(
-        '🔧 *Bot is under maintenance.* Please try again later.',
-        { parse_mode: 'Markdown' }
+        '🔧 <b>Maintenance Mode</b>\n<code>──────────────────────────────</code>\n\n<blockquote>The control center is temporarily unavailable. Please try again later.</blockquote>',
+        { parse_mode: 'HTML' }
       ).catch(() => {});
       return;
     }
@@ -132,7 +142,10 @@ export function ownerOnly(): MiddlewareFn<Context> {
   return async (ctx, next) => {
     const isOwner = (ctx as Context & { isOwner?: boolean }).isOwner;
     if (!isOwner) {
-      await ctx.reply('🚫 This command is restricted to the bot owner.').catch(() => {});
+      await ctx.reply(
+        '🔒 <b>Owner Only</b>\n<code>──────────────────────────────</code>\n\n<blockquote>This control is restricted to the bot owner.</blockquote>',
+        { parse_mode: 'HTML' }
+      ).catch(() => {});
       return;
     }
     return next();

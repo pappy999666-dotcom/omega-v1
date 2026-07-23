@@ -39,6 +39,8 @@ import {
   header,
   H,
   escape,
+  card,
+  noticeCard,
 } from '../../utils/formatter.js';
 import { logger } from '../../utils/logger.js';
 
@@ -58,22 +60,23 @@ export async function handleSessionsList(
 
   if (sessions.length === 0) {
     await ctx.editMessageText?.(
-      `${header('Your WhatsApp Sessions', '📱')}\n\n<i>No sessions yet. Pair your first number below!</i>`,
+      noticeCard('Your WhatsApp Sessions', 'No sessions are configured yet. Create your first session below.', 'info'),
       {
         parse_mode: 'HTML',
         reply_markup: sessionsListKeyboard([], 0),
       }
     ) ?? await ctx.reply(
-      `${header('Your WhatsApp Sessions', '📱')}\n\n<i>No sessions yet.</i>`,
+      noticeCard('Your WhatsApp Sessions', 'No sessions are configured yet.', 'info'),
       { parse_mode: 'HTML', reply_markup: sessionsListKeyboard([], 0) }
     );
     return;
   }
 
-  const text = `${header('Your WhatsApp Sessions', '📱')}\n\n${H.italic(`${sessions.length} session(s) configured`)}`;
+  const text = card('Your WhatsApp Sessions', '📱', [['Configured', String(sessions.length)]], 'Select a named session to view controls or create another one.');
   const sessionList = sessions.map((s) => ({
     id: s.sessionId,
     phone: s.phone,
+    label: s.label,
     status: s.status,
   }));
 
@@ -94,7 +97,8 @@ export async function handleSessionsList(
 
 export async function handleNewSession(
   ctx: Context & { telegramId: string },
-  phone?: string
+  phone?: string,
+  label?: string
 ): Promise<void> {
   if (!phone) {
     await ctx.editMessageText?.(
@@ -116,25 +120,29 @@ export async function handleNewSession(
   const existing = loadSessionMeta(ctx.telegramId, sessionId);
 
   if (existing && existing.status === 'open') {
-    await ctx.reply(`⚠️ Session for ${H.code(phone)} is already active.`, { parse_mode: 'HTML' });
+    await ctx.reply(noticeCard('Session Already Active', `A connected session already exists for ${phone}.`, 'warning'), { parse_mode: 'HTML' });
     return;
   }
 
-  const meta: SessionMeta = existing ?? {
-    sessionId,
-    telegramId: ctx.telegramId,
+  const meta: SessionMeta = {
+    ...(existing ?? {
+      sessionId,
+      telegramId: ctx.telegramId,
+      phone,
+      errorCount: 0,
+      autoJoinDone: false,
+    }),
+    label: label ?? existing?.label,
     phone,
     status: 'connecting',
     pairMethod: 'qr',
-    errorCount: 0,
-    autoJoinDone: false,
   };
 
   saveSessionMeta(meta);
   registerSessionOwner(sessionId, ctx.telegramId);
 
   const progressMsg = await ctx.reply(
-    `${header('Connecting…', '🔄')}\n\n${H.italic('Generating pairing options…')}`,
+    card('Connecting Session', '🔄', [['Name', meta.label || meta.phone], ['Owner', meta.phone], ['Method', 'QR code']], 'Preparing a secure WhatsApp pairing session.'),
     { parse_mode: 'HTML' }
   );
 
@@ -148,7 +156,7 @@ export async function handleNewSession(
         await ctx.replyWithPhoto(
           { source: buffer },
           {
-            caption: `${header('Scan QR Code', '📷')}\n\n${H.italic('Open WhatsApp → Linked Devices → Link a Device → Scan QR')}\n\n${H.italic('QR expires in 60s')}`,
+            caption: card('Scan QR Code', '📷', [['Session', meta.label || meta.phone], ['Owner', meta.phone], ['Expires', '60 seconds']], 'Open WhatsApp → Linked Devices → Link a Device → Scan QR.'),
             parse_mode: 'HTML',
           }
         );
@@ -158,7 +166,7 @@ export async function handleNewSession(
           ctx.chat!.id,
           progressMsg.message_id,
           undefined,
-          `${header('Session Connected', '🟢')}\n\n${H.code(sessionId)}`,
+          card('Session Connected', '🟢', [['Name', meta.label || meta.phone], ['Owner', meta.phone], ['Status', 'Connected']], 'The session is ready for WhatsApp commands.'),
           {
             parse_mode: 'HTML',
             reply_markup: sessionMenuKeyboard(sessionId),
@@ -171,7 +179,7 @@ export async function handleNewSession(
       ctx.chat!.id,
       progressMsg.message_id,
       undefined,
-      `${header('Connection Failed', '🔴')}\n\n${H.pre(String(err), 'log')}`,
+      noticeCard('Connection Failed', 'The QR session could not be connected.', 'error', String(err)),
       { parse_mode: 'HTML' }
     );
   }
@@ -188,7 +196,7 @@ export async function handlePairingCode(
   try {
     normalizedPhone = normalizePairingPhone(phone);
   } catch (error) {
-    await ctx.reply(`${header('Invalid Phone Number', '🔴')}\n\n${H.code(error instanceof Error ? error.message : String(error))}`, {
+    await ctx.reply(noticeCard('Invalid Phone Number', error instanceof Error ? error.message : String(error), 'error'), {
       parse_mode: 'HTML',
     });
     return;
@@ -196,7 +204,7 @@ export async function handlePairingCode(
 
   const existing = loadSessionMeta(ctx.telegramId, sessionId);
   if (existing?.status === 'open') {
-    await ctx.reply(`Session ${H.code(sessionId)} is already connected.`, { parse_mode: 'HTML' });
+    await ctx.reply(noticeCard('Session Already Connected', 'This WhatsApp owner already has an active session.', 'warning'), { parse_mode: 'HTML' });
     return;
   }
 
@@ -286,6 +294,7 @@ export async function handleSessionInfo(
   await ctx.editMessageText(
     sessionCard({
       sessionId,
+      label: meta.label,
       phone: meta.phone,
       status: meta.status,
       paired: meta.status === 'open',
