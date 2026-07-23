@@ -59,12 +59,7 @@ export async function handleSessionsList(
       `${header('Your WhatsApp Sessions', '📱')}\n\n<i>No sessions yet. Pair your first number below!</i>`,
       {
         parse_mode: 'HTML',
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '➕ New Session', callback_data: 'session:new' }],
-            [{ text: '🔙 Back', callback_data: 'menu:main' }],
-          ],
-        },
+        reply_markup: sessionsListKeyboard([], 0),
       }
     ) ?? await ctx.reply(
       `${header('Your WhatsApp Sessions', '📱')}\n\n<i>No sessions yet.</i>`,

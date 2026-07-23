@@ -233,7 +233,7 @@ export function createBot(): Telegraf<BotContext> {
       return;
     }
 
-    // ── Awaiting Prefix ───────────────────────────────────
+    // ── Awaiting Prefix ───────────────��───────────────────
     if (ctx.session?.awaitingPrefix) {
       ctx.session.awaitingPrefix = false;
       const { updateConfig } = await import('../services/workspace.js');
@@ -262,6 +262,7 @@ export function createBot(): Telegraf<BotContext> {
     const [action, ...params] = data.split(':');
 
     try {
+      await ctx.answerCbQuery().catch(() => {});
       await routeCallback(bc, action!, params);
     } catch (err) {
       logger.error('[Bot] Callback error', { data, err: String(err) });
@@ -317,11 +318,7 @@ async function routeCallback(
   }
 
   if (action === 'session') {
-    const sessionId = params[0]!;
-    const sub = params[1];
-
-    if (!sub) return; // session:new
-    if (sub === 'new') {
+    if (params[0] === 'new') {
       ctx.session.awaitingPhone = true;
       await ctx.editMessageText(
         `${header('Add New Session', '➕')}\n\nSend your phone number in international format:\n${H.code('+1234567890')}`,
@@ -329,6 +326,11 @@ async function routeCallback(
       );
       return;
     }
+
+    const sessionId = params[0]!;
+    const sub = params[1];
+    if (!sessionId || !sub) return;
+
     if (sub === 'menu') {
       const { sessionMenuKeyboard } = await import('./ui/keyboards.js');
       const { loadSessionMeta } = await import('../services/workspace.js');
@@ -345,21 +347,9 @@ async function routeCallback(
     if (sub === 'freeze') { await handleFreezeSession(ctx, sessionId); return; }
     if (sub === 'unfreeze') { await handleUnfreezeSession(ctx, sessionId); return; }
     if (sub === 'reinit') { await handleReinitSession(ctx, sessionId); return; }
-    if (sub === 'purge') { await handlePurgeSession(ctx, sessionId); return; }
     if (sub === 'purge' && params[2] === 'confirm') { await handlePurgeConfirm(ctx, sessionId); return; }
+    if (sub === 'purge') { await handlePurgeSession(ctx, sessionId); return; }
     if (sub === 'bridge') { await handleBridgeSession(ctx, sessionId); return; }
-    return;
-  }
-
-  if (action === 'session' && params[0] === 'new') {
-    ctx.session.awaitingPhone = true;
-    await ctx.editMessageText('Send your phone number (international format):');
-    return;
-  }
-
-  // Purge confirm
-  if (action === 'session' && params[2] === 'confirm') {
-    await handlePurgeConfirm(ctx, params[0]!);
     return;
   }
 
