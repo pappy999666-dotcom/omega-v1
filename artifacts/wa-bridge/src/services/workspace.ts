@@ -247,7 +247,7 @@ export function purgeAllSessions(telegramId: string): void {
   }
 }
 
-// ── Buckets ───────────────────────────────────────────────
+// ── Buckets ────────���──────────────────────────────────────
 
 export function loadBucket(
   telegramId: string,
@@ -278,7 +278,11 @@ export function addToMainBucket(
   sourceSessionId?: string
 ): { added: number; dupes: number } {
   const existing = loadBucket(telegramId, 'main');
-  const existingLinks = new Set(existing.map((e) => e.link));
+  const existingLinks = new Set([
+    ...existing.map((entry) => entry.link),
+    ...loadBucket(telegramId, 'active').map((entry) => entry.link),
+    ...loadBucket(telegramId, 'dead').map((entry) => entry.link),
+  ]);
   let added = 0;
   let dupes = 0;
 
@@ -305,6 +309,9 @@ export function moveToActiveBucket(
   telegramId: string,
   entries: BucketEntry[]
 ): void {
+  const movedLinks = new Set(entries.map((entry) => entry.link));
+  saveBucket(telegramId, 'main', loadBucket(telegramId, 'main').filter((entry) => !movedLinks.has(entry.link)));
+  saveBucket(telegramId, 'dead', loadBucket(telegramId, 'dead').filter((entry) => !movedLinks.has(entry.link)));
   const active = loadBucket(telegramId, 'active');
   const existingJids = new Set(active.map((e) => e.jid ?? e.link));
   for (const e of entries) {

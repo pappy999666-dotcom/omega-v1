@@ -112,6 +112,7 @@ export function sessionMenuKeyboard(sessionId: string): InlineKeyboardMarkup {
       [btn('❄️ Freeze', `session:${sessionId}:freeze`, 'danger'), btn('🔥 Unfreeze', `session:${sessionId}:unfreeze`, 'success')],
       [btn('🔄 Re-Init', `session:${sessionId}:reinit`, 'primary'), btn('🗑 Purge', `session:${sessionId}:purge`, 'danger')],
       [btn('🔗 Link Collection', `session:${sessionId}:collect`, 'primary'), btn('🚪 Join Manager', `session:${sessionId}:joinmgr`, 'primary')],
+      [btn('🖼 Set Profile Photo', `session:${sessionId}:pfp:set`, 'primary'), btn('Remove Photo', `session:${sessionId}:pfp:remove`, 'danger')],
       [btn('🌉 Bridge', `session:${sessionId}:bridge`, 'primary'), btn('🔙 Back', 'sessions:list')],
     ],
   };
