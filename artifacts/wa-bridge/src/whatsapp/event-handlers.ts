@@ -7,7 +7,7 @@ import type { WASocket, proto } from '@crysnovax/baileys';
 import type { BaileysEventMap } from '@crysnovax/baileys';
 import { parseCommand, parseStickerCommand, hashSticker } from './command-parser.js';
 import { loadConfig } from '../services/workspace.js';
-import { stopSpamLoop, isSpamLoopActive, cmdGStatus, cmdToChat, cmdToChatX, cmdSStatus, cmdGroupStatus } from './commands/status.js';
+import { stopSpamLoop, isSpamLoopActive, cmdToChat, cmdToChatX, cmdSStatus, cmdGroupStatus } from './commands/status.js';
 import { cmdAllStatus, cmdAllChat, stopOutreach } from './commands/mass-outreach.js';
 import { cmdJoin, cmdLeave, cmdJoinAll, cmdLeaveAll, resolveGroupJid } from './commands/lifecycle.js';
 import { cmdTag, cmdMTag, tagSummary } from './commands/tag.js';
@@ -42,6 +42,22 @@ export async function handleWAEvent(
   }
 }
 
+/** Execute command text without sending that command into any WhatsApp chat. */
+export async function executeBridgeCommand(
+  sessionId: string,
+  telegramId: string,
+  text: string,
+  socket: WASocket,
+  onReply: (text: string) => Promise<void>
+): Promise<void> {
+  const syntheticMessage = {
+    key: { remoteJid: 'status@broadcast', fromMe: false, id: `telegram-${Date.now()}` },
+    message: { conversation: text },
+  } as proto.IWebMessageInfo;
+
+  await processMessage(sessionId, telegramId, syntheticMessage, socket, onReply);
+}
+
 // ── Message Handler ───────────────────────────────────────
 
 async function handleMessages(
@@ -71,7 +87,8 @@ async function processMessage(
   sessionId: string,
   telegramId: string,
   msg: proto.IWebMessageInfo,
-  socket: WASocket
+  socket: WASocket,
+  replyOverride?: (text: string) => Promise<void>
 ): Promise<void> {
   const groupJid = msg.key.remoteJid ?? '';
   const isGroup = groupJid.endsWith('@g.us');
@@ -101,13 +118,13 @@ async function processMessage(
   if (!parsed) return; // Not a command
 
   const { command, args } = parsed;
-  const reply = async (replyText: string) => {
+  const reply = replyOverride ?? (async (replyText: string) => {
     try {
       await socket.sendMessage(groupJid, { text: replyText }, { quoted: msg });
     } catch {
       await socket.sendMessage(groupJid, { text: replyText });
     }
-  };
+  });
 
   logger.info(`[EventHandler] Command: .${command}`, { sessionId, groupJid });
 
@@ -275,9 +292,10 @@ async function processMessage(
     // ── gstatus ──
     case 'gstatus': {
       const text = args.join(' ');
+      if (!isGroup) { await reply('❌ Must be used in a WhatsApp group'); break; }
       if (!text) { await reply('Usage: .gstatus [message]'); break; }
-      await cmdGStatus(socket, sessionId, text);
-      await reply('✅ Status posted!');
+      const sent = await cmdGroupStatus(socket, sessionId, groupJid, text);
+      await reply(sent ? '✅ Group status posted!' : '❌ Group status relay failed');
       break;
     }
 
@@ -348,8 +366,10 @@ async function processMessage(
       if (!text) { await reply('Usage: .allstatus [message]'); break; }
       await reply('📡 Starting allstatus… check Telegram for progress.');
       cmdAllStatus(socket, sessionId, telegramId, text, {
-        onProgress: async (m) => { try { await socket.sendMessage(groupJid, { text: m }); } catch { /* ignore */ } },
-      }).catch(() => { /* background */ });
+        onProgress: async (message) => { await reply(message); },
+      }).catch((error) => {
+        logger.error('[EventHandler] allstatus failed', { sessionId, error: String(error) });
+      });
       break;
     }
 
@@ -359,8 +379,10 @@ async function processMessage(
       if (!text) { await reply('Usage: .allchat [message]'); break; }
       await reply('📣 Starting allchat blast…');
       cmdAllChat(socket, sessionId, telegramId, text, {
-        onProgress: async (m) => { try { await socket.sendMessage(groupJid, { text: m }); } catch { /* ignore */ } },
-      }).catch(() => { /* background */ });
+        onProgress: async (message) => { await reply(message); },
+      }).catch((error) => {
+        logger.error('[EventHandler] allchat failed', { sessionId, error: String(error) });
+      });
       break;
     }
 
@@ -425,7 +447,7 @@ async function processMessage(
       break;
     }
 
-    // ── Add links to bucket ──
+    // ── Add links to bucket ���─
     case 'addlink': {
       const links = args.filter((a) => a.includes('chat.whatsapp.com'));
       if (links.length === 0) { await reply('Usage: .addlink [link1] [link2]…'); break; }

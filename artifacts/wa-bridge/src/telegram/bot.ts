@@ -50,6 +50,7 @@ import { mainMenu, header, H, escape } from '../utils/formatter.js';
 import { getSocket, getUserSockets, isFrozen } from '../whatsapp/socket-manager.js';
 import { loadConfig, loadBucket } from '../services/workspace.js';
 import { resolveGroupJid } from '../whatsapp/commands/lifecycle.js';
+import { executeBridgeCommand } from '../whatsapp/event-handlers.js';
 
 // ── Context Extension ─────────────────────────────────────
 
@@ -200,11 +201,27 @@ export function createBot(): Telegraf<BotContext> {
         return;
       }
 
-      // Inject text as if it was a WA message to the bot itself
-      await ctx.reply(
-        `${header('Bridge Mode', '🌉')}\n\n${H.italic('Command sent to WhatsApp session')}\n${H.code(text)}`,
-        { parse_mode: 'HTML' }
-      );
+      try {
+        await executeBridgeCommand(
+          bridgeSessionId,
+          ctx.telegramId,
+          text,
+          socket,
+          async (response) => {
+            await ctx.reply(response);
+          }
+        );
+        await ctx.reply(
+          `${header('Bridge Mode', '🌉')}\n\n${H.italic('Command executed without posting the command text')}\n${H.code(text)}`,
+          { parse_mode: 'HTML' }
+        );
+      } catch (error) {
+        logger.error('[Bot] Bridge command failed', {
+          bridgeSessionId,
+          error: String(error),
+        });
+        await ctx.reply(`❌ Bridge command failed: ${String(error)}`);
+      }
       return;
     }
 
