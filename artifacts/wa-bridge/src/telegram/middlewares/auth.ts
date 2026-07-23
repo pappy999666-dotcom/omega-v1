@@ -24,6 +24,10 @@ export function isGlobalPaused(): boolean {
   return globalPaused;
 }
 
+export function isMaintenanceMode(): boolean {
+  return maintenanceMode;
+}
+
 // ── Auth Middleware ───────────────────────────────────────
 
 /**
@@ -103,8 +107,8 @@ export function forceJoinMiddleware(): MiddlewareFn<Context> {
             parse_mode: 'HTML',
             reply_markup: {
               inline_keyboard: [
-                [{ text: '📢 Join Channel', url: `https://t.me/${sponsorChannel.replace('@', '')}` }],
-                [{ text: '✅ I Joined', callback_data: 'verify:joined' }],
+                [{ text: '📢 Join Channel', url: `https://t.me/${sponsorChannel.replace('@', '')}`, style: 'primary' }],
+                [{ text: '✅ I Joined', callback_data: 'verify:joined', style: 'success' }],
               ],
             },
           }

@@ -45,7 +45,13 @@ import {
   handleMaintenanceToggle,
   handlePlatformStats,
 } from './handlers/admin.js';
-import { mainMenuKeyboard } from './ui/keyboards.js';
+import {
+  mainMenuKeyboard,
+  helpKeyboard,
+  statusKeyboard,
+  stickerMacrosKeyboard,
+  backKeyboard,
+} from './ui/keyboards.js';
 import { mainMenu, header, H, escape } from '../utils/formatter.js';
 import { getSocket, getUserSockets, isFrozen } from '../whatsapp/socket-manager.js';
 import { loadConfig, loadBucket } from '../services/workspace.js';
@@ -64,6 +70,29 @@ interface BotContext extends Context {
     awaitingPrefix?: boolean;
     bridgeSessionId?: string;
   };
+}
+
+function helpText(isOwner: boolean): string {
+  return [
+    header('WA-Bridge Commands', '📖'),
+    '',
+    H.bold('📱 Sessions'),
+    '  /sessions — Manage WhatsApp sessions',
+    '  /jid [link] — Resolve group JID',
+    '',
+    H.bold('🗂 Bucket'),
+    '  /bucket — Link validator hub',
+    '  Send links directly → auto-added to main bucket',
+    '',
+    H.bold('🌉 Bridge Mode'),
+    '  Select a session → Bridge to send WA commands',
+    '  /unbind — Exit bridge mode',
+    '',
+    H.bold('⚙️ Bot'),
+    '  /start — Main menu',
+    '  /help — This message',
+    isOwner ? '\n' + H.bold('👑 Owner') + '\n  /admin — Admin panel\n  /omni [cmd] [text] — Omni-bridge' : '',
+  ].filter(Boolean).join('\n');
 }
 
 // ── Bot Factory ───────────────────────────────────────────
@@ -162,28 +191,10 @@ export function createBot(): Telegraf<BotContext> {
   });
 
   bot.command('help', async (ctx) => {
-    const text = [
-      header('WA-Bridge Commands', '📖'),
-      '',
-      H.bold('📱 Sessions'),
-      '  /sessions — Manage WhatsApp sessions',
-      '  /jid [link] — Resolve group JID',
-      '',
-      H.bold('🗂 Bucket'),
-      '  /bucket — Link validator hub',
-      '  Send links directly → auto-added to main bucket',
-      '',
-      H.bold('🌉 Bridge Mode'),
-      '  Select a session → Bridge to send WA commands',
-      '  /unbind — Exit bridge mode',
-      '',
-      H.bold('⚙️ Bot'),
-      '  /start — Main menu',
-      '  /help — This message',
-      ctx.isOwner ? '\n' + H.bold('👑 Owner') + '\n  /admin — Admin panel\n  /omni [cmd] [text] — Omni-bridge' : '',
-    ].filter(Boolean).join('\n');
-
-    await ctx.reply(text, { parse_mode: 'HTML' });
+    await ctx.reply(helpText(ctx.isOwner), {
+      parse_mode: 'HTML',
+      reply_markup: helpKeyboard(),
+    });
   });
 
   // ── Text Message Handler ──────────────────────────────
@@ -310,6 +321,41 @@ async function routeCallback(
     return;
   }
 
+  // ── Help and Status ──
+  if (action === 'help') {
+    const stickerHelp = params[0] === 'stickers';
+    await ctx.editMessageText(
+      stickerHelp
+        ? `${header('Sticker Macro Help', '🎭')}\n\nSend an unbound sticker to receive its hash. Then use ${H.code('.setcmd [hash] [command]')} or reply to a sticker with ${H.code('.setcmd [command]')}.`
+        : helpText(ctx.isOwner),
+      {
+        parse_mode: 'HTML',
+        reply_markup: stickerHelp ? backKeyboard('settings:macros') : helpKeyboard(),
+      }
+    );
+    return;
+  }
+
+  if (action === 'status' && params[0] === 'overview') {
+    const sessionIds = getUserSockets(ctx.telegramId);
+    const active = sessionIds.filter((id) => Boolean(getSocket(id)) && !isFrozen(id)).length;
+    const frozen = sessionIds.filter((id) => isFrozen(id)).length;
+    const bucketTotal = loadBucket(ctx.telegramId, 'main').length;
+    await ctx.editMessageText(
+      [
+        header('System Status', '📊'),
+        '',
+        `${H.bold('Bot:')} Online`,
+        `${H.bold('Sessions:')} ${sessionIds.length}`,
+        `${H.bold('Active:')} ${active}`,
+        `${H.bold('Frozen:')} ${frozen}`,
+        `${H.bold('Pending Links:')} ${bucketTotal}`,
+      ].join('\n'),
+      { parse_mode: 'HTML', reply_markup: statusKeyboard() }
+    );
+    return;
+  }
+
   // ── Sessions ──
   if (action === 'sessions') {
     const page = parseInt(params[1] ?? '0', 10);
@@ -344,6 +390,23 @@ async function routeCallback(
       return;
     }
     if (sub === 'info') { await handleSessionInfo(ctx, sessionId); return; }
+    if (sub === 'groups') {
+      const socket = getSocket(sessionId);
+      if (!socket) {
+        await ctx.editMessageText(`${header('Session Groups', '📋')}\n\nSession is not connected.`, {
+          parse_mode: 'HTML',
+          reply_markup: backKeyboard(`session:${sessionId}:menu`),
+        });
+        return;
+      }
+      const groups = await socket.groupFetchAllParticipating();
+      const names = Object.values(groups).slice(0, 50).map((group, index) => `${index + 1}. ${escape(group.subject)}`);
+      await ctx.editMessageText(
+        `${header('Session Groups', '📋')}\n\n${names.length ? names.join('\n') : H.italic('No groups found.')}`,
+        { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }
+      );
+      return;
+    }
     if (sub === 'freeze') { await handleFreezeSession(ctx, sessionId); return; }
     if (sub === 'unfreeze') { await handleUnfreezeSession(ctx, sessionId); return; }
     if (sub === 'reinit') { await handleReinitSession(ctx, sessionId); return; }
@@ -357,11 +420,24 @@ async function routeCallback(
   if (action === 'pair') {
     const method = params[0];
     const sessionId = params[1];
-    if (method === 'code' && sessionId) {
-      const { loadSessionMeta } = await import('../services/workspace.js');
-      const meta = loadSessionMeta(ctx.telegramId, sessionId);
-      if (meta) await handlePairingCode(ctx, sessionId, meta.phone);
+    if (!sessionId) return;
+    if (sessionId === 'new') {
+      ctx.session.awaitingPhone = true;
+      await ctx.editMessageText(
+        `${header(method === 'code' ? 'Pairing Code' : 'QR Pairing', method === 'code' ? '🔑' : '📷')}\n\nSend your phone number in international format:\n${H.code('+1234567890')}`,
+        { parse_mode: 'HTML', reply_markup: backKeyboard('sessions:list') }
+      );
+      return;
     }
+
+    const { loadSessionMeta } = await import('../services/workspace.js');
+    const meta = loadSessionMeta(ctx.telegramId, sessionId);
+    if (!meta) {
+      await ctx.answerCbQuery('Session not found', { show_alert: true }).catch(() => {});
+      return;
+    }
+    if (method === 'code') await handlePairingCode(ctx, sessionId, meta.phone);
+    else if (method === 'qr') await handleNewSession(ctx, meta.phone);
     return;
   }
 
@@ -417,8 +493,8 @@ async function routeCallback(
       return;
     }
     if (sub === 'omni') { await handleOmniBridge(ctx); return; }
-    if (sub === 'pause') { await handleGlobalPause(ctx, true); return; }
-    if (sub === 'maintenance') { await handleMaintenanceToggle(ctx, true); return; }
+    if (sub === 'pause') { await handleGlobalPause(ctx, params[1] !== 'off'); return; }
+    if (sub === 'maintenance') { await handleMaintenanceToggle(ctx, params[1] !== 'off'); return; }
     if (sub === 'stats') { await handlePlatformStats(ctx); return; }
     return;
   }
@@ -438,15 +514,25 @@ async function routeCallback(
       ctx.session.awaitingPrefix = true;
       await ctx.editMessageText(
         `${header('Change Prefix', '🔤')}\n\nSend your new command prefix (e.g. ${H.code('!')}, ${H.code('/')})\nOr send ${H.code('null')} to enable always-listen mode.`,
-        { parse_mode: 'HTML' }
+        { parse_mode: 'HTML', reply_markup: backKeyboard('settings:menu') }
+      );
+      return;
+    }
+    if (sub === 'macros') {
+      const macroCount = Object.keys(loadConfig(ctx.telegramId).stickerMacros ?? {}).length;
+      await ctx.editMessageText(
+        `${header('Sticker Macros', '🎭')}\n\n${H.bold('Bindings:')} ${macroCount}\n\nSend an unbound sticker in WhatsApp to get its stable hash, then bind it with ${H.code('.setcmd [hash] [command]')}.`,
+        { parse_mode: 'HTML', reply_markup: stickerMacrosKeyboard() }
       );
       return;
     }
     return;
   }
 
-  // Default fallback
-  await ctx.answerCbQuery().catch(() => {});
+  // Default fallback: never leave a rendered button apparently unresponsive.
+  await ctx.reply(`Unsupported button action: ${H.code([action, ...params].join(':'))}`, {
+    parse_mode: 'HTML',
+  });
 }
 
 // ── Alert Sender (used by socket manager) ────────────────

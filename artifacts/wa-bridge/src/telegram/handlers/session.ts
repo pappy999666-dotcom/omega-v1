@@ -30,6 +30,8 @@ import {
   sessionPairKeyboard,
   pairingCodeKeyboard,
   confirmKeyboard,
+  backKeyboard,
+  bridgeExitKeyboard,
 } from '../ui/keyboards.js';
 import {
   sessionCard,
@@ -366,7 +368,7 @@ export async function handlePurgeSession(
     {
       parse_mode: 'HTML',
       reply_markup: confirmKeyboard(
-        `session:purge:confirm:${sessionId}`,
+        `session:${sessionId}:purge:confirm`,
         `session:${sessionId}:menu`
       ),
     }
@@ -382,7 +384,7 @@ export async function handlePurgeConfirm(
 
   await ctx.editMessageText(
     `${header('Session Purged', '🗑')}\n\n${H.code(sessionId)} has been permanently deleted.`,
-    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'sessions:list' }]] } }
+    { parse_mode: 'HTML', reply_markup: backKeyboard('sessions:list') }
   ).catch(() => {});
 }
 
@@ -405,7 +407,7 @@ export async function handleBridgeSession(
     `Any message you send will be executed as a command on ${H.code(sessionId)}\n\n` +
     `${H.blockquote('Type your command (e.g., .ping, .allstatus [msg])\nSend /unbind to exit bridge mode.')}\n\n` +
     `${H.italic('⚠️ Commands run on the WhatsApp session directly.')}`,
-    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '❌ Exit Bridge', callback_data: 'bridge:exit' }]] } }
+    { parse_mode: 'HTML', reply_markup: bridgeExitKeyboard() }
   ).catch(() => {});
 }
 
