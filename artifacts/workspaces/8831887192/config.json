@@ -2,12 +2,12 @@
   "telegramId": "8831887192",
   "isBanned": false,
   "isOwner": true,
-  "prefix": ".",
-  "nullPrefix": false,
+  "prefix": "",
+  "nullPrefix": true,
   "stickerMacros": {},
   "statusDesignEnabled": true,
   "statusDesignTheme": "clean",
   "statusDesignStickyThemes": {},
   "joinedAt": 1784799363805,
-  "lastActivity": 1784799363805
+  "lastActivity": 1784800058122
 }

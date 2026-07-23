@@ -53,6 +53,13 @@ export function parseCommand(
   const parts = body.split(/\s+/);
   let command = parts[0]!.toLowerCase();
   const args = parts.slice(1);
+  const aliases: Record<string, string> = {
+    left: 'left',
+    stopspam: 'stopspam',
+    togstatusx: 'togstatusx',
+    allstatusx: 'allstatusx',
+  };
+  command = aliases[command] ?? command;
 
   // Typo-tolerance: try to match against known commands
   if (!KNOWN_COMMANDS.includes(command)) {
@@ -106,17 +113,17 @@ export function hashSticker(buffer: Buffer): string {
 
 export const ALL_COMMANDS = [
   // Status & Target Broadcast
-  'gstatus', 'tochat', 'tochatx', 'sstatus', 'statusdesign',
+  'gstatus', 'tochat', 'togstatus', 'tochatx', 'togstatusx', 'sstatus', 'statusdesign',
   // Mass Outreach
-  'allstatus', 'allchat', 'togstatus',
+  'allstatus', 'allchat', 'allstatusx',
   // Lifecycle
-  'join', 'leave', 'joinall', 'leaveall',
+  'join', 'joinall', 'left', 'leave', 'leaveall',
   // Tagging
   'tag', 'mtag',
   // Stop
-  'stop',
+  'stop', 'stopspam', 'spam',
   // Settings
-  'setprefix', 'setcmd', 'prefix',
+  'setprefix', 'setcmd', 'setsudo', 'delsudo', 'sudo', 'prefix',
   // Info
   'menu', 'help', 'ping', 'info', 'groups', 'jid',
   // Bucket

@@ -10,6 +10,7 @@ export interface UserConfig {
   prefix: string;               // Custom command prefix
   nullPrefix: boolean;          // Always-listen mode
   stickerMacros: Record<string, string>; // sticker hash → command
+  sudoNumbers?: string[];        // normalized WhatsApp numbers allowed to run commands
   statusDesignEnabled?: boolean; // unique per-GC designs for mass status campaigns
   statusDesignTheme?: string; // preferred theme for single-GC status designs
   statusDesignStickyThemes?: Record<string, string>; // group JID → preferred theme
