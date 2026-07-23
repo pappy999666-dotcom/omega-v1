@@ -96,3 +96,4 @@
 {"level":"info","message":"[Boot] Restored 0 session(s)","timestamp":"2026-07-23T09:11:18.172Z"}
 {"level":"info","message":"[Boot] Launching Telegram bot...","timestamp":"2026-07-23T09:11:18.172Z"}
 {"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:11:40.735Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:12:10.771Z"}
