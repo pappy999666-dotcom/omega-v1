@@ -157,7 +157,7 @@ export async function handleStartFilter(ctx: Context & { telegramId: string }): 
           ctx.chat!.id,
           progressMsg.message_id,
           undefined,
-          msg,
+          escape(msg),
           { parse_mode: 'HTML' }
         );
       } catch {

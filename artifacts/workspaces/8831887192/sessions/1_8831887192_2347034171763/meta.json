@@ -8,5 +8,23 @@
   "status": "open",
   "pairMethod": "code",
   "pairedAt": 1784798909177,
-  "lastSeen": 1784800705501
+  "lastSeen": 1784804184007,
+  "linkCollectionEnabled": true,
+  "linksCollected": 4,
+  "joinManager": {
+    "status": "completed",
+    "cursor": 1,
+    "total": 1,
+    "joined": 0,
+    "skipped": 0,
+    "failed": 1,
+    "consecutiveRestrictions": 1,
+    "updatedAt": 1784802373158,
+    "logs": [
+      "Join manager started",
+      "Restricted: Error: account_reachout_restricted"
+    ],
+    "startedAt": 1784802365912,
+    "lastError": "Error: account_reachout_restricted"
+  }
 }

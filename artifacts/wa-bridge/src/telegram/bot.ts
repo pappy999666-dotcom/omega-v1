@@ -90,6 +90,7 @@ interface BotContext extends Context {
     bridgeSessionId?: string;
     awaitingGlobalBridge?: boolean;
     awaitingSupport?: boolean;
+    awaitingProfilePhotoSessionId?: string;
   };
 }
 
@@ -278,10 +279,6 @@ export function createBot(): Telegraf<BotContext> {
             await ctx.reply(response);
           }
         );
-        await ctx.reply(
-          `${header('Bridge Mode', '🌉')}\n\n${H.italic('Command executed without posting the command text')}\n${H.code(text)}`,
-          { parse_mode: 'HTML' }
-        );
       } catch (error) {
         logger.error('[Bot] Bridge command failed', {
           bridgeSessionId,
@@ -402,6 +399,36 @@ export function createBot(): Telegraf<BotContext> {
     if (LINK_RE.test(text)) {
       await handleAddLinks(ctx as BotContext, text);
       return;
+    }
+  });
+
+  bot.on('photo', async (ctx) => {
+    const sessionId = ctx.session?.awaitingProfilePhotoSessionId;
+    if (!sessionId) return;
+    delete ctx.session.awaitingProfilePhotoSessionId;
+    const socket = getSocket(sessionId);
+    if (!socket || isFrozen(sessionId)) {
+      await ctx.reply(noticeCard('Profile Photo Failed', 'The selected WhatsApp session is not connected.', 'warning'), { parse_mode: 'HTML' });
+      return;
+    }
+    try {
+      const photo = ctx.message.photo.at(-1);
+      if (!photo) throw new Error('Telegram did not provide a usable photo');
+      const fileUrl = await ctx.telegram.getFileLink(photo.file_id);
+      const response = await fetch(fileUrl);
+      if (!response.ok) throw new Error(`Telegram download failed with ${response.status}`);
+      const image = Buffer.from(await response.arrayBuffer());
+      const ownJid = (socket as { user?: { id?: string } }).user?.id;
+      if (!ownJid) throw new Error('The WhatsApp account JID is unavailable');
+      await (socket as unknown as { updateProfilePicture(jid: string, image: Buffer): Promise<void> }).updateProfilePicture(ownJid, image);
+      await ctx.reply(noticeCard('Profile Photo Updated', 'The WhatsApp profile photo was changed successfully.', 'success'), {
+        parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`),
+      });
+    } catch (error) {
+      logger.error('[Bot] Profile photo update failed', { sessionId, error: String(error) });
+      await ctx.reply(noticeCard('Profile Photo Failed', 'WhatsApp could not update the profile photo.', 'error', String(error)), {
+        parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`),
+      });
     }
   });
 
@@ -569,6 +596,28 @@ async function routeCallback(
     if (sub === 'reinit') { await handleReinitSession(ctx, sessionId); return; }
     if (sub === 'purge' && params[2] === 'confirm') { await handlePurgeConfirm(ctx, sessionId); return; }
     if (sub === 'purge') { await handlePurgeSession(ctx, sessionId); return; }
+    if (sub === 'pfp') {
+      const operation = params[2];
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) {
+        await ctx.answerCbQuery('Session is not connected', { show_alert: true }).catch(() => {});
+        return;
+      }
+      if (operation === 'set') {
+        ctx.session.awaitingProfilePhotoSessionId = sessionId;
+        await ctx.editMessageText(card('Set WhatsApp Profile Photo', '🖼', [['Session', sessionId]], 'Send one photo now. Use a square image for the best result.'), {
+          parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`),
+        });
+      } else if (operation === 'remove') {
+        const ownJid = (socket as { user?: { id?: string } }).user?.id;
+        if (!ownJid) throw new Error('The WhatsApp account JID is unavailable');
+        await (socket as unknown as { removeProfilePicture(jid: string): Promise<void> }).removeProfilePicture(ownJid);
+        await ctx.editMessageText(noticeCard('Profile Photo Removed', 'The WhatsApp profile photo was removed.', 'success'), {
+          parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`),
+        });
+      }
+      return;
+    }
     if (sub === 'bridge') { await handleBridgeSession(ctx, sessionId); return; }
     if (sub === 'collect') {
       const enabled = params[2] === 'on' ? true : params[2] === 'off' ? false : undefined;

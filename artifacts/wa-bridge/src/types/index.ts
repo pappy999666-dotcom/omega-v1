@@ -119,6 +119,7 @@ export interface ValidationResult {
   description?: string;
   isValid: boolean;
   reason?: string;
+  transient?: boolean;
 }
 
 export interface ParsedCommand {

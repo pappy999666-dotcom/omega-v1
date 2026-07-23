@@ -52,6 +52,21 @@ export function isAuthorizedCommandSender(
   return Boolean(sender && sudoNumbers.some((number) => normalizeWhatsAppNumber(number) === sender));
 }
 
+function extractMessageText(message: proto.IMessage | null | undefined): string {
+  if (!message) return '';
+  const wrapped = message.ephemeralMessage?.message
+    ?? message.viewOnceMessage?.message
+    ?? message.viewOnceMessageV2?.message
+    ?? message.documentWithCaptionMessage?.message;
+  if (wrapped) return extractMessageText(wrapped);
+  return message.conversation
+    ?? message.extendedTextMessage?.text
+    ?? message.imageMessage?.caption
+    ?? message.videoMessage?.caption
+    ?? message.documentMessage?.caption
+    ?? '';
+}
+
 // ── Main Event Router ─────────────────────────────────────
 
 export async function handleWAEvent(
@@ -117,12 +132,13 @@ async function processMessage(
   const isGroup = groupJid.endsWith('@g.us');
 
   // Extract text from various message types
-  const text =
-    msg.message?.conversation ??
-    msg.message?.extendedTextMessage?.text ??
-    msg.message?.imageMessage?.caption ??
-    msg.message?.videoMessage?.caption ??
-    '';
+  const text = extractMessageText(msg.message);
+  const quotedMessage = (
+    msg.message?.extendedTextMessage?.contextInfo
+    ?? msg.message?.imageMessage?.contextInfo
+    ?? msg.message?.videoMessage?.contextInfo
+  )?.quotedMessage;
+  const quotedText = extractMessageText(quotedMessage);
 
   // Extract sticker for macro matching
   const stickerMsg = msg.message?.stickerMessage;
@@ -161,6 +177,26 @@ async function processMessage(
       await socket.sendMessage(groupJid, { text: replyText });
     }
   });
+  const createProgressReply = async (initialText: string): Promise<(nextText: string) => Promise<void>> => {
+    if (replyOverride) {
+      await replyOverride(initialText);
+      return replyOverride;
+    }
+    const sent = await socket.sendMessage(groupJid, { text: initialText }, { quoted: msg }) as { key?: proto.IMessageKey } | undefined;
+    const key = sent?.key;
+    return async (nextText: string) => {
+      if (!key) {
+        await socket.sendMessage(groupJid, { text: nextText });
+        return;
+      }
+      try {
+        await socket.sendMessage(groupJid, { text: nextText, edit: key });
+      } catch {
+        await socket.sendMessage(groupJid, { text: nextText });
+      }
+    };
+  };
+  const commandText = (fallback = ''): string => args.join(' ').trim() || quotedText.trim() || fallback;
 
   const senderJid = msg.key.participant ?? (msg.key.fromMe ? (socket as { user?: { id?: string } }).user?.id : msg.key.remoteJid);
   const isOwnerSender = Boolean(msg.key.fromMe);
@@ -407,9 +443,9 @@ async function processMessage(
 
     // ── gstatus ──
     case 'gstatus': {
-      const text = args.join(' ');
+      const text = commandText();
       if (!isGroup) { await reply('❌ Must be used in a WhatsApp group'); break; }
-      if (!text) { await reply('Usage: .gstatus [message]'); break; }
+      if (!text) { await reply('Usage: .gstatus [message], or reply to a message with .gstatus'); break; }
       const sent = await cmdGroupStatus(socket, sessionId, groupJid, text);
       await reply(sent ? '✅ Group status posted!' : '❌ Group status relay failed');
       break;
@@ -496,34 +532,35 @@ async function processMessage(
     case 'allstatus':
     case 'allstatusx': {
       const repeat = command === 'allstatusx' ? Math.min(Math.max(Number.parseInt(args.shift() ?? '', 10) || 0, 1), 20) : 1;
-      const text = args.join(' ');
+      const text = commandText();
       if (!text) {
-        await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}${command}${command.endsWith('x') ? ' <count>' : ''} <message>`));
+        await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}${command}${command.endsWith('x') ? ' <count>' : ''} <message>, or reply to a message.`));
         break;
       }
-      await reply(asciiBox({ title: 'ALL STATUS STARTED', emoji: '📡', rows: [['Repeats', String(repeat)]], footer: 'This job runs in the background. Progress will appear here.' }));
+      const updateProgress = await createProgressReply(asciiBox({ title: 'ALL STATUS STARTED', emoji: '📡', rows: [['Repeats', String(repeat)]], footer: 'Progress updates will replace this message.' }));
       void (async () => {
         for (let index = 0; index < repeat; index += 1) {
           await cmdAllStatus(socket, sessionId, telegramId, text, {
-            onProgress: async (message) => { await reply(message); },
+            onProgress: updateProgress,
           });
         }
       })().catch(async (error) => {
         logger.error('[EventHandler] allstatus failed', { sessionId, error: String(error) });
-        await reply(errorCard('ALL STATUS FAILED', 'The background campaign could not finish.', String(error)));
+        await updateProgress(errorCard('ALL STATUS FAILED', 'The background campaign could not finish.', String(error)));
       });
       break;
     }
 
     // ── allchat ──
     case 'allchat': {
-      const text = args.join(' ');
-      if (!text) { await reply('Usage: .allchat [message]'); break; }
-      await reply('📣 Starting allchat blast…');
+      const text = commandText();
+      if (!text) { await reply('Usage: .allchat [message], or reply to a message with .allchat'); break; }
+      const updateProgress = await createProgressReply('📣 Starting allchat blast…');
       cmdAllChat(socket, sessionId, telegramId, text, {
-        onProgress: async (message) => { await reply(message); },
-      }).catch((error) => {
+        onProgress: updateProgress,
+      }).catch(async (error) => {
         logger.error('[EventHandler] allchat failed', { sessionId, error: String(error) });
+        await updateProgress(errorCard('ALL CHAT FAILED', 'The background campaign could not finish.', String(error)));
       });
       break;
     }
@@ -565,27 +602,27 @@ async function processMessage(
       const { loadBucket } = await import('../services/workspace.js');
       const links = loadBucket(telegramId, 'active').map((e) => e.link);
       if (links.length === 0) { await reply('❌ Active bucket is empty. Add links via Telegram /bucket first.'); break; }
-      await reply(`🔗 Starting joinall for ${links.length} links…`);
+      const updateProgress = await createProgressReply(`🔗 Starting joinall for ${links.length} links…`);
       cmdJoinAll(socket, sessionId, telegramId, links, {
-        onProgress: async (m) => { try { await socket.sendMessage(groupJid, { text: m }); } catch { /* ignore */ } },
-      }).catch(() => { /* background */ });
+        onProgress: updateProgress,
+      }).catch(async (error) => { await updateProgress(`❌ Join all failed: ${String(error)}`); });
       break;
     }
 
     // ── leaveall ──
     case 'leaveall': {
-      await reply('🚪 Starting leaveall…');
+      const updateProgress = await createProgressReply('🚪 Starting leaveall…');
       cmdLeaveAll(socket, sessionId, telegramId, {
-        onProgress: async (m) => { try { await socket.sendMessage(groupJid, { text: m }); } catch { /* ignore */ } },
-      }).catch(() => { /* background */ });
+        onProgress: updateProgress,
+      }).catch(async (error) => { await updateProgress(`❌ Leave all failed: ${String(error)}`); });
       break;
     }
 
     // ── tag ──
     case 'tag': {
       if (!isGroup) { await reply('❌ Must be used in a group'); break; }
-      const text = args.join(' ');
-      const res = await cmdTag(socket, sessionId, groupJid, text || '📢');
+      const text = commandText('📢');
+      const res = await cmdTag(socket, sessionId, groupJid, text);
       await reply(res.success ? tagSummary(res.pinged, 'tag') : `❌ ${res.error}`);
       break;
     }
@@ -593,8 +630,8 @@ async function processMessage(
     // ── mtag ──
     case 'mtag': {
       if (!isGroup) { await reply('❌ Must be used in a group'); break; }
-      const text = args.join(' ');
-      const res = await cmdMTag(socket, sessionId, groupJid, text || '📢');
+      const text = commandText('📢');
+      const res = await cmdMTag(socket, sessionId, groupJid, text);
       await reply(res.success
         ? `✅ Tagged ${res.pinged} members in ${res.messages} message(s)`
         : `❌ ${res.error}`);

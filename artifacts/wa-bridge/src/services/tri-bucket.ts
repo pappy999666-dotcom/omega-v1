@@ -70,7 +70,7 @@ export async function validateLink(
       // Full groups still have valid links — mark active but note full status
       return { link, isValid: true, reason: 'Group is full' };
     }
-    return { link, isValid: false, reason: String(err) };
+    return { link, isValid: false, reason: String(err), transient: true };
   }
 }
 
@@ -133,6 +133,9 @@ export async function validateAllLinks(
         result.activated++;
         consecutiveRateErrors = 0;
         recordSuccess(telegramId, sessionId, 'validator');
+      } else if (vr.transient) {
+        result.errors++;
+        logger.warn(`[Validator] Transient validation failure preserved in Main: ${entry.link} — ${vr.reason}`);
       } else {
         toDead.push({
           ...entry,

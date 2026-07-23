@@ -9,11 +9,11 @@ import { humanDuration } from './delay.js';
 // ── HTML Helpers ──────────────────────────────────────────
 
 export const H = {
-  bold: (s: string) => `<b>${s}</b>`,
-  italic: (s: string) => `<i>${s}</i>`,
-  code: (s: string) => `<code>${s}</code>`,
-  pre: (s: string, lang = '') => `<pre${lang ? ` language="${lang}"` : ''}>${escape(s)}</pre>`,
-  link: (text: string, url: string) => `<a href="${url}">${text}</a>`,
+  bold: (s: string) => `<b>${escape(s)}</b>`,
+  italic: (s: string) => `<i>${escape(s)}</i>`,
+  code: (s: string) => `<code>${escape(s)}</code>`,
+  pre: (s: string, lang = '') => `<pre${lang ? ` language="${escape(lang)}"` : ''}>${escape(s)}</pre>`,
+  link: (text: string, url: string) => `<a href="${escape(url)}">${escape(text)}</a>`,
   spoiler: (s: string) => `<tg-spoiler>${s}</tg-spoiler>`,
   blockquote: (s: string, expandable = false) =>
     expandable ? `<blockquote expandable>${s}</blockquote>` : `<blockquote>${s}</blockquote>`,
