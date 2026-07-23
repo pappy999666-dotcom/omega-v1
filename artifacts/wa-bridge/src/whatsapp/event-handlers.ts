@@ -109,10 +109,17 @@ async function processMessage(
   // Parse command
   let parsed = text ? parseCommand(text, config) : null;
 
-  // Try sticker macro
+  // Try sticker macro. Unbound stickers return their stable binding hash.
   if (!parsed && stickerMsg?.fileSha256) {
     const stickerBuffer = Buffer.from(stickerMsg.fileSha256 as Uint8Array);
     parsed = parseStickerCommand(stickerBuffer, config);
+    if (!parsed) {
+      const stickerHash = hashSticker(stickerBuffer);
+      await socket.sendMessage(groupJid, {
+        text: `Sticker hash: ${bold(stickerHash)}\nBind it with: .setcmd ${stickerHash} [command]`,
+      }, { quoted: msg });
+      return;
+    }
   }
 
   if (!parsed) return; // Not a command
@@ -248,15 +255,37 @@ async function processMessage(
 
     // ── Set Sticker Command ──
     case 'setcmd': {
-      const [hash, ...cmdParts] = args;
-      const boundCmd = cmdParts.join(' ');
-      if (!hash || !boundCmd) {
-        await reply('Usage: .setcmd [sticker_hash] [command]\nSend a sticker and I\'ll show its hash.');
+      const contextInfo = msg.message?.extendedTextMessage?.contextInfo
+        ?? msg.message?.imageMessage?.contextInfo
+        ?? msg.message?.videoMessage?.contextInfo;
+      const quotedStickerHash = contextInfo?.quotedMessage?.stickerMessage?.fileSha256
+        ? hashSticker(Buffer.from(contextInfo.quotedMessage.stickerMessage.fileSha256 as Uint8Array))
+        : undefined;
+
+      let hash: string | undefined;
+      let commandParts: string[];
+      if (quotedStickerHash) {
+        hash = quotedStickerHash;
+        commandParts = args;
+      } else {
+        [hash, ...commandParts] = args;
+      }
+
+      const boundCmd = commandParts.join(' ').trim();
+      const parsedBinding = boundCmd ? parseCommand(`${config.prefix}${boundCmd}`, {
+        ...config,
+        nullPrefix: false,
+      }) : null;
+
+      if (!hash || !parsedBinding) {
+        await reply('Reply to a sticker with .setcmd [command], or use .setcmd [sticker_hash] [command].');
         break;
       }
-      const macros = { ...config.stickerMacros, [hash]: boundCmd };
+
+      const normalizedBinding = [parsedBinding.command, ...parsedBinding.args].join(' ');
+      const macros = { ...config.stickerMacros, [hash]: normalizedBinding };
       updateConfig(telegramId, { stickerMacros: macros });
-      await reply(`✅ Sticker ${bold(hash)} → bound to ${bold(boundCmd)}`);
+      await reply(`Sticker ${bold(hash)} is bound to ${bold(normalizedBinding)}.`);
       break;
     }
 

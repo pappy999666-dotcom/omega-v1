@@ -82,17 +82,16 @@ export function parseStickerCommand(
 
   if (!macroCmd) return null;
 
-  return parseCommand(`${config.prefix}${macroCmd}`, {
+  const parsed = parseCommand(`${config.prefix}${macroCmd}`, {
     ...config,
     nullPrefix: false, // Force prefix for sticker macros
-  }) ?? {
-    prefix: config.prefix,
-    command: macroCmd,
-    args: [],
-    raw: macroCmd,
+  });
+
+  return parsed ? {
+    ...parsed,
     fromSticker: true,
     stickerHash: hash,
-  };
+  } : null;
 }
 
 /**
