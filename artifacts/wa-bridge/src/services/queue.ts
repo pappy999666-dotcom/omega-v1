@@ -11,27 +11,46 @@ import type { JobPayload, JobResult } from '../types/index.js';
 // ── Redis Connection ──────────────────────────────────────
 
 export function createRedis(): Redis {
+  const options = {
+    maxRetriesPerRequest: null, // Required by BullMQ
+    enableReadyCheck: false,
+    lazyConnect: false,
+    retryStrategy: (times: number) => Math.min(times * 500, 5000),
+  } as const;
+
+  const redisUrl = process.env.REDIS_URL?.trim();
+  if (redisUrl) {
+    return new Redis(redisUrl, options);
+  }
+
   return new Redis({
     host: process.env.REDIS_HOST ?? '127.0.0.1',
     port: parseInt(process.env.REDIS_PORT ?? '6379', 10),
     password: process.env.REDIS_PASSWORD || undefined,
     db: parseInt(process.env.REDIS_DB ?? '0', 10),
-    maxRetriesPerRequest: null, // Required by BullMQ
-    enableReadyCheck: false,
-    lazyConnect: false,
-    retryStrategy: (times) => Math.min(times * 500, 5000),
+    ...options,
   });
 }
 
 // Shared Redis instances
 let _redis: Redis | null = null;
 let _subRedis: Redis | null = null;
+let lastRedisErrorAt = 0;
 
 export function getRedis(): Redis {
   if (!_redis) {
     _redis = createRedis();
-    _redis.on('error', (err) => logger.error('[Redis] Connection error', { err: err.message }));
-    _redis.on('connect', () => logger.info('[Redis] Connected'));
+    _redis.on('error', (err) => {
+      const now = Date.now();
+      if (now - lastRedisErrorAt >= 30_000) {
+        lastRedisErrorAt = now;
+        logger.error('[Redis] Connection error', { err: err.message });
+      }
+    });
+    _redis.on('connect', () => {
+      lastRedisErrorAt = 0;
+      logger.info('[Redis] Connected');
+    });
   }
   return _redis;
 }

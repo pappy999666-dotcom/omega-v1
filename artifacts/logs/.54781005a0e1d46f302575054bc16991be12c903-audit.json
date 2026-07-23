@@ -1,0 +1,15 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 14
+    },
+    "auditLog": "/vercel/share/v0-project/artifacts/logs/.54781005a0e1d46f302575054bc16991be12c903-audit.json",
+    "files": [
+        {
+            "date": 1784796723950,
+            "name": "/vercel/share/v0-project/artifacts/logs/wa-bridge-2026-07-23.log",
+            "hash": "9be6e1a6f5c4d9986faa874e57fdd402b5cb390a1d4d19c957910f7ff5bf07ad"
+        }
+    ],
+    "hashType": "sha256"
+}

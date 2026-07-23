@@ -16,6 +16,7 @@ const result = await build({
   platform: 'node',
   format: 'esm',
   target: 'node20',
+  packages: 'external',
   external: [
     // Keep native modules external
     'bufferutil',
