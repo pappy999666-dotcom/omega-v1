@@ -38,4 +38,6 @@ const result = await build({
   process.exit(1);
 });
 
+fs.rmSync(path.join(__dirname, 'public'), { recursive: true, force: true });
+fs.cpSync(path.join(__dirname, 'src/public'), path.join(__dirname, 'public'), { recursive: true });
 console.log('✅ Build complete → dist/index.js');

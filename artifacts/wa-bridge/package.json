@@ -37,7 +37,8 @@
     "node-fetch": "^3.3.2",
     "cheerio": "^1.0.0",
     "pino": "^9.7.0",
-    "zod": "catalog:"
+    "zod": "catalog:",
+    "express": "5.2.1"
   },
   "devDependencies": {
     "@types/node": "catalog:",
@@ -48,6 +49,7 @@
     "@types/crypto-js": "^4.2.2",
     "tsx": "catalog:",
     "typescript": "^5.9.3",
-    "esbuild": "0.27.3"
+    "esbuild": "0.27.3",
+    "@types/express": "5.0.6"
   }
 }
