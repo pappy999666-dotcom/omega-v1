@@ -46,6 +46,8 @@ export type SocketEventCallback = (
 
 // sessionId → SocketHandle
 const registry = new Map<string, SocketHandle>();
+const reconnectTimers = new Map<string, NodeJS.Timeout>();
+const socketGenerations = new Map<string, number>();
 
 // Callbacks registered by the event handler layer
 let globalEventCallback: SocketEventCallback | null = null;
@@ -111,6 +113,12 @@ export async function initSocket(
 ): Promise<WASocket> {
   const { sessionId, telegramId } = meta;
   const log = sessionLogger(sessionId);
+  const generation = (socketGenerations.get(sessionId) ?? 0) + 1;
+  socketGenerations.set(sessionId, generation);
+  const pendingReconnect = reconnectTimers.get(sessionId);
+  if (pendingReconnect) clearTimeout(pendingReconnect);
+  reconnectTimers.delete(sessionId);
+  let pairingCodeRequested = false;
 
   const authDir = sessionAuthDir(telegramId, sessionId);
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
@@ -159,8 +167,10 @@ export async function initSocket(
     if (
       opts.usePairingCode &&
       opts.phone &&
-      !socket.authState.creds.registered
+      !socket.authState.creds.registered &&
+      !pairingCodeRequested
     ) {
+      pairingCodeRequested = true;
       try {
         const prefix = process.env.PAIRING_CODE_PREFIX ?? 'pappy-bot';
         const code = await socket.requestPairingCode(opts.phone);
@@ -204,7 +214,12 @@ export async function initSocket(
 
     if (connection === 'close') {
       const err = (lastDisconnect?.error as Boom)?.output?.statusCode;
-      log.warn('Connection closed', { code: err });
+      log.warn('Connection closed', { code: err, generation });
+
+      if (socketGenerations.get(sessionId) !== generation) {
+        log.info('Ignoring stale socket closure');
+        return;
+      }
 
       // Update meta
       const currentMeta = { ...meta };
@@ -243,18 +258,21 @@ export async function initSocket(
       }
 
       if (action.action === 'reconnect' || action.action === 'backoff') {
-        const delay = action.action === 'backoff'
-          ? Math.min(60_000, 5_000 * Math.pow(2, currentMeta.errorCount))
-          : 5_000;
+        const exponent = Math.min(currentMeta.errorCount - 1, 6);
+        const baseDelay = action.action === 'backoff' ? 5_000 : 2_000;
+        const delay = Math.min(120_000, baseDelay * Math.pow(2, exponent)) + Math.floor(Math.random() * 2_000);
 
         log.info(`Reconnecting in ${delay}ms...`);
-        await sleep(delay);
-
-        // Re-initialize socket
         registry.delete(sessionId);
-        initSocket(currentMeta, opts).catch((e) =>
-          log.error('Reconnect failed', { err: e.message })
-        );
+        const timer = setTimeout(() => {
+          reconnectTimers.delete(sessionId);
+          if (socketGenerations.get(sessionId) !== generation) return;
+          initSocket(currentMeta, opts).catch((e) =>
+            log.error('Reconnect failed', { err: e instanceof Error ? e.message : String(e) })
+          );
+        }, delay);
+        timer.unref();
+        reconnectTimers.set(sessionId, timer);
       }
     }
   });
@@ -295,9 +313,10 @@ export async function reinitSocket(
   const existing = registry.get(meta.sessionId);
   if (existing) {
     try {
-      await existing.socket.logout();
+      existing.socket.ev.removeAllListeners();
+      existing.socket.end(new Error('intentional hot reload'));
     } catch {
-      existing.socket.end(new Error('reinit'));
+      // Socket is already closed.
     }
     registry.delete(meta.sessionId);
     await sleep(1000);
@@ -311,10 +330,15 @@ export async function reinitSocket(
 export async function closeSocket(sessionId: string): Promise<void> {
   const h = registry.get(sessionId);
   if (h) {
+    const timer = reconnectTimers.get(sessionId);
+    if (timer) clearTimeout(timer);
+    reconnectTimers.delete(sessionId);
+    socketGenerations.set(sessionId, (socketGenerations.get(sessionId) ?? 0) + 1);
     try {
+      h.socket.ev.removeAllListeners();
       h.socket.end(new Error('manual close'));
     } catch {
-      // ignore
+      // Socket is already closed.
     }
     registry.delete(sessionId);
   }

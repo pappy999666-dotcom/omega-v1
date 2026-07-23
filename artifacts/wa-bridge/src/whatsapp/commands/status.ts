@@ -9,6 +9,7 @@ import { sleep, jitter } from '../../utils/delay.js';
 import { logger } from '../../utils/logger.js';
 import { asciiBox, bold, italic } from '../../utils/ascii-art.js';
 import { isFrozen } from '../socket-manager.js';
+import { sendGroupStatus } from '../groupStatus.js';
 
 // Track active spam loops per session
 const activeSpamLoops = new Set<string>();
@@ -220,23 +221,13 @@ export async function cmdGroupStatus(
   if (isFrozen(sessionId)) return false;
 
   try {
-    const content: AnyMessageContent = opts.mediaBuffer
-      ? buildMediaContent(opts.mediaBuffer, opts.mediaType ?? 'image', opts.caption ?? text)
-      : await hydratedMessage(text);
-
-    // Post to group status channel
-    await socket.sendMessage(`${groupJid}@newsletter`, content);
+    await sendGroupStatus(socket, sessionId, groupJid, text, {
+      mediaBuffer: opts.mediaBuffer,
+      mediaType: opts.mediaType as 'image' | 'video' | 'audio' | undefined,
+      caption: opts.caption,
+    });
     return true;
   } catch {
-    // Fall back to status@broadcast with group audience
-    try {
-      const content: AnyMessageContent = opts.mediaBuffer
-        ? buildMediaContent(opts.mediaBuffer, opts.mediaType ?? 'image', opts.caption ?? text)
-        : { text };
-      await socket.sendMessage('status@broadcast', content);
-      return true;
-    } catch {
-      return false;
-    }
+    return false;
   }
 }

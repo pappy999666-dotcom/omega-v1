@@ -107,9 +107,9 @@ export function hashSticker(buffer: Buffer): string {
 
 export const ALL_COMMANDS = [
   // Status & Target Broadcast
-  'gstatus', 'tochat', 'tochatx', 'sstatus',
+  'gstatus', 'tochat', 'tochatx', 'sstatus', 'statusdesign',
   // Mass Outreach
-  'allstatus', 'allchat',
+  'allstatus', 'allchat', 'togstatus',
   // Lifecycle
   'join', 'leave', 'joinall', 'leaveall',
   // Tagging

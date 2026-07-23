@@ -58,6 +58,9 @@ function defaultConfig(telegramId: string): UserConfig {
     prefix: '.',
     nullPrefix: false,
     stickerMacros: {},
+    statusDesignEnabled: true,
+    statusDesignTheme: 'clean',
+    statusDesignStickyThemes: {},
     joinedAt: Date.now(),
     lastActivity: Date.now(),
   };

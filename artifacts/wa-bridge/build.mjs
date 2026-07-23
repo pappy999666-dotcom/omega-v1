@@ -23,6 +23,7 @@ const result = await build({
     'sharp',
     // Keep large optional deps external
     '@hapi/boom',
+    '@crysnovax/baileys',
     'jimp',
   ],
   sourcemap: true,
