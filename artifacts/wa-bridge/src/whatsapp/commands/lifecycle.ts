@@ -3,7 +3,7 @@
 // .join / .leave / .joinall / .leaveall
 // ============================================================
 
-import type { WASocket } from '@whiskeysockets/baileys';
+import type { WASocket } from '@crysnovax/baileys';
 import type { JobResult } from '../../types/index.js';
 import { joinDelay, leaveDelay, exponentialBackoff } from '../../utils/delay.js';
 import { logger } from '../../utils/logger.js';

@@ -17,7 +17,7 @@ import { isDeadLinkError, isGroupFullError } from '../utils/error-recovery.js';
 import { jitter } from '../utils/delay.js';
 import { logger } from '../utils/logger.js';
 import { recordFailure, recordSuccess, isCircuitOpen } from './circuit-breaker.js';
-import type { WASocket } from '@whiskeysockets/baileys';
+import type { WASocket } from '@crysnovax/baileys';
 
 // Track auto-filter running state per user
 const autoFilterRunning = new Set<string>();

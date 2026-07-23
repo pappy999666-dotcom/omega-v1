@@ -34,7 +34,7 @@ minimumReleaseAgeExclude:
   - '@replit/*'
   - stripe-replit-sync
   # WA-Bridge deps — pinned to audited versions, excluded from age check
-  - '@whiskeysockets/baileys'
+  - '@crysnovax/baileys'
   - bullmq
   - ioredis
   - telegraf

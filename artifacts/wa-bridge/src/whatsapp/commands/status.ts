@@ -3,7 +3,7 @@
 // .gstatus / .tochat / .tochatx / .sstatus
 // ============================================================
 
-import type { WASocket, AnyMessageContent } from '@whiskeysockets/baileys';
+import type { WASocket, AnyMessageContent } from '@crysnovax/baileys';
 import { hydratedMessage } from '../preview-generator.js';
 import { sleep, jitter } from '../../utils/delay.js';
 import { logger } from '../../utils/logger.js';

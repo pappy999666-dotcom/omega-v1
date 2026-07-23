@@ -1,0 +1,9 @@
+node_modules/
+dist/
+workspaces/
+logs/
+*.log
+.env
+.env.local
+auth_info_*/
+baileys_store*.json

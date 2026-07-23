@@ -4,7 +4,7 @@
 // ============================================================
 
 import { getLinkPreview } from 'link-preview-js';
-import type { WASocket, AnyMessageContent } from '@whiskeysockets/baileys';
+import type { WASocket, AnyMessageContent } from '@crysnovax/baileys';
 import { logger } from '../utils/logger.js';
 
 const URL_REGEX =

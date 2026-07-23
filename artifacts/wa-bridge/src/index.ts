@@ -19,7 +19,7 @@ import { setOutreachBotRef } from './services/workers/outreach-worker.js';
 import { setValidatorBotRef } from './services/workers/validator-worker.js';
 import { setLifecycleBotRef } from './services/workers/lifecycle-worker.js';
 import { initSocket } from './whatsapp/socket-manager.js';
-import type { BaileysEventMap } from '@whiskeysockets/baileys';
+import type { BaileysEventMap } from '@crysnovax/baileys';
 import { sleep } from './utils/delay.js';
 
 // ── ASCII Banner ──────────────────────────────────────────

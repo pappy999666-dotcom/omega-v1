@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "6.7.22",
+    "@crysnovax/baileys": "2.7.0",
+    "@hapi/boom": "^10.0.1",
     "telegraf": "^4.16.3",
     "bullmq": "^5.56.3",
     "ioredis": "^5.6.1",
@@ -30,7 +31,6 @@
     "p-retry": "^6.2.1",
     "p-limit": "^6.2.0",
     "crypto-js": "^4.2.0",
-    "@hapi/boom": "^10.0.1",
     "link-preview-js": "^3.0.5",
     "archiver": "^7.0.1",
     "csv-stringify": "^6.5.2",

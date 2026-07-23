@@ -10,7 +10,7 @@ import makeWASocket, {
   makeCacheableSignalKeyStore,
   type WASocket,
   type BaileysEventMap,
-} from '@whiskeysockets/baileys';
+} from '@crysnovax/baileys';
 import { Boom } from '@hapi/boom';
 import P from 'pino';
 import QRCode from 'qrcode';

@@ -3,8 +3,8 @@
 // Processes incoming messages, dispatches commands
 // ============================================================
 
-import type { WASocket, proto } from '@whiskeysockets/baileys';
-import type { BaileysEventMap } from '@whiskeysockets/baileys';
+import type { WASocket, proto } from '@crysnovax/baileys';
+import type { BaileysEventMap } from '@crysnovax/baileys';
 import { parseCommand, parseStickerCommand, hashSticker } from './command-parser.js';
 import { loadConfig } from '../services/workspace.js';
 import { stopSpamLoop, isSpamLoopActive, cmdGStatus, cmdToChat, cmdToChatX, cmdSStatus, cmdGroupStatus } from './commands/status.js';

@@ -402,12 +402,12 @@ importers:
 
   artifacts/wa-bridge:
     dependencies:
+      '@crysnovax/baileys':
+        specifier: 2.7.0
+        version: 2.7.0(link-preview-js@3.2.0)(sharp@0.34.5)
       '@hapi/boom':
         specifier: ^10.0.1
         version: 10.0.1
-      '@whiskeysockets/baileys':
-        specifier: 6.7.22
-        version: 6.7.22(link-preview-js@3.2.0)(sharp@0.34.5)
       archiver:
         specifier: ^7.0.1
         version: 7.0.1
@@ -566,6 +566,9 @@ importers:
 
 packages:
 
+  '@adiwajshing/keyed-db@0.2.4':
+    resolution: {integrity: sha512-yprSnAtj80/VKuDqRcFFLDYltoNV8tChNwFfIgcf6PGD4sjzWIBgs08pRuTqGH5mk5wgL6PBRSsMCZqtZwzFEw==}
+
   '@babel/code-frame@7.29.7':
     resolution: {integrity: sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw==}
     engines: {node: '>=6.9.0'}
@@ -674,6 +677,28 @@ packages:
     resolution: {integrity: sha512-yeJlba62xqmkgELUsn7356MEnzLLu/fw2x4lofFqGnXh6YysRdEs2BaLeLtg1+KU0AXvMeqQvTTp+3hBEBK+EA==}
     peerDependencies:
       commander: ~15.0.0
+
+  '@crysnovax/baileys@2.7.0':
+    resolution: {integrity: sha512-awJBK3PnK9qwxRT11hAmH1+8Ijcjt/rR4GNUYpeWvvquX570p6tD7fjEpffkfrMBhOi+JNh6Z+gLA+c1kVRaKw==}
+    engines: {node: '>=20.0.0'}
+    peerDependencies:
+      '@napi-rs/image': ~1.12.0
+      audio-decode: ^2.2.3
+      better-sqlite3: ^11.0.0
+      jimp: ^1.6.1
+      link-preview-js: ^3.0.0
+      sharp: '*'
+    peerDependenciesMeta:
+      '@napi-rs/image':
+        optional: true
+      audio-decode:
+        optional: true
+      better-sqlite3:
+        optional: true
+      jimp:
+        optional: true
+      link-preview-js:
+        optional: true
 
   '@dabh/diagnostics@2.0.8':
     resolution: {integrity: sha512-R4MSXTVnuMzGD7bzHdW2ZhhdPC/igELENcq5IjEverBvq5hn1SXCWcsi6eSsdWP0/Ur+SItRRjAktmdoX/8R/Q==}
@@ -1898,22 +1923,6 @@ packages:
     peerDependencies:
       vite: ^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0
 
-  '@whiskeysockets/baileys@6.7.22':
-    resolution: {integrity: sha512-OxA9yT7US4unBkTPHE/kS0VCh5z0YfP6gTNo4/52c5+K6do8DFX5Sa+mM/m0fG+E16VgDK6MM4Q71KDNg474hA==}
-    engines: {node: '>=20.0.0'}
-    peerDependencies:
-      audio-decode: ^2.1.3
-      jimp: ^1.6.0
-      link-preview-js: ^3.0.0
-      sharp: '*'
-    peerDependenciesMeta:
-      audio-decode:
-        optional: true
-      jimp:
-        optional: true
-      link-preview-js:
-        optional: true
-
   abort-controller@3.0.0:
     resolution: {integrity: sha512-h8lQ8tacZYnR3vNQTgibj+tODHI5/+l06Au2Pcriv/Gmet0eaj4TwWH41sO9wnHDiQsEj19q0drzdWdeAHtweg==}
     engines: {node: '>=6.5'}
@@ -2683,6 +2692,9 @@ packages:
     resolution: {integrity: sha512-7yAQpD2UMJzLi1Dqv7qFYnPbaPx7ZfFK6PiIxQ4PfkGPyNyl2Ugx+a/umUonmKqjhM4DnfbMvdX6otXq83soQQ==}
     engines: {node: ^12.20 || >= 14.13}
 
+  fflate@0.8.3:
+    resolution: {integrity: sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==}
+
   figures@6.1.0:
     resolution: {integrity: sha512-d+l3qxjSesT4V7v2fh+QnmFnUWv9lSpjarhShNTgBOfA0ttejbQUAlHLitbjkoRiDulW0OPoQPYIGhIC8ohejg==}
     engines: {node: '>=18'}
@@ -2983,9 +2995,8 @@ packages:
     resolution: {integrity: sha512-KZ9W9nWDT7rF7Dazg8xyLHGLrmpgq2nVNFUckhqdW3szVP6YhCpp/RAnpmVExA9JvrMynjwSLVrEj3AepHR6ew==}
     engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
 
-  libsignal@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/bcea72df9ec34d9d9140ab30619cf479c7c144c7:
-    resolution: {tarball: https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/bcea72df9ec34d9d9140ab30619cf479c7c144c7}
-    version: 6.0.0
+  libsignal@6.0.0:
+    resolution: {integrity: sha512-d/5V3YFtDljbFMufz4ncyUYGYhJl+vzAe+c2EFFBQ6bz1h8Q3IOMEGXYMzlibU60I+e8GagMMpji18iez3P1hA==}
 
   lightningcss-linux-x64-gnu@1.32.0:
     resolution: {integrity: sha512-V7Qr52IhZmdKPVr+Vtw8o+WLsQJYCTd8loIfpDaMRWGUZfBOYEJeyJIkqGIDMZPwPx24pUMfwSxxI8phr/MbOA==}
@@ -3029,6 +3040,10 @@ packages:
 
   lru-cache@10.4.3:
     resolution: {integrity: sha512-JNAzZcXrCt42VGLuYz0zfAzDfAvJWW6AfYlDBQyDV5DClI2m5sAmK+OIO7s59XfsRsWHp02jAJrRadPRGTt6SQ==}
+
+  lru-cache@11.5.2:
+    resolution: {integrity: sha512-4pfM1Ff0x50o0tQwb5ucw/RzNyD0/YJME6IVcStalZuMWxdt3sR3huStTtxz4PUmvZfRguvDejasvQ2kifR11g==}
+    engines: {node: 20 || >=22}
 
   lru-cache@5.1.1:
     resolution: {integrity: sha512-KpNARQA3Iwv+jTA0utUVVbrh+Jlrr1Fv0e56GGzAFOXN7dk/FviaDW8LHmK52DlcH4WP2n6gI8vN1aesBFgo9w==}
@@ -3263,6 +3278,10 @@ packages:
     resolution: {integrity: sha512-aNZ+VfjobsWryoiPnEApGGmf5WmNsCo9xu8dfaYamG5qaLP7ClhLN6NgsFe6SwJ2UbLEBK5dv9x8Mn5+RVhMWQ==}
     engines: {node: '>=18'}
 
+  p-queue@9.3.3:
+    resolution: {integrity: sha512-NXAOdnEe5FsZJfT4oK84lE1Y5cFFdWlRuOo5tww8DyNMxyRXwn39fIkUtNLKppcPC+UYU/bXujNCUGDv01y7CA==}
+    engines: {node: '>=20'}
+
   p-retry@6.2.1:
     resolution: {integrity: sha512-hEt02O4hUct5wtwg4H4KcWgDdm+l1bOaEy/hWzd8xtXB9BqxTWBBhb+2ImAtH4Cv4rPjV76xN3Zumqk3k3AhhQ==}
     engines: {node: '>=16.17'}
@@ -3274,6 +3293,10 @@ packages:
   p-timeout@6.1.4:
     resolution: {integrity: sha512-MyIV3ZA/PmyBN/ud8vV9XzwTrNtR4jFrObymZYnZqMmW0zA8Z17vnT0rBgFE/TlohB+YCHqXMgZzb3Csp49vqg==}
     engines: {node: '>=14.16'}
+
+  p-timeout@7.0.1:
+    resolution: {integrity: sha512-AxTM2wDGORHGEkPCt8yqxOTMgpfbEHqF51f/5fJCmwFC3C/zNcGT63SymH2ttOAaiIws2zVg4+izQCjrakcwHg==}
+    engines: {node: '>=20'}
 
   p-try@2.2.0:
     resolution: {integrity: sha512-R4nPAVTAU0B9D35/Gk3uJf/7XYbQcyohSKdvAxIRSNghFl4e71hVoGnBNQz9cWaXxO2I10KTC+3jMdvvoKw6dQ==}
@@ -4023,6 +4046,9 @@ packages:
   webidl-conversions@3.0.1:
     resolution: {integrity: sha512-2JAn3z8AR6rjK8Sm8orRC0h/bcl/DqL7tRPdGZ4I1CjdF+EaMLmYxBHyXuKL849eucPFhvBoxMsflfOb8kxaeQ==}
 
+  whatsapp-rust-bridge@0.5.5:
+    resolution: {integrity: sha512-Io1qmIEi1FTXTMhN1KmZS35BHHvwRbKHUUcN/Rn6pJUU/Mk469BcWpmFEJY0a6cYu3SHwBsqzC/0IXDj+SUvgA==}
+
   whatwg-encoding@3.1.1:
     resolution: {integrity: sha512-6qN4hJdMwfYBtE3YBTTHhoeuUrDBPZmbQaxWAqSALV/MeEnR5z1xd8UKud2RAkFoPkmB+hli1TZSnyi84xz1vQ==}
     engines: {node: '>=18'}
@@ -4126,6 +4152,8 @@ packages:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
 snapshots:
+
+  '@adiwajshing/keyed-db@0.2.4': {}
 
   '@babel/code-frame@7.29.7':
     dependencies:
@@ -4266,6 +4294,30 @@ snapshots:
   '@commander-js/extra-typings@15.0.0(commander@15.0.0)':
     dependencies:
       commander: 15.0.0
+
+  '@crysnovax/baileys@2.7.0(link-preview-js@3.2.0)(sharp@0.34.5)':
+    dependencies:
+      '@adiwajshing/keyed-db': 0.2.4
+      '@cacheable/node-cache': 1.7.6
+      '@hapi/boom': 9.1.4
+      async-mutex: 0.5.0
+      fflate: 0.8.3
+      libsignal: 6.0.0
+      long: 5.3.2
+      lru-cache: 11.5.2
+      music-metadata: 11.14.0
+      p-queue: 9.3.3
+      pino: 9.14.0
+      protobufjs: 7.6.5
+      sharp: 0.34.5
+      whatsapp-rust-bridge: 0.5.5
+      ws: 8.21.1
+    optionalDependencies:
+      link-preview-js: 3.2.0
+    transitivePeerDependencies:
+      - bufferutil
+      - supports-color
+      - utf-8-validate
 
   '@dabh/diagnostics@2.0.8':
     dependencies:
@@ -5575,26 +5627,6 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@whiskeysockets/baileys@6.7.22(link-preview-js@3.2.0)(sharp@0.34.5)':
-    dependencies:
-      '@cacheable/node-cache': 1.7.6
-      '@hapi/boom': 9.1.4
-      async-mutex: 0.5.0
-      axios: 1.18.1
-      libsignal: https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/bcea72df9ec34d9d9140ab30619cf479c7c144c7
-      music-metadata: 11.14.0
-      pino: 9.14.0
-      protobufjs: 7.6.5
-      sharp: 0.34.5
-      ws: 8.21.1
-    optionalDependencies:
-      link-preview-js: 3.2.0
-    transitivePeerDependencies:
-      - bufferutil
-      - debug
-      - supports-color
-      - utf-8-validate
-
   abort-controller@3.0.0:
     dependencies:
       event-target-shim: 5.0.1
@@ -6283,6 +6315,8 @@ snapshots:
       node-domexception: 1.0.0
       web-streams-polyfill: 3.3.3
 
+  fflate@0.8.3: {}
+
   figures@6.1.0:
     dependencies:
       is-unicode-supported: 2.1.0
@@ -6572,7 +6606,7 @@ snapshots:
 
   leven@4.1.0: {}
 
-  libsignal@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/bcea72df9ec34d9d9140ab30619cf479c7c144c7:
+  libsignal@6.0.0:
     dependencies:
       curve25519-js: 0.0.4
       protobufjs: 7.6.5
@@ -6621,6 +6655,8 @@ snapshots:
       js-tokens: 4.0.0
 
   lru-cache@10.4.3: {}
+
+  lru-cache@11.5.2: {}
 
   lru-cache@5.1.1:
     dependencies:
@@ -6865,6 +6901,11 @@ snapshots:
       eventemitter3: 5.0.4
       p-timeout: 6.1.4
 
+  p-queue@9.3.3:
+    dependencies:
+      eventemitter3: 5.0.4
+      p-timeout: 7.0.1
+
   p-retry@6.2.1:
     dependencies:
       '@types/retry': 0.12.2
@@ -6874,6 +6915,8 @@ snapshots:
   p-timeout@4.1.0: {}
 
   p-timeout@6.1.4: {}
+
+  p-timeout@7.0.1: {}
 
   p-try@2.2.0: {}
 
@@ -7650,6 +7693,8 @@ snapshots:
   web-streams-polyfill@3.3.3: {}
 
   webidl-conversions@3.0.1: {}
+
+  whatsapp-rust-bridge@0.5.5: {}
 
   whatwg-encoding@3.1.1:
     dependencies:
