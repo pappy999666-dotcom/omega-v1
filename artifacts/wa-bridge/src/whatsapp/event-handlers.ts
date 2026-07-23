@@ -16,6 +16,7 @@ import { logger } from '../utils/logger.js';
 import { isFrozen } from './socket-manager.js';
 import { whatsappMenu, asciiBox, bold, italic } from '../utils/ascii-art.js';
 import { hydratedMessage } from './preview-generator.js';
+import { statusDesignEngine } from '../services/StatusDesignEngine.js';
 
 // Map from sessionId → telegramId (populated at init)
 const sessionOwnerMap = new Map<string, string>();
@@ -136,6 +137,7 @@ async function processMessage(
             { cmd: '.tochat [jid] [msg]', desc: 'Send to specific chat' },
             { cmd: '.tochatx [jid] [n] [msg]', desc: 'Send n times' },
             { cmd: '.sstatus [msg]', desc: 'Rapid infinite loop' },
+            { cmd: '.statusdesign [theme] [link]', desc: 'Designed current-GC status' },
           ],
         },
         {
@@ -143,6 +145,7 @@ async function processMessage(
           items: [
             { cmd: '.allstatus [msg]', desc: 'Post to all group statuses' },
             { cmd: '.allchat [msg]', desc: 'Blast to all groups (hidetag)' },
+            { cmd: '.togstatus', desc: 'Toggle campaign designs' },
             { cmd: '.stop spam', desc: 'Kill active outreach loop' },
           ],
         },
@@ -307,6 +310,35 @@ async function processMessage(
       if (isSpamLoopActive(sessionId)) { await reply('⚠️ Spam loop already running. Use .stop spam to kill it.'); break; }
       await reply('🔄 Spam status loop started. Send `.stop spam` to kill it.');
       cmdSStatus(socket, sessionId, text).catch(() => { /* background */ });
+      break;
+    }
+
+    // ── statusdesign ──
+    case 'statusdesign': {
+      if (!isGroup) { await reply('❌ Must be used in a WhatsApp group'); break; }
+      const requestedTheme = statusDesignEngine.themes.includes(args[0]?.toLowerCase() as never)
+        ? args.shift()
+        : config.statusDesignTheme;
+      const url = args.find((arg) => /^https?:\/\/\S+$/u.test(arg));
+      if (!url) {
+        await reply(`Usage: .statusdesign [theme] [link]\nThemes: ${statusDesignEngine.themes.join(', ')}`);
+        break;
+      }
+      try {
+        const design = statusDesignEngine.render({ theme: requestedTheme, url });
+        const sent = await cmdGroupStatus(socket, sessionId, groupJid, design.text);
+        await reply(sent ? `✅ ${design.theme} group status published` : '❌ Group status relay failed');
+      } catch (error) {
+        await reply(`❌ ${String(error)}`);
+      }
+      break;
+    }
+
+    // ── togstatus ──
+    case 'togstatus': {
+      const enabled = config.statusDesignEnabled === false;
+      updateConfig(telegramId, { statusDesignEnabled: enabled });
+      await reply(`✅ Automatic per-group status designs: ${enabled ? 'ON' : 'OFF'}`);
       break;
     }
 

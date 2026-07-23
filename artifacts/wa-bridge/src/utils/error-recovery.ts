@@ -42,13 +42,12 @@ export function classifyBaileysError(err: unknown): RecoveryAction {
     };
   }
 
-  // ── Bad MAC — corrupted auth state ──
+  // ── Bad MAC — often a recoverable out-of-order signal/session race ──
   if (msg.includes('Bad MAC') || msg.includes('bad-mac')) {
     return {
-      action: 'purge',
-      reason: 'Bad MAC — authentication crypto corrupted, session unrecoverable',
-      alertUser: true,
-      purgeSession: true,
+      action: 'backoff',
+      reason: 'Bad MAC — preserving auth state and rebuilding the socket after backoff',
+      alertUser: false,
     };
   }
 
@@ -98,10 +97,10 @@ export function classifyBaileysError(err: unknown): RecoveryAction {
     };
   }
 
-  // ── Unknown / benign ──
+  // ── Unknown socket closures are treated as transient ──
   return {
-    action: 'ignore',
-    reason: `Unknown error: ${msg.slice(0, 100)}`,
+    action: 'backoff',
+    reason: `Unclassified socket closure — preserving session: ${msg.slice(0, 100)}`,
     alertUser: false,
   };
 }

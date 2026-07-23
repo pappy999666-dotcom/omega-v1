@@ -16,6 +16,10 @@ import {
 } from '../../services/circuit-breaker.js';
 import { resultBox } from '../../utils/ascii-art.js';
 import { humanDuration } from '../../utils/delay.js';
+import { loadConfig } from '../../services/workspace.js';
+import { statusDesignEngine, type StatusTheme } from '../../services/StatusDesignEngine.js';
+import { gcDesignAllocator } from '../../services/GCDesignAllocator.js';
+import { sendGroupStatus } from '../groupStatus.js';
 
 // Track active allstatus/allchat runs
 const activeRuns = new Map<string, boolean>();
@@ -79,6 +83,14 @@ export async function cmdAllStatus(
   activeRuns.set(sessionId, true);
 
   const groups = await getJoinedGroups(socket);
+  const config = loadConfig(telegramId);
+  const stickyThemes = Object.fromEntries(
+    Object.entries(config.statusDesignStickyThemes ?? {}).filter((entry): entry is [string, StatusTheme] =>
+      statusDesignEngine.themes.includes(entry[1] as StatusTheme)
+    )
+  );
+  const campaign = gcDesignAllocator.createCampaign(groups.map((group) => group.id), stickyThemes);
+  const rawUrl = text.match(/https?:\/\/[^\s]+/u)?.[0];
   await opts.onProgress?.(
     `📡 Starting allstatus for ${groups.length} groups…`
   );
@@ -109,11 +121,18 @@ export async function cmdAllStatus(
     }
 
     try {
-      const content = buildContent(text, opts);
+      const designedText = config.statusDesignEnabled !== false && rawUrl && !opts.mediaBuffer
+        ? statusDesignEngine.render({
+            theme: campaign.themeFor(group.id),
+            url: rawUrl,
+            message: text.replace(rawUrl, '').trim() || undefined,
+          }).text
+        : text;
 
-      // Post to group status channel
-      await socket.sendMessage('status@broadcast', content, {
-        statusJidList: [group.id],
+      await sendGroupStatus(socket, sessionId, group.id, designedText, {
+        mediaBuffer: opts.mediaBuffer,
+        mediaType: opts.mediaType as 'image' | 'video' | 'audio' | undefined,
+        caption: opts.caption ?? designedText,
       });
 
       result.success++;
