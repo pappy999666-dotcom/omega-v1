@@ -58,9 +58,10 @@ export function stickerMacrosKeyboard(): InlineKeyboardMarkup {
 
 export function mainMenuKeyboard(isOwner: boolean): InlineKeyboardMarkup {
   const rows: IKB[][] = [
-    [btn('📱 Sessions', 'sessions:list'), btn('🗂 Buckets', 'bucket:status')],
-    [btn('📊 Status', 'status:overview'), btn('⚙️ Settings', 'settings:menu')],
-    [btn('❓ Help', 'help:main')],
+    [btn('Pair Number', 'session:new', 'success'), btn('Sessions', 'sessions:list')],
+    [btn('Validator Hub', 'bucket:status'), btn('Global Bridge', 'bridge:global')],
+    [btn('Sleep Mode', 'sleep:menu'), btn('Settings', 'settings:menu')],
+    [btn('Support', 'support:menu'), btn('Help', 'help:main')],
   ];
 
   if (isOwner) {
@@ -110,9 +111,27 @@ export function sessionMenuKeyboard(sessionId: string): InlineKeyboardMarkup {
       [btn('📊 Info', `session:${sessionId}:info`, 'primary'), btn('📋 Groups', `session:${sessionId}:groups`, 'primary')],
       [btn('❄️ Freeze', `session:${sessionId}:freeze`, 'danger'), btn('🔥 Unfreeze', `session:${sessionId}:unfreeze`, 'success')],
       [btn('🔄 Re-Init', `session:${sessionId}:reinit`, 'primary'), btn('🗑 Purge', `session:${sessionId}:purge`, 'danger')],
+      [btn('🔗 Link Collection', `session:${sessionId}:collect`, 'primary'), btn('🚪 Join Manager', `session:${sessionId}:joinmgr`, 'primary')],
       [btn('🌉 Bridge', `session:${sessionId}:bridge`, 'primary'), btn('🔙 Back', 'sessions:list')],
     ],
   };
+}
+
+export function linkCollectionKeyboard(sessionId: string, enabled: boolean): InlineKeyboardMarkup {
+  return { inline_keyboard: [
+    [enabled
+      ? btn('Disable Collection', `session:${sessionId}:collect:off`, 'danger')
+      : btn('Enable Collection', `session:${sessionId}:collect:on`, 'success')],
+    [btn('Back', `session:${sessionId}:menu`)],
+  ] };
+}
+
+export function joinManagerKeyboard(sessionId: string, status: string): InlineKeyboardMarkup {
+  const controls: IKB[] = [];
+  if (status === 'running') controls.push(btn('Pause', `session:${sessionId}:join:pause`, 'danger'));
+  else controls.push(btn(status === 'paused' ? 'Resume' : 'Start', `session:${sessionId}:join:start`, 'success'));
+  if (status === 'running' || status === 'paused') controls.push(btn('Stop', `session:${sessionId}:join:stop`, 'danger'));
+  return { inline_keyboard: [controls, [btn('Refresh Log', `session:${sessionId}:joinmgr`)], [btn('Back', `session:${sessionId}:menu`)]] };
 }
 
 export function sessionPairKeyboard(sessionId: string): InlineKeyboardMarkup {
@@ -248,11 +267,26 @@ export function confirmKeyboard(
 
 // ── Settings ──────────────────────────────────────────────
 
-export function settingsKeyboard(): InlineKeyboardMarkup {
+export function settingsKeyboard(config?: { notificationsEnabled?: boolean; defaultLinkCollection?: boolean; autoValidationEnabled?: boolean }): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
-      [btn('🔤 Change Prefix', 'settings:prefix'), btn('🎭 Sticker Macros', 'settings:macros')],
-      [btn('🔙 Back', 'menu:main')],
+      [btn('Change Prefix', 'settings:prefix'), btn('Sticker Macros', 'settings:macros')],
+      [btn(`Notifications: ${config?.notificationsEnabled === false ? 'Off' : 'On'}`, 'settings:notifications')],
+      [btn(`Default Collection: ${config?.defaultLinkCollection ? 'On' : 'Off'}`, 'settings:collection')],
+      [btn(`Auto Validation: ${config?.autoValidationEnabled ? 'On' : 'Off'}`, 'settings:validation')],
+      [btn('Theme (Coming Soon)', 'settings:disabled'), btn('Language (Coming Soon)', 'settings:disabled')],
+      [btn('Back', 'menu:main')],
     ],
   };
+}
+
+export function sleepKeyboard(sleeping: boolean): InlineKeyboardMarkup {
+  return { inline_keyboard: [
+    [sleeping ? btn('Resume All Sessions', 'sleep:off', 'success') : btn('Sleep All Sessions', 'sleep:on', 'danger')],
+    [btn('Back', 'menu:main')],
+  ] };
+}
+
+export function supportKeyboard(): InlineKeyboardMarkup {
+  return { inline_keyboard: [[btn('Start Support Message', 'support:start', 'success')], [btn('Back', 'menu:main')]] };
 }

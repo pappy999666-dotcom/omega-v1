@@ -24,6 +24,8 @@ import {
   handleBridgeSession,
   handleBridgeExit,
   getBridgeSession,
+  handleLinkCollection,
+  handleJoinManager,
 } from './handlers/session.js';
 import {
   handleBucketStatus,
@@ -58,6 +60,9 @@ import {
   backKeyboard,
   sessionPairKeyboard,
   sessionWizardKeyboard,
+  sleepKeyboard,
+  supportKeyboard,
+  settingsKeyboard,
 } from './ui/keyboards.js';
 import { mainMenu, header, H, escape, card, noticeCard, safe } from '../utils/formatter.js';
 import { getSocket, getUserSockets, isFrozen } from '../whatsapp/socket-manager.js';
@@ -83,6 +88,8 @@ interface BotContext extends Context {
     awaitingLinks?: boolean;
     awaitingPrefix?: boolean;
     bridgeSessionId?: string;
+    awaitingGlobalBridge?: boolean;
+    awaitingSupport?: boolean;
   };
 }
 
@@ -349,11 +356,44 @@ export function createBot(): Telegraf<BotContext> {
     }
 
     // ── Awaiting Prefix ───────────────��───────────────────
-    if (ctx.session?.awaitingPrefix) {
+    if (ctx.session?.awaitingGlobalBridge) {
+    ctx.session.awaitingGlobalBridge = false;
+    const sessionIds = getUserSockets(ctx.telegramId);
+    const results = await Promise.allSettled(sessionIds.map(async (sessionId) => {
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) throw new Error('Unavailable');
+      const replies: string[] = [];
+      await executeBridgeCommand(sessionId, ctx.telegramId, text, socket, async (response) => { replies.push(response); });
+      return `${sessionId}: ${replies.at(-1) ?? 'Completed'}`;
+    }));
+    const summary = results.map((result, index) => result.status === 'fulfilled'
+      ? `OK ${result.value}`
+      : `FAILED ${sessionIds[index]}: ${String(result.reason)}`).join('\n');
+    await ctx.reply(`${header('Global Bridge Complete', '📡')}\n\n${H.pre(summary || 'No connected sessions.', 'log')}`, {
+      parse_mode: 'HTML', reply_markup: mainMenuKeyboard(ctx.isOwner),
+    });
+    return;
+  }
+
+  if (ctx.session?.awaitingSupport) {
+    ctx.session.awaitingSupport = false;
+    const supportId = process.env.TELEGRAM_SUPPORT_CHAT_ID || process.env.TELEGRAM_OWNER_ID;
+    if (!supportId) {
+      await ctx.reply(noticeCard('Support Not Configured', 'Set TELEGRAM_SUPPORT_CHAT_ID to receive support messages.', 'error'), { parse_mode: 'HTML' });
+      return;
+    }
+    await ctx.telegram.sendMessage(supportId, `Support from ${ctx.telegramId}:\n\n${text}`);
+    await ctx.reply(noticeCard('Support Message Sent', 'Your message was delivered to the support team.', 'success'), { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(ctx.isOwner) });
+    return;
+  }
+
+  if (ctx.session?.awaitingPrefix) {
       ctx.session.awaitingPrefix = false;
       const { updateConfig } = await import('../services/workspace.js');
-      updateConfig(ctx.telegramId, { prefix: text.trim() });
-      await ctx.reply(card('Prefix Updated', '✅', [['New prefix', text.trim()]], 'New WhatsApp bridge commands will use this prefix.'), { parse_mode: 'HTML' });
+      const requestedPrefix = text.trim();
+      const nullPrefix = requestedPrefix.toLowerCase() === 'null';
+      updateConfig(ctx.telegramId, { prefix: nullPrefix ? '' : requestedPrefix, nullPrefix });
+      await ctx.reply(card('Prefix Updated', '✅', [['New prefix', nullPrefix ? 'Exact commands only (no prefix)' : requestedPrefix]], 'Ordinary WhatsApp conversation remains silent.'), { parse_mode: 'HTML' });
       return;
     }
 
@@ -432,7 +472,7 @@ async function routeCallback(
     const stickerHelp = params[0] === 'stickers';
     await ctx.editMessageText(
       stickerHelp
-        ? `${header('Sticker Macro Help', '🎭')}\n\nSend an unbound sticker to receive its hash. Then use ${H.code('.setcmd [hash] [command]')} or reply to a sticker with ${H.code('.setcmd [command]')}.`
+        ? `${header('Sticker Macro Help', '🎭')}\n\nUnbound stickers stay silent. Reply directly to the sticker with ${H.code('.setcmd [command]')} to bind it.`
         : helpText(ctx.isOwner),
       {
         parse_mode: 'HTML',
@@ -530,6 +570,17 @@ async function routeCallback(
     if (sub === 'purge' && params[2] === 'confirm') { await handlePurgeConfirm(ctx, sessionId); return; }
     if (sub === 'purge') { await handlePurgeSession(ctx, sessionId); return; }
     if (sub === 'bridge') { await handleBridgeSession(ctx, sessionId); return; }
+    if (sub === 'collect') {
+      const enabled = params[2] === 'on' ? true : params[2] === 'off' ? false : undefined;
+      await handleLinkCollection(ctx, sessionId, enabled);
+      return;
+    }
+    if (sub === 'joinmgr') { await handleJoinManager(ctx, sessionId); return; }
+    if (sub === 'join') {
+      const operation = params[2] as 'start' | 'pause' | 'stop' | undefined;
+      await handleJoinManager(ctx, sessionId, operation);
+      return;
+    }
     return;
   }
 
@@ -607,14 +658,42 @@ async function routeCallback(
     return;
   }
 
+  // ── Global Bridge, Sleep, and Support ──
+  if (action === 'bridge' && params[0] === 'global') {
+    ctx.session.awaitingGlobalBridge = true;
+    await ctx.editMessageText(card('Global Bridge', '📡', [['Connected sessions', String(getUserSockets(ctx.telegramId).length)]], 'Send one registered WhatsApp command. It will run independently on every available session.'), {
+      parse_mode: 'HTML', reply_markup: backKeyboard('menu:main'),
+    });
+    return;
+  }
+  if (action === 'sleep') {
+    const { updateConfig } = await import('../services/workspace.js');
+    const current = loadConfig(ctx.telegramId);
+    const sleeping = params[0] === 'on' ? true : params[0] === 'off' ? false : current.sleeping;
+    if (params[0] === 'on' || params[0] === 'off') updateConfig(ctx.telegramId, { sleeping });
+    await ctx.editMessageText(card('Sleep Mode', '🌙', [['Status', sleeping ? 'Sleeping' : 'Active']], sleeping ? 'WhatsApp command activity is silently ignored across all sessions.' : 'All sessions can process authorized commands.'), {
+      parse_mode: 'HTML', reply_markup: sleepKeyboard(Boolean(sleeping)),
+    });
+    return;
+  }
+  if (action === 'support') {
+    if (params[0] === 'start') {
+      ctx.session.awaitingSupport = true;
+      await ctx.editMessageText(card('Contact Support', '🛟', [], 'Send your support message now. It will be forwarded with your Telegram ID.'), { parse_mode: 'HTML', reply_markup: backKeyboard('support:menu') });
+    } else {
+      await ctx.editMessageText(card('Support', '🛟', [], 'Contact the support team without leaving the bot.'), { parse_mode: 'HTML', reply_markup: supportKeyboard() });
+    }
+    return;
+  }
+
   // ── Settings ──
   if (action === 'settings') {
     const sub = params[0];
     if (sub === 'menu') {
-      const { settingsKeyboard } = await import('./ui/keyboards.js');
-      await ctx.editMessageText(card('Settings', '⚙️', [['Prefix', loadConfig(ctx.telegramId).prefix]], 'Choose what you want to configure.'), {
+      const config = loadConfig(ctx.telegramId);
+      await ctx.editMessageText(card('Settings', '⚙️', [['Prefix', config.prefix]], 'Choose what you want to configure.'), {
         parse_mode: 'HTML',
-        reply_markup: settingsKeyboard(),
+        reply_markup: settingsKeyboard(config),
       });
       return;
     }
@@ -629,9 +708,25 @@ async function routeCallback(
     if (sub === 'macros') {
       const macroCount = Object.keys(loadConfig(ctx.telegramId).stickerMacros ?? {}).length;
       await ctx.editMessageText(
-        `${header('Sticker Macros', '🎭')}\n\n${H.bold('Bindings:')} ${macroCount}\n\nSend an unbound sticker in WhatsApp to get its stable hash, then bind it with ${H.code('.setcmd [hash] [command]')}.`,
+        `${header('Sticker Macros', '🎭')}\n\n${H.bold('Bindings:')} ${macroCount}\n\nReply directly to a WhatsApp sticker with ${H.code('.setcmd [command]')}. Unbound stickers remain silent.`,
         { parse_mode: 'HTML', reply_markup: stickerMacrosKeyboard() }
       );
+      return;
+    }
+    if (sub === 'disabled') {
+      await ctx.answerCbQuery('This option is coming soon', { show_alert: true }).catch(() => {});
+      return;
+    }
+    if (['notifications', 'collection', 'validation'].includes(sub ?? '')) {
+      const { updateConfig } = await import('../services/workspace.js');
+      const config = loadConfig(ctx.telegramId);
+      if (sub === 'notifications') updateConfig(ctx.telegramId, { notificationsEnabled: config.notificationsEnabled === false });
+      if (sub === 'collection') updateConfig(ctx.telegramId, { defaultLinkCollection: !config.defaultLinkCollection });
+      if (sub === 'validation') updateConfig(ctx.telegramId, { autoValidationEnabled: !config.autoValidationEnabled });
+      const updated = loadConfig(ctx.telegramId);
+      await ctx.editMessageText(card('Settings', '⚙️', [['Prefix', updated.prefix]], 'Setting updated.'), {
+        parse_mode: 'HTML', reply_markup: settingsKeyboard(updated),
+      });
       return;
     }
     return;
