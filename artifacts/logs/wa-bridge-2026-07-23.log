@@ -137,3 +137,51 @@
 {"level":"info","message":"[Boot] Restored 0 session(s)","timestamp":"2026-07-23T09:26:55.312Z"}
 {"level":"info","message":"[Boot] Launching Telegram bot...","timestamp":"2026-07-23T09:26:55.313Z"}
 {"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:27:17.886Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:27:47.908Z"}
+{"level":"info","message":"QR code generated","sessionId":"1_8831887192_2347034171763","timestamp":"2026-07-23T09:27:57.611Z"}
+{"level":"info","message":"Custom pairing handshake prepared","sessionId":"1_8831887192_2347034171763","timestamp":"2026-07-23T09:27:59.186Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:28:17.935Z"}
+{"code":515,"generation":1,"level":"warn","message":"Connection closed","registered":true,"sessionId":"1_8831887192_2347034171763","timestamp":"2026-07-23T09:28:27.593Z"}
+{"alertUser":false,"error":"Stream Errored (restart required)","level":"warn","message":"[Recovery] 1_8831887192_2347034171763 → reconnect","reason":"515 Restart Required — completing the successful pairing handshake","timestamp":"2026-07-23T09:28:27.594Z"}
+{"delay":750,"level":"info","message":"Reconnect scheduled","restartRequired":true,"sessionId":"1_8831887192_2347034171763","timestamp":"2026-07-23T09:28:27.594Z"}
+{"level":"info","message":"Connection established","sessionId":"1_8831887192_2347034171763","timestamp":"2026-07-23T09:28:29.177Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:28:47.959Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:29:17.983Z"}
+{"groupJid":"status@broadcast","level":"info","message":"[EventHandler] Command: .menu","sessionId":"1_8831887192_2347034171763","timestamp":"2026-07-23T09:29:25.487Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:29:48.007Z"}
+{"groupJid":"status@broadcast","level":"info","message":"[EventHandler] Command: .allstatus","sessionId":"1_8831887192_2347034171763","timestamp":"2026-07-23T09:30:02.709Z"}
+{"groupJid":"120363408482845044@g.us","level":"info","likeThis":false,"mediaType":"text","message":"[GroupStatus] Native relay sent","sessionId":"1_8831887192_2347034171763","timestamp":"2026-07-23T09:30:03.613Z"}
+{"groupJid":"120363426577170609@g.us","level":"info","likeThis":false,"mediaType":"text","message":"[GroupStatus] Native relay sent","sessionId":"1_8831887192_2347034171763","timestamp":"2026-07-23T09:30:11.666Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:30:18.030Z"}
+{"groupJid":"120363410171535125@g.us","level":"info","likeThis":false,"mediaType":"text","message":"[GroupStatus] Native relay sent","sessionId":"1_8831887192_2347034171763","timestamp":"2026-07-23T09:30:19.482Z"}
+{"groupJid":"120363411877693570@g.us","level":"info","likeThis":false,"mediaType":"text","message":"[GroupStatus] Native relay sent","sessionId":"1_8831887192_2347034171763","timestamp":"2026-07-23T09:30:26.489Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:30:48.055Z"}
+{"groupJid":"status@broadcast","level":"info","message":"[EventHandler] Command: .allstatus","sessionId":"1_8831887192_2347034171763","timestamp":"2026-07-23T09:30:51.390Z"}
+{"groupJid":"120363408482845044@g.us","level":"info","likeThis":false,"mediaType":"text","message":"[GroupStatus] Native relay sent","sessionId":"1_8831887192_2347034171763","timestamp":"2026-07-23T09:30:55.582Z"}
+{"groupJid":"120363426577170609@g.us","level":"info","likeThis":false,"mediaType":"text","message":"[GroupStatus] Native relay sent","sessionId":"1_8831887192_2347034171763","timestamp":"2026-07-23T09:31:02.674Z"}
+{"groupJid":"120363410171535125@g.us","level":"info","likeThis":false,"mediaType":"text","message":"[GroupStatus] Native relay sent","sessionId":"1_8831887192_2347034171763","timestamp":"2026-07-23T09:31:11.243Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:31:18.076Z"}
+{"groupJid":"120363411877693570@g.us","level":"info","likeThis":false,"mediaType":"text","message":"[GroupStatus] Native relay sent","sessionId":"1_8831887192_2347034171763","timestamp":"2026-07-23T09:31:18.754Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:31:48.095Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:32:18.117Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:32:48.147Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:33:18.182Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:33:48.206Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:34:18.225Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:34:48.256Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:35:18.281Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:35:48.305Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:36:18.325Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:36:48.350Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:37:18.384Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:37:48.410Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:38:18.453Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:38:48.476Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:39:18.499Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:39:48.521Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:40:18.551Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:40:48.574Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:41:18.598Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:41:48.629Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:42:18.664Z"}
+{"err":"Client network socket disconnected before secure TLS connection was established","level":"error","message":"[Redis] Connection error","timestamp":"2026-07-23T09:42:48.696Z"}
