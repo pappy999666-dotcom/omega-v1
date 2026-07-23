@@ -55,14 +55,24 @@ async function bootstrap(): Promise<void> {
     throw new Error('TELEGRAM_OWNER_ID is required.');
   }
 
-  // 2. Test Redis connection
+  // 2. Test Redis connection without blocking core Telegram/WhatsApp controls forever.
   logger.info('[Boot] Connecting to Redis...');
   const redis = getRedis();
+  let redisAvailable = false;
   try {
-    await redis.ping();
+    await Promise.race([
+      redis.ping(),
+      new Promise<never>((_, reject) => {
+        const timer = setTimeout(() => reject(new Error('Redis startup timeout')), 10_000);
+        timer.unref();
+      }),
+    ]);
+    redisAvailable = true;
     logger.info('[Boot] Redis connected ✓');
   } catch (err) {
-    throw new Error(`Redis connection failed: ${err}. Is Redis running?`);
+    logger.warn('[Boot] Redis unavailable; starting in degraded mode without BullMQ workers', {
+      err: err instanceof Error ? err.message : String(err),
+    });
   }
 
   // 3. Start Telegram bot
@@ -97,11 +107,15 @@ async function bootstrap(): Promise<void> {
   setValidatorBotRef(botRef);
   setLifecycleBotRef(botRef);
 
-  startOutreachWorker();
-  startValidatorWorker();
-  startLifecycleWorker();
-  startOmniWorker();
-  logger.info('[Boot] BullMQ workers started ✓');
+  if (redisAvailable) {
+    startOutreachWorker();
+    startValidatorWorker();
+    startLifecycleWorker();
+    startOmniWorker();
+    logger.info('[Boot] BullMQ workers started ✓');
+  } else {
+    logger.warn('[Boot] Queue-backed bulk operations are disabled until the next healthy restart');
+  }
 
   // 7. Restore active sessions from disk
   logger.info('[Boot] Restoring sessions from disk...');
