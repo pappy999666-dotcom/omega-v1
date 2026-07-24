@@ -115,7 +115,7 @@ export function hashSticker(buffer: Buffer): string {
 
 export const ALL_COMMANDS = [
   // Status & Target Broadcast
-  'gstatus', 'tochat', 'togstatus', 'tochatx', 'togstatusx', 'sstatus', 'statusdesign',
+  'godcast', 'gstatus', 'tochat', 'togstatus', 'tochatx', 'togstatusx', 'sstatus', 'statusdesign', 'settheme', 'smedia',
   // Mass Outreach
   'allstatus', 'allchat', 'allstatusx',
   // Lifecycle
@@ -129,7 +129,7 @@ export const ALL_COMMANDS = [
   // Info
   'menu', 'help', 'ping', 'info', 'groups', 'jid',
   // Bucket
-  'addlink', 'bucket', 'listlinks',
+  'addlink',
 ] as const;
 
 export type CommandName = typeof ALL_COMMANDS[number];

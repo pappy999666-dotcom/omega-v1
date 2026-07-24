@@ -73,6 +73,8 @@ import {
   saveSessionMeta,
   purgeSession,
   updateConfig,
+  loadSessionConfig,
+  updateSessionConfig,
   findSessionOwner,
 } from '../services/workspace.js';
 import { normalizePairingPhone } from '../whatsapp/socket-manager.js';
@@ -423,14 +425,25 @@ export function createBot(): Telegraf<BotContext> {
   }
 
   if (ctx.session?.awaitingPrefix) {
-      ctx.session.awaitingPrefix = false;
-      const { updateConfig } = await import('../services/workspace.js');
-      const requestedPrefix = text.trim();
-      const nullPrefix = requestedPrefix.toLowerCase() === 'null';
-      updateConfig(ctx.telegramId, { prefix: nullPrefix ? '' : requestedPrefix, nullPrefix });
-      await ctx.reply(card('Prefix Updated', '✅', [['New prefix', nullPrefix ? 'Exact commands only (no prefix)' : requestedPrefix]], 'Ordinary WhatsApp conversation remains silent.'), { parse_mode: 'HTML' });
+    ctx.session.awaitingPrefix = false;
+    const requestedPrefix = text.trim();
+    const nullPrefix = requestedPrefix.toLowerCase() === 'null';
+    const bridgeSessionId = getBridgeSession(ctx.telegramId);
+    const activeSessions = getUserSockets(ctx.telegramId);
+    const targetSessionId = bridgeSessionId ?? (activeSessions.length === 1 ? activeSessions[0] : undefined);
+
+    if (!targetSessionId) {
+      await ctx.reply(noticeCard('Choose A Session First', 'Prefix changes are session-specific. Open a session bridge or keep exactly one WhatsApp session online, then try again.', 'warning'), { parse_mode: 'HTML' });
       return;
     }
+
+    updateSessionConfig(ctx.telegramId, targetSessionId, { prefix: nullPrefix ? '' : requestedPrefix, nullPrefix });
+    await ctx.reply(card('Prefix Updated', '✅', [
+      ['Session', targetSessionId],
+      ['New prefix', nullPrefix ? 'Exact commands only (no prefix)' : requestedPrefix],
+    ], 'Only this WhatsApp session was updated; other sessions keep their own prefix.'), { parse_mode: 'HTML' });
+    return;
+  }
 
     // ── Auto-detect WA links → add to bucket ─────────────
     const LINK_RE = /https?:\/\/chat\.whatsapp\.com\/[A-Za-z0-9_-]+/g;
@@ -830,25 +843,44 @@ async function routeCallback(
   if (action === 'settings') {
     const sub = params[0];
     if (sub === 'menu') {
-      const config = loadConfig(ctx.telegramId);
-      await ctx.editMessageText(card('Settings', '⚙️', [['Prefix', config.prefix]], 'Choose what you want to configure.'), {
+      const bridgeSessionId = getBridgeSession(ctx.telegramId);
+      const activeSessions = getUserSockets(ctx.telegramId);
+      const targetSessionId = bridgeSessionId ?? (activeSessions.length === 1 ? activeSessions[0] : undefined);
+      const config = targetSessionId ? loadSessionConfig(ctx.telegramId, targetSessionId) : loadConfig(ctx.telegramId);
+      await ctx.editMessageText(card('Settings', '⚙️', [['Prefix', config.prefix], ['Prefix scope', targetSessionId ?? 'Select one active session']], 'Choose what you want to configure.'), {
         parse_mode: 'HTML',
         reply_markup: settingsKeyboard(config),
       });
       return;
     }
     if (sub === 'prefix') {
+      const bridgeSessionId = getBridgeSession(ctx.telegramId);
+      const activeSessions = getUserSockets(ctx.telegramId);
+      const targetSessionId = bridgeSessionId ?? (activeSessions.length === 1 ? activeSessions[0] : undefined);
+      if (!targetSessionId) {
+        await ctx.answerCbQuery('Choose one session first', { show_alert: true }).catch(() => {});
+        await ctx.editMessageText(noticeCard('Choose A Session First', 'Prefix changes are session-specific. Open a session bridge or keep exactly one WhatsApp session online, then retry.', 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard('settings:menu') });
+        return;
+      }
       ctx.session.awaitingPrefix = true;
       await ctx.editMessageText(
-        card('Change Prefix', '🔤', [['Current', loadConfig(ctx.telegramId).prefix]], 'Send a new prefix such as ! or /. Send null to enable always-listen mode.'),
+        card('Change Prefix', '🔤', [['Session', targetSessionId], ['Current', loadSessionConfig(ctx.telegramId, targetSessionId).prefix]], 'Send a new prefix such as ! or /. Send null to enable always-listen mode.'),
         { parse_mode: 'HTML', reply_markup: backKeyboard('settings:menu') }
       );
       return;
     }
     if (sub === 'macros') {
-      const macroCount = Object.keys(loadConfig(ctx.telegramId).stickerMacros ?? {}).length;
+      const bridgeSessionId = getBridgeSession(ctx.telegramId);
+      const activeSessions = getUserSockets(ctx.telegramId);
+      const targetSessionId = bridgeSessionId ?? (activeSessions.length === 1 ? activeSessions[0] : undefined);
+      const macroConfig = targetSessionId ? loadSessionConfig(ctx.telegramId, targetSessionId) : loadConfig(ctx.telegramId);
+      const macroCount = Object.keys(macroConfig.stickerMacros ?? {}).length;
       await ctx.editMessageText(
-        `${header('Sticker Macros', '🎭')}\n\n${H.bold('Bindings:')} ${macroCount}\n\nReply directly to a WhatsApp sticker with ${H.code('.setcmd [command]')}. Unbound stickers remain silent.`,
+        `${header('Sticker Macros', '🎭')}
+
+${H.bold('Bindings:')} ${macroCount}
+${targetSessionId ? `${H.bold('Session:')} ${H.code(targetSessionId)}\n` : ''}
+Reply directly to a WhatsApp sticker with ${H.code(`${macroConfig.prefix || ''}setcmd [command]`)}. Unbound stickers remain silent.`,
         { parse_mode: 'HTML', reply_markup: stickerMacrosKeyboard() }
       );
       return;
