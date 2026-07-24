@@ -1,4 +1,4 @@
-import type { WASocket } from '@crysnovax/baileys';
+import type { BridgeWASocket as WASocket } from './baileys-types.js';
 import { hydratedMessage } from './preview-generator.js';
 import { logger } from '../utils/logger.js';
 
@@ -37,7 +37,7 @@ export async function sendGroupStatus(
     const bridge = socket as unknown as BridgeSocket;
     const generated = options.mediaBuffer
       ? mediaContent(options.mediaBuffer, options.mediaType ?? 'image', options.caption ?? text)
-      : await hydratedMessage(text) as unknown as MessageContent;
+      : await hydratedMessage(text, undefined, { suppressPreview: true }) as unknown as MessageContent;
 
     const content: MessageContent = options.likeThis
       ? { ...generated, groupStatus: true, likeThis: true }

@@ -162,8 +162,8 @@ export function createBot(): Telegraf<BotContext> {
   bot.use(session({ defaultSession: () => ({}) }));
 
   // ── Auth Middleware ────────────────────────────────────
-  bot.use(authMiddleware() as Parameters<typeof bot.use>[0]);
-  bot.use(forceJoinMiddleware() as Parameters<typeof bot.use>[0]);
+  bot.use(authMiddleware() as never);
+  bot.use(forceJoinMiddleware() as never);
 
   // ── Commands ───────────────────────────────────────────
 
@@ -183,7 +183,7 @@ export function createBot(): Telegraf<BotContext> {
     await handleBucketStatus(ctx as BotContext);
   });
 
-  bot.command('admin', ownerOnly() as Parameters<typeof bot.use>[0], async (ctx) => {
+  bot.command('admin', ownerOnly() as never, async (ctx) => {
     await handleAdminPanel(ctx);
   });
 
@@ -227,7 +227,7 @@ export function createBot(): Telegraf<BotContext> {
   });
 
   // /omni [cmd] [text] — Admin omni-bridge command
-  bot.command('omni', ownerOnly() as Parameters<typeof bot.use>[0], async (ctx) => {
+  bot.command('omni', ownerOnly() as never, async (ctx) => {
     const parts = ctx.message.text.split(' ').slice(1);
     const command = parts[0];
     const text = parts.slice(1).join(' ');

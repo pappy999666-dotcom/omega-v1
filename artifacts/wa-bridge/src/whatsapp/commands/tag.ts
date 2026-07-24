@@ -3,7 +3,7 @@
 // .tag (hidetag) / .mtag (visible @mention)
 // ============================================================
 
-import type { WASocket, AnyMessageContent } from '@crysnovax/baileys';
+import type { BridgeWASocket as WASocket, AnyMessageContent } from '../baileys-types.js';
 import { logger } from '../../utils/logger.js';
 import { isFrozen } from '../socket-manager.js';
 import { bold } from '../../utils/ascii-art.js';

@@ -21,7 +21,7 @@ function urlBtn(text: string, url: string, style: ButtonStyle = 'primary'): IKB 
 
 function copyBtn(text: string, copy_text: string, style: ButtonStyle = 'primary'): IKB {
   // Telegram API 9.0+ copy_text button
-  return { text, copy_text: { text: copy_text }, style } as IKB;
+  return { text, copy_text: { text: copy_text }, style } as unknown as IKB;
 }
 
 export function backKeyboard(callback = 'menu:main'): InlineKeyboardMarkup {
