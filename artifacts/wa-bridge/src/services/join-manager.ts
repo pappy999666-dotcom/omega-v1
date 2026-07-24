@@ -1,4 +1,4 @@
-import type { WASocket } from '@crysnovax/baileys';
+import type { BridgeWASocket as WASocket } from '../whatsapp/baileys-types.js';
 import type { JoinManagerState } from '../types/index.js';
 import { cmdJoin } from '../whatsapp/commands/lifecycle.js';
 import { loadBucket, loadSessionMeta, updateSessionMeta } from './workspace.js';

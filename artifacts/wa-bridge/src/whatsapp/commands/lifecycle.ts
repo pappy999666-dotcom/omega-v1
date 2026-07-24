@@ -3,7 +3,7 @@
 // .join / .leave / .joinall / .leaveall
 // ============================================================
 
-import type { WASocket } from '@crysnovax/baileys';
+import type { BridgeWASocket as WASocket } from '../baileys-types.js';
 import type { JobResult } from '../../types/index.js';
 import { joinDelay, leaveDelay, exponentialBackoff } from '../../utils/delay.js';
 import { logger } from '../../utils/logger.js';
@@ -295,8 +295,8 @@ export async function resolveGroupJid(
     const info = await socket.groupGetInviteInfo(code);
     return {
       jid: info.id,
-      title: info.subject,
-      members: info.size,
+      title: info.subject ?? 'Unknown group',
+      members: info.size ?? 0,
     };
   } catch {
     return null;

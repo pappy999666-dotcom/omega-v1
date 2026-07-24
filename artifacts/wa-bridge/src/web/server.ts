@@ -46,6 +46,10 @@ function setSessionCookie(res: Response, token: string): void {
   res.setHeader('Set-Cookie', `wa_web_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=1209600`);
 }
 
+function routeParam(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? value[0] ?? '' : value ?? '';
+}
+
 export function createWebApp(): express.Express {
   const app = express();
   app.use(express.json({ limit: '2mb' }));
@@ -62,7 +66,7 @@ export function createWebApp(): express.Express {
 
   app.post('/api/auth/login', (req, res) => {
     const user = verifyWebUser(String(req.body.username ?? ''), String(req.body.password ?? ''));
-    if (!user) return res.status(401).json({ error: 'Invalid username or password' });
+    if (!user) { res.status(401).json({ error: 'Invalid username or password' }); return; }
     setSessionCookie(res, createSession(user.id));
     emit(user.id, `Signed in as ${user.username}`);
     res.json({ user });
@@ -109,10 +113,10 @@ export function createWebApp(): express.Express {
     } catch (err) { res.status(400).json({ error: err instanceof Error ? err.message : String(err) }); }
   });
 
-  app.get('/api/sessions/:id/pairing', requireAuth, (req, res) => res.json(pairing.get(req.params.id) ?? {}));
-  app.post('/api/sessions/:id/freeze', requireAuth, (req, res) => { freezeSession(req.params.id); res.json({ ok: true }); });
-  app.post('/api/sessions/:id/unfreeze', requireAuth, (req, res) => { unfreezeSession(req.params.id); res.json({ ok: true }); });
-  app.delete('/api/sessions/:id', requireAuth, (req, res) => { purgeSession((req as AuthedRequest).userId, req.params.id); res.json({ ok: true }); });
+  app.get('/api/sessions/:id/pairing', requireAuth, (req, res) => res.json(pairing.get(routeParam(req.params.id)) ?? {}));
+  app.post('/api/sessions/:id/freeze', requireAuth, (req, res) => { freezeSession(routeParam(req.params.id)); res.json({ ok: true }); });
+  app.post('/api/sessions/:id/unfreeze', requireAuth, (req, res) => { unfreezeSession(routeParam(req.params.id)); res.json({ ok: true }); });
+  app.delete('/api/sessions/:id', requireAuth, (req, res) => { purgeSession((req as AuthedRequest).userId, routeParam(req.params.id)); res.json({ ok: true }); });
 
   app.post('/api/buckets/links', requireAuth, (req, res) => {
     const links = String(req.body.links ?? '').split(/\s+/).filter((l) => /^https?:\/\//.test(l));
@@ -120,12 +124,12 @@ export function createWebApp(): express.Express {
     emit((req as AuthedRequest).userId, `Added ${result.added} links (${result.dupes} duplicates)`);
     res.json(result);
   });
-  app.get('/api/buckets/:bucket', requireAuth, (req, res) => res.json(loadBucket((req as AuthedRequest).userId, req.params.bucket as 'main' | 'active' | 'dead')));
+  app.get('/api/buckets/:bucket', requireAuth, (req, res) => res.json(loadBucket((req as AuthedRequest).userId, routeParam(req.params.bucket) as 'main' | 'active' | 'dead')));
 
   app.post('/api/outreach', requireAuth, async (req, res) => {
     const userId = (req as AuthedRequest).userId;
     const socket = getSocket(String(req.body.sessionId));
-    if (!socket) return res.status(404).json({ error: 'Active session not found' });
+    if (!socket) { res.status(404).json({ error: 'Active session not found' }); return; }
     const progress = async (msg: string) => emit(userId, msg);
     const result = req.body.type === 'allchat'
       ? await cmdAllChat(socket, String(req.body.sessionId), userId, String(req.body.message ?? ''), { onProgress: progress })

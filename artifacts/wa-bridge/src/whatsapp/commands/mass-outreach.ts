@@ -3,7 +3,7 @@
 // .allstatus / .allchat — with exponential backoff & jitter
 // ============================================================
 
-import type { WASocket, AnyMessageContent } from '@crysnovax/baileys';
+import type { BridgeWASocket as WASocket, AnyMessageContent } from '../baileys-types.js';
 import type { JobResult } from '../../types/index.js';
 import { allstatusDelay, exponentialBackoff } from '../../utils/delay.js';
 import { logger } from '../../utils/logger.js';
