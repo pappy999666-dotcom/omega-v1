@@ -53,6 +53,7 @@ function routeParam(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] ?? '' : value ?? '';
 }
 
+ codex/conduct-comprehensive-project-audit-and-fixes-ns8rhn
 function dashboardSnapshot(userId: string): object {
   const workspace = loadWorkspace(userId);
   return {
@@ -69,6 +70,7 @@ function assertSessionOwner(userId: string, sessionId: string): void {
   if (!loadWorkspace(userId).sessions[sessionId]) throw new Error('Session does not belong to this workspace');
 }
 
+main
 export function createWebApp(): express.Express {
   const app = express();
   app.use(express.json({ limit: '15mb' }));
@@ -133,6 +135,7 @@ export function createWebApp(): express.Express {
   });
 
   app.get('/api/sessions/:id/pairing', requireAuth, (req, res) => res.json(pairing.get(routeParam(req.params.id)) ?? {}));
+codex/conduct-comprehensive-project-audit-and-fixes-ns8rhn
   app.post('/api/sessions/:id/freeze', requireAuth, (req, res) => { freezeSession(routeParam(req.params.id)); emit((req as AuthedRequest).userId, 'Session frozen'); res.json({ ok: true }); });
   app.post('/api/sessions/:id/unfreeze', requireAuth, (req, res) => { unfreezeSession(routeParam(req.params.id)); emit((req as AuthedRequest).userId, 'Session unfrozen'); res.json({ ok: true }); });
 
@@ -154,13 +157,17 @@ export function createWebApp(): express.Express {
     res.json(updated?.autoPromote);
   });
 
-  app.delete('/api/sessions/:id', requireAuth, (req, res) => { const userId = (req as AuthedRequest).userId; purgeSession(userId, routeParam(req.params.id)); emit(userId, 'Session purged'); res.json({ ok: true }); });
+  app.delete('/api/sessions/:id', requireAuth, (req, res) => { const userId = (req as AuthedRequest).userId; purgeSession(userId, routeParam(req.params.id)); emit(userId, 'Session purged'); res.json({ ok: true }); })
+  app.post('/api/sessions/:id/freeze', requireAuth, (req, res) => { freezeSession(routeParam(req.params.id)); res.json({ ok: true }); });
+  app.post('/api/sessions/:id/unfreeze', requireAuth, (req, res) => { unfreezeSession(routeParam(req.params.id)); res.json({ ok: true }); });
+  app.delete('/api/sessions/:id', requireAuth, (req, res) => { purgeSession((req as AuthedRequest).userId, routeParam(req.params.id)); res.json({ ok: true }); }) main
 
   app.post('/api/buckets/links', requireAuth, (req, res) => {
     const result = importLinksToMainBucket((req as AuthedRequest).userId, String(req.body.links ?? ''));
     emit((req as AuthedRequest).userId, `Imported ${result.added} links (${result.dupes} duplicates)`);
     res.json(result);
   });
+codex/conduct-comprehensive-project-audit-and-fixes-ns8rhn
   app.post('/api/buckets/import', requireAuth, (req, res) => {
     const text = req.body.base64 ? Buffer.from(String(req.body.base64), 'base64').toString('utf8') : String(req.body.text ?? '');
     const result = importLinksToMainBucket((req as AuthedRequest).userId, text);
@@ -181,6 +188,14 @@ export function createWebApp(): express.Express {
   app.post('/api/outreach', requireAuth, async (req, res) => {
     const userId = (req as AuthedRequest).userId; const sessionId = String(req.body.sessionId);
     const socket = getSocket(sessionId); if (!socket) { res.status(404).json({ error: 'Active session not found' }); return; }
+=======
+  app.get('/api/buckets/:bucket', requireAuth, (req, res) => res.json(loadBucket((req as AuthedRequest).userId, routeParam(req.params.bucket) as 'main' | 'active' | 'dead')));
+
+  app.post('/api/outreach', requireAuth, async (req, res) => {
+    const userId = (req as AuthedRequest).userId;
+    const socket = getSocket(String(req.body.sessionId));
+    if (!socket) { res.status(404).json({ error: 'Active session not found' }); return; }
+main
     const progress = async (msg: string) => emit(userId, msg);
     const result = req.body.type === 'allchat'
       ? await cmdAllChat(socket, sessionId, userId, String(req.body.message ?? ''), { onProgress: progress })

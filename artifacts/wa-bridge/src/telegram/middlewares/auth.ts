@@ -127,7 +127,14 @@ export function forceJoinMiddleware(): MiddlewareFn<Context> {
             parse_mode: 'HTML',
             reply_markup: {
               inline_keyboard: [
-                ...missing.filter((target) => target.startsWith('@')).map((target) => [{ text: `📢 Join ${target}`, url: `https://t.me/${target.replace('@', '')}` }]),
+...missing
+  .filter((target) => target.startsWith('@'))
+  .map((target) => [
+    {
+      text: `📢 Join ${target}`,
+      url: `https://t.me/${target.replace('@', '')}`,
+    },
+  ]),
                 [{ text: '✅ I Joined', callback_data: 'verify:joined' }],
               ],
             },
