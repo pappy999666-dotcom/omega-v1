@@ -84,14 +84,32 @@ export function sessionBox(opts: {
 }
 
 export function whatsappMenu(
-  title: string,
+  _title: string,
   sections: { heading: string; items: { cmd: string; desc: string }[] }[]
 ): string {
-  const lines: string[] = [`${bold(title.toUpperCase())}`, '', quote('Choose a command below. Commands can also be triggered from bound stickers.'), ''];
+  const cleanCommand = (cmd: string): string => cmd.trim().split(/\s+/u)[0] ?? cmd.trim();
+  const lines: string[] = [
+    '⠀⠀⠀⠀⠀⠀⠀⠀⟦ ◈ 𝐎𝐌𝐄𝐆𝐀 • 𝐂𝐎𝐑𝐄 ◈ ⟧',
+    '        ᴡᴀ ʙʀɪᴅɢᴇ • ᴄᴏɴᴛʀᴏʟ ᴘᴀɴᴇʟ',
+    '      ═══════════════════════════════',
+    '      ◉ SYSTEM ▰ ONLINE',
+    '      ◉ SESSION ▰ VERIFIED',
+    '      ◉ ENGINE ▰ READY',
+  ];
+
   for (const section of sections) {
-    lines.push(bold(section.heading));
-    for (const item of section.items) lines.push(`${bold(item.cmd)}\n${italic(item.desc)}`);
-    lines.push('');
+    lines.push('', '╭─────────────────────────────────', '', section.heading, '┈┈┈┈┈┈┈┈┈┈');
+    for (const item of section.items) lines.push(`◈ ${cleanCommand(item.cmd)}`);
+    lines.push('', '╰─────────────────────────────────');
   }
+
+  lines.push(
+    '',
+    '═════════════〔 ⬢ 〕═════════════',
+    '      ◉ Awaiting Operator Input...',
+    '      ◉ Type a command to continue.',
+    '══════════════════════════════════'
+  );
+
   return lines.join('\n').trim();
 }

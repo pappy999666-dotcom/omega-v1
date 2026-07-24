@@ -5,12 +5,12 @@
 
 import type { BridgeWASocket as WASocket, BaileysEventMap, IMessage, WebMessageInfo } from './baileys-types.js';
 import { parseCommand, parseStickerCommand, hashSticker } from './command-parser.js';
-import { loadConfig, loadSessionMeta, updateSessionMeta } from '../services/workspace.js';
+import { loadSessionConfig, loadSessionMeta, updateSessionMeta } from '../services/workspace.js';
 import { stopSpamLoop, isSpamLoopActive, cmdToChat, cmdToChatX, cmdSStatus, cmdGroupStatus } from './commands/status.js';
 import { cmdAllStatus, cmdAllChat, stopOutreach } from './commands/mass-outreach.js';
 import { cmdJoin, cmdLeave, cmdJoinAll, cmdLeaveAll, resolveGroupJid } from './commands/lifecycle.js';
 import { cmdTag, cmdMTag, tagSummary } from './commands/tag.js';
-import { updateConfig, addToMainBucket } from '../services/workspace.js';
+import { updateSessionConfig, addToMainBucket } from '../services/workspace.js';
 import { logger } from '../utils/logger.js';
 import { isFrozen } from './socket-manager.js';
 import {
@@ -87,7 +87,7 @@ export async function executeBridgeCommand(
   socket: WASocket,
   onReply: (text: string) => Promise<void>
 ): Promise<void> {
-  if (loadConfig(telegramId).sleeping) throw new Error('User sleep mode is active');
+  if (loadSessionConfig(telegramId, sessionId).sleeping) throw new Error('User sleep mode is active');
   const syntheticMessage = {
     key: { remoteJid: 'status@broadcast', fromMe: false, id: `telegram-${Date.now()}` },
     message: { conversation: text },
@@ -142,7 +142,7 @@ async function processMessage(
   // Extract sticker for macro matching
   const stickerMsg = msg.message?.stickerMessage;
 
-  const config = loadConfig(telegramId);
+  const config = loadSessionConfig(telegramId, sessionId);
   const sessionMeta = loadSessionMeta(telegramId, sessionId);
 
   // Passive collection is intentionally silent and runs before command parsing.
@@ -234,53 +234,61 @@ async function processMessage(
     case 'help': {
       await reply(whatsappMenu('WA-BRIDGE CONTROL', [
         {
-          heading: '📡 Status Broadcast',
+          heading: '⟢ 〔 🎨 〕𝐆𝐎𝐃𝐂𝐀𝐒𝐓 • 𝐄𝐍𝐆𝐈𝐍𝐄',
           items: [
-            { cmd: '.gstatus [msg]', desc: 'Post to current group status' },
-            { cmd: '.tochat [jid] [msg]', desc: 'Send to a target group' },
-            { cmd: '.togstatus [jid] [msg]', desc: 'Post to a target group status' },
-            { cmd: '.tochatx [jid] [n] [msg]', desc: 'Repeat a target chat send' },
-            { cmd: '.togstatusx [n] [jid] [msg]', desc: 'Repeat a target group status' },
-            { cmd: '.sstatus [msg]', desc: 'Run status loop until stopspam' },
-            { cmd: '.statusdesign [theme] [link]', desc: 'Designed current-GC status' },
+            { cmd: config.prefix + 'godcast', desc: 'Designed current-GC status' },
+            { cmd: config.prefix + 'statusdesign', desc: 'Designed current-GC status' },
+            { cmd: config.prefix + 'settheme', desc: 'Set status theme' },
+            { cmd: config.prefix + 'smedia', desc: 'Post media status' },
           ],
         },
         {
-          heading: '📣 Mass Outreach',
+          heading: '⟢ 〔 📡 〕𝐁𝐑𝐎𝐀𝐃𝐂𝐀𝐒𝐓 • 𝐍𝐄𝐓𝐖𝐎𝐑𝐊',
           items: [
-            { cmd: '.allstatus [msg]', desc: 'Post to all group statuses' },
-            { cmd: '.allstatusx [n] [msg]', desc: 'Repeat across every group' },
-            { cmd: '.allchat [msg]', desc: 'Send to all groups with hidetag' },
-            { cmd: '.stopspam', desc: 'Stop the active status loop' },
+            { cmd: config.prefix + 'gstatus', desc: 'Post to current group status' },
+            { cmd: config.prefix + 'tochat', desc: 'Send to a target group' },
+            { cmd: config.prefix + 'togstatus', desc: 'Post to a target group status' },
+            { cmd: config.prefix + 'tochatx', desc: 'Repeat a target chat send' },
+            { cmd: config.prefix + 'togstatusx', desc: 'Repeat a target group status' },
+            { cmd: config.prefix + 'sstatus', desc: 'Run status loop until stopspam' },
           ],
         },
         {
-          heading: '🔗 Lifecycle',
+          heading: '⟢ 〔 📣 〕𝐌𝐀𝐒𝐒 • 𝐎𝐔𝐓𝐑𝐄𝐀𝐂𝐇',
           items: [
-            { cmd: '.join [link]', desc: 'Join a group' },
-            { cmd: '.leave [jid]', desc: 'Leave a group' },
-            { cmd: '.joinall', desc: 'Join all active bucket links' },
-            { cmd: '.left', desc: 'Leave the current group' },
-            { cmd: '.leave [jid/link]', desc: 'Leave a specified group' },
-            { cmd: '.leaveall', desc: 'Leave all groups' },
+            { cmd: config.prefix + 'allstatus', desc: 'Post to all group statuses' },
+            { cmd: config.prefix + 'allstatusx', desc: 'Repeat across every group' },
+            { cmd: config.prefix + 'allchat', desc: 'Send to all groups with hidetag' },
+            { cmd: config.prefix + 'stopspam', desc: 'Stop the active status loop' },
           ],
         },
         {
-          heading: '📢 Tagging',
+          heading: '⟢ 〔 🔗 〕𝐋𝐈𝐅𝐄𝐂𝐘𝐂𝐋𝐄 • 𝐌𝐎𝐃𝐔𝐋𝐄',
           items: [
-            { cmd: '.tag [msg]', desc: 'Hidetag all members (invisible)' },
-            { cmd: '.mtag [msg]', desc: 'Visible @mention all members' },
+            { cmd: config.prefix + 'join', desc: 'Join a group' },
+            { cmd: config.prefix + 'leave', desc: 'Leave a group' },
+            { cmd: config.prefix + 'joinall', desc: 'Join all active bucket links' },
+            { cmd: config.prefix + 'left', desc: 'Leave current group' },
+            { cmd: config.prefix + 'leaveall', desc: 'Leave all groups' },
           ],
         },
         {
-          heading: '⚙️ Settings',
+          heading: '⟢ 〔 📢 〕𝐓𝐀𝐆 • 𝐄𝐍𝐆𝐈𝐍𝐄',
           items: [
-            { cmd: '.setprefix [p]', desc: 'Change command prefix' },
-            { cmd: '.setcmd [hash] [cmd]', desc: 'Bind sticker to command' },
-            { cmd: '.setsudo [number]', desc: 'Approve a command number' },
-            { cmd: '.delsudo [number]', desc: 'Remove command access' },
-            { cmd: '.info', desc: 'Session information' },
-            { cmd: '.groups', desc: 'List joined groups' },
+            { cmd: config.prefix + 'tag', desc: 'Hidetag all members' },
+            { cmd: config.prefix + 'mtag', desc: 'Visible mention all members' },
+          ],
+        },
+        {
+          heading: '⟢ 〔 ⚙️ 〕𝐒𝐘𝐒𝐓𝐄𝐌 • 𝐂𝐎𝐍𝐅𝐈𝐆',
+          items: [
+            { cmd: config.prefix + 'setprefix', desc: 'Change command prefix' },
+            { cmd: config.prefix + 'setcmd', desc: 'Bind quoted sticker' },
+            { cmd: config.prefix + 'delcmd', desc: 'Delete quoted sticker binding' },
+            { cmd: config.prefix + 'setsudo', desc: 'Approve a command number' },
+            { cmd: config.prefix + 'delsudo', desc: 'Remove command access' },
+            { cmd: config.prefix + 'info', desc: 'Session information' },
+            { cmd: config.prefix + 'groups', desc: 'List joined groups' },
           ],
         },
       ]));
@@ -327,19 +335,25 @@ async function processMessage(
     }
 
     // ── Set Prefix ──
+    case 'prefix':
     case 'setprefix': {
-      const newPrefix = args[0];
-      if (!newPrefix) {
-        await reply(`Current prefix: ${bold(config.prefix || 'null')}\nUsage: .setprefix [prefix]`);
+      if (command === 'prefix' && args.length === 0) {
+        await reply(asciiBox({ title: 'PREFIX', emoji: '⌨️', rows: [['Current', config.prefix || 'null'], ['Usage', `${config.prefix}setprefix <prefix>`]] }));
         break;
       }
-      updateConfig(telegramId, { prefix: newPrefix === 'null' ? '' : newPrefix, nullPrefix: newPrefix === 'null' });
+      const newPrefix = args[0];
+      if (!newPrefix) {
+        await reply(`Current prefix: ${bold(config.prefix || 'null')}\nUsage: ${config.prefix}setprefix [prefix]`);
+        break;
+      }
+      updateSessionConfig(telegramId, sessionId, { prefix: newPrefix === 'null' ? '' : newPrefix, nullPrefix: newPrefix === 'null' });
       await reply(`✅ Prefix updated to: ${bold(newPrefix)}`);
       break;
     }
 
     // ── Set Sticker Command ──
-    case 'setcmd': {
+    case 'setcmd':
+    case 'delcmd': {
       const contextInfo = msg.message?.extendedTextMessage?.contextInfo
         ?? msg.message?.imageMessage?.contextInfo
         ?? msg.message?.videoMessage?.contextInfo;
@@ -353,6 +367,14 @@ async function processMessage(
       }
 
       const hash = quotedStickerHash;
+      if (command === 'delcmd') {
+        const macros = { ...config.stickerMacros };
+        delete macros[hash];
+        updateSessionConfig(telegramId, sessionId, { stickerMacros: macros });
+        await reply(successCard('STICKER COMMAND DELETED', 'The quoted sticker no longer triggers a command.', [['Hash', hash]]));
+        break;
+      }
+
       const boundCmd = args.join(' ').trim();
       const parsedBinding = boundCmd ? parseCommand(`${config.prefix}${boundCmd}`, {
         ...config,
@@ -366,7 +388,7 @@ async function processMessage(
 
       const normalizedBinding = [parsedBinding.command, ...parsedBinding.args].join(' ');
       const macros = { ...config.stickerMacros, [hash]: normalizedBinding };
-      updateConfig(telegramId, { stickerMacros: macros });
+      updateSessionConfig(telegramId, sessionId, { stickerMacros: macros });
       await reply(successCard('STICKER COMMAND SAVED', 'The sticker macro is ready.', [
         ['Hash', hash],
         ['Command', normalizedBinding],
@@ -399,7 +421,7 @@ async function processMessage(
       const current = new Set(config.sudoNumbers ?? []);
       if (command === 'setsudo') current.add(number);
       else current.delete(number);
-      updateConfig(telegramId, { sudoNumbers: [...current] });
+      updateSessionConfig(telegramId, sessionId, { sudoNumbers: [...current] });
       await reply(successCard(
         command === 'setsudo' ? 'SUDO ADDED' : 'SUDO REMOVED',
         command === 'setsudo' ? 'This number can now run ordinary commands.' : 'Command access was removed.',
@@ -411,7 +433,7 @@ async function processMessage(
     // ── JID Resolver ──
     case 'jid': {
       const link = args[0];
-      if (!link) { await reply('Usage: .jid [group_link]'); break; }
+      if (!link) { await reply(`Usage: ${config.prefix}jid [group_link]`); break; }
       const info = await resolveGroupJid(socket, link);
       if (!info) { await reply('❌ Could not resolve JID'); break; }
       await reply(asciiBox({
@@ -441,10 +463,11 @@ async function processMessage(
     }
 
     // ── gstatus ──
+    case 'smedia':
     case 'gstatus': {
       const text = commandText();
       if (!isGroup) { await reply('❌ Must be used in a WhatsApp group'); break; }
-      if (!text) { await reply('Usage: .gstatus [message], or reply to a message with .gstatus'); break; }
+      if (!text) { await reply(`Usage: ${config.prefix}gstatus [message], or reply to a message with ${config.prefix}gstatus`); break; }
       const sent = await cmdGroupStatus(socket, sessionId, groupJid, text);
       await reply(sent ? '✅ Group status posted!' : '❌ Group status relay failed');
       break;
@@ -453,7 +476,7 @@ async function processMessage(
     // ── tochat ──
     case 'tochat': {
       const [target, ...msgParts] = args;
-      if (!target || msgParts.length === 0) { await reply('Usage: .tochat [jid/link] [message]'); break; }
+      if (!target || msgParts.length === 0) { await reply(`Usage: ${config.prefix}tochat [jid/link] [message]`); break; }
       const res = await cmdToChat(socket, sessionId, target, msgParts.join(' '));
       await reply(res.success ? '✅ Message sent!' : `❌ Failed: ${res.error}`);
       break;
@@ -463,7 +486,7 @@ async function processMessage(
     case 'tochatx': {
       const [target, countStr, ...msgParts] = args;
       if (!target || !countStr || msgParts.length === 0) {
-        await reply('Usage: .tochatx [jid/link] [count] [message]');
+        await reply(`Usage: ${config.prefix}tochatx [jid/link] [count] [message]`);
         break;
       }
       const count = Math.min(parseInt(countStr, 10), 50);
@@ -476,14 +499,26 @@ async function processMessage(
     case 'sstatus':
     case 'spam': {
       const text = args.join(' ');
-      if (!text) { await reply('Usage: .sstatus [message]\nStop with: .stop spam'); break; }
-      if (isSpamLoopActive(sessionId)) { await reply('⚠️ Spam loop already running. Use .stop spam to kill it.'); break; }
-      await reply('🔄 Spam status loop started. Send `.stop spam` to kill it.');
+      if (!text) { await reply(`Usage: ${config.prefix}sstatus [message]\nStop with: ${config.prefix}stop spam`); break; }
+      if (isSpamLoopActive(sessionId)) { await reply(`⚠️ Spam loop already running. Use ${config.prefix}stop spam to kill it.`); break; }
+      await reply(`🔄 Spam status loop started. Send ${config.prefix}stop spam to kill it.`);
       cmdSStatus(socket, sessionId, text).catch(() => { /* background */ });
       break;
     }
 
     // ── statusdesign ──
+    case 'settheme': {
+      const requestedTheme = args[0]?.toLowerCase();
+      if (!statusDesignEngine.themes.includes(requestedTheme as never)) {
+        await reply(warningCard('VALID THEME REQUIRED', `Usage: ${config.prefix}settheme <theme>\nThemes: ${statusDesignEngine.themes.join(', ')}`));
+        break;
+      }
+      updateSessionConfig(telegramId, sessionId, { statusDesignTheme: requestedTheme });
+      await reply(successCard('STATUS THEME SAVED', 'This session will use the selected status design theme.', [['Theme', requestedTheme]]));
+      break;
+    }
+
+    case 'godcast':
     case 'statusdesign': {
       if (!isGroup) { await reply('❌ Must be used in a WhatsApp group'); break; }
       const requestedTheme = statusDesignEngine.themes.includes(args[0]?.toLowerCase() as never)
@@ -491,7 +526,7 @@ async function processMessage(
         : config.statusDesignTheme;
       const url = args.find((arg) => /^https?:\/\/\S+$/u.test(arg));
       if (!url) {
-        await reply(`Usage: .statusdesign [theme] [link]\nThemes: ${statusDesignEngine.themes.join(', ')}`);
+        await reply(`Usage: ${config.prefix}statusdesign [theme] [link]\nThemes: ${statusDesignEngine.themes.join(', ')}`);
         break;
       }
       try {
@@ -553,7 +588,7 @@ async function processMessage(
     // ── allchat ──
     case 'allchat': {
       const text = commandText();
-      if (!text) { await reply('Usage: .allchat [message], or reply to a message with .allchat'); break; }
+      if (!text) { await reply(`Usage: ${config.prefix}allchat [message], or reply to a message with ${config.prefix}allchat`); break; }
       const updateProgress = await createProgressReply('📣 Starting allchat blast…');
       cmdAllChat(socket, sessionId, telegramId, text, {
         onProgress: updateProgress,
@@ -567,7 +602,7 @@ async function processMessage(
     // ── join ──
     case 'join': {
       const link = args[0];
-      if (!link) { await reply('Usage: .join [group_link]'); break; }
+      if (!link) { await reply(`Usage: ${config.prefix}join [group_link]`); break; }
       const res = await cmdJoin(socket, link);
       await reply(res.success
         ? `✅ Joined: ${bold(res.title ?? res.jid ?? 'group')}`
@@ -590,7 +625,7 @@ async function processMessage(
     // ── leave ──
     case 'leave': {
       const target = args[0];
-      if (!target) { await reply('Usage: .leave [jid/link]'); break; }
+      if (!target) { await reply(`Usage: ${config.prefix}leave [jid/link]`); break; }
       const res = await cmdLeave(socket, target);
       await reply(res.success ? '✅ Left group' : `❌ Leave failed: ${res.error}`);
       break;
@@ -640,7 +675,7 @@ async function processMessage(
     // ── Add links to bucket ���─
     case 'addlink': {
       const links = args.filter((a) => a.includes('chat.whatsapp.com'));
-      if (links.length === 0) { await reply('Usage: .addlink [link1] [link2]…'); break; }
+      if (links.length === 0) { await reply(`Usage: ${config.prefix}addlink [link1] [link2]…`); break; }
       const result = addToMainBucket(telegramId, links);
       await reply(`✅ Added ${result.added} links (${result.dupes} dupes skipped)`);
       break;

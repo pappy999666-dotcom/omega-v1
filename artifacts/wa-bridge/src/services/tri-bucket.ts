@@ -80,6 +80,8 @@ export interface ValidateAllResult {
   activated: number;
   killed: number;
   errors: number;
+  retries: number;
+  remaining: number;
   rateLimitPaused: boolean;
 }
 
@@ -101,12 +103,15 @@ export async function validateAllLinks(
     activated: 0,
     killed: 0,
     errors: 0,
+    retries: 0,
+    remaining: main.length,
     rateLimitPaused: false,
   };
 
   const toActivate: BucketEntry[] = [];
   const toDead: BucketEntry[] = [];
   let consecutiveRateErrors = 0;
+  const startedAt = Date.now();
 
   for (let i = 0; i < main.length; i++) {
     const entry = main[i]!;
@@ -114,11 +119,13 @@ export async function validateAllLinks(
     // Circuit breaker check
     if (isCircuitOpen(telegramId, sessionId, 'validator')) {
       result.rateLimitPaused = true;
-      await onProgress?.(`🚦 Circuit open — pausing validation for 1 hour`);
+      result.remaining = main.length - i;
+      await onProgress?.(`🚦 Rate limit stop after 5 retries. Remaining links kept in Main Bucket: ${result.remaining}`);
       break;
     }
 
     try {
+      await onProgress?.(`🔍 Validator Hub\nSession: ${sessionId}\nCurrent link: ${entry.link}\nCompleted: ${i}/${main.length}\nRemaining: ${main.length - i}\nSpeed: ${((i / Math.max((Date.now() - startedAt) / 60000, 0.01))).toFixed(1)}/min\nSuccess: ${result.activated}\nFailed: ${result.killed + result.errors}\nRetries: ${result.retries}`);
       const vr = await validateLink(socket, entry.link);
 
       if (vr.isValid) {
@@ -158,11 +165,13 @@ export async function validateAllLinks(
       const msg = String(err);
       if (msg.includes('rate') || msg.includes('429')) {
         consecutiveRateErrors++;
+        result.retries++;
         const tripped = recordFailure(telegramId, sessionId, 'validator');
         if (consecutiveRateErrors >= 5 || tripped) {
           result.rateLimitPaused = true;
+          result.remaining = main.length - i;
           await onProgress?.(
-            `🚦 5 consecutive rate errors — auto-pausing for 1 hour`
+            `🚦 Rate limit stop after 5 retries. Remaining links kept in Main Bucket: ${result.remaining}`
           );
           break;
         }
@@ -171,6 +180,8 @@ export async function validateAllLinks(
       logger.warn(`[Validator] Error on ${entry.link}: ${msg}`);
     }
   }
+
+  result.remaining = loadBucket(telegramId, 'main').filter((e) => e.status === 'unvalidated').length - toActivate.length - toDead.length;
 
   // Persist results
   if (toActivate.length > 0) moveToActiveBucket(telegramId, toActivate);
