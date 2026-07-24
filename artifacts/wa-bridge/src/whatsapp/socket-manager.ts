@@ -3,14 +3,19 @@
 // Multi-Device Engine with auto-sanitation & circuit breakers
 // ============================================================
 
-import makeWASocket, {
-  DisconnectReason,
-  useMultiFileAuthState,
-  fetchLatestBaileysVersion,
-  makeCacheableSignalKeyStore,
-  type WASocket,
-  type BaileysEventMap,
-} from '@crysnovax/baileys';
+import makeWASocket from '@crysnovax/baileys';
+import * as Baileys from '@crysnovax/baileys';
+import type { BridgeWASocket as WASocket, BaileysEventMap } from './baileys-types.js';
+
+type AuthStateFactory = (folder: string) => Promise<{ state: { creds: { registered?: boolean }; keys: unknown }; saveCreds: () => Promise<void> }>;
+type VersionFactory = () => Promise<{ version: number[] }>;
+type KeyStoreFactory = (keys: unknown, logger: unknown) => unknown;
+
+const DisconnectReason = (Baileys as unknown as { DisconnectReason: { restartRequired: number } }).DisconnectReason;
+const useMultiFileAuthState = (Baileys as unknown as { useMultiFileAuthState: AuthStateFactory }).useMultiFileAuthState;
+const fetchLatestBaileysVersion = (Baileys as unknown as { fetchLatestBaileysVersion: VersionFactory }).fetchLatestBaileysVersion;
+const makeCacheableSignalKeyStore = (Baileys as unknown as { makeCacheableSignalKeyStore: KeyStoreFactory }).makeCacheableSignalKeyStore;
+
 import { Boom } from '@hapi/boom';
 import P from 'pino';
 import QRCode from 'qrcode';
@@ -169,7 +174,7 @@ export async function initSocket(
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
   const { version } = await fetchLatestBaileysVersion();
 
-  const socket: WASocket = makeWASocket({
+  const socket = makeWASocket({
     version,
     auth: {
       creds: state.creds,
@@ -189,7 +194,7 @@ export async function initSocket(
     logger: P({ level: 'silent' }),
     generateHighQualityLinkPreview: true,
     getMessage: async () => undefined,
-  });
+  }) as WASocket;
 
   // ── Auth Events ──────────────────────────────────────────
 

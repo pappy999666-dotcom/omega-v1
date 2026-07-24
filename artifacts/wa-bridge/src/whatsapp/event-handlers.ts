@@ -3,8 +3,7 @@
 // Processes incoming messages, dispatches commands
 // ============================================================
 
-import type { WASocket, proto } from '@crysnovax/baileys';
-import type { BaileysEventMap } from '@crysnovax/baileys';
+import type { BridgeWASocket as WASocket, BaileysEventMap, IMessage, WebMessageInfo } from './baileys-types.js';
 import { parseCommand, parseStickerCommand, hashSticker } from './command-parser.js';
 import { loadConfig, loadSessionMeta, updateSessionMeta } from '../services/workspace.js';
 import { stopSpamLoop, isSpamLoopActive, cmdToChat, cmdToChatX, cmdSStatus, cmdGroupStatus } from './commands/status.js';
@@ -52,7 +51,7 @@ export function isAuthorizedCommandSender(
   return Boolean(sender && sudoNumbers.some((number) => normalizeWhatsAppNumber(number) === sender));
 }
 
-function extractMessageText(message: proto.IMessage | null | undefined): string {
+function extractMessageText(message: IMessage | null | undefined): string {
   if (!message) return '';
   const wrapped = message.ephemeralMessage?.message
     ?? message.viewOnceMessage?.message
@@ -76,7 +75,7 @@ export async function handleWAEvent(
   socket: WASocket
 ): Promise<void> {
   if (event === 'messages.upsert') {
-    await handleMessages(sessionId, data as { messages: proto.IWebMessageInfo[]; type: string }, socket);
+    await handleMessages(sessionId, data as { messages: WebMessageInfo[]; type: string }, socket);
   }
 }
 
@@ -92,7 +91,7 @@ export async function executeBridgeCommand(
   const syntheticMessage = {
     key: { remoteJid: 'status@broadcast', fromMe: false, id: `telegram-${Date.now()}` },
     message: { conversation: text },
-  } as proto.IWebMessageInfo;
+  } as WebMessageInfo;
 
   await processMessage(sessionId, telegramId, syntheticMessage, socket, onReply);
 }
@@ -101,7 +100,7 @@ export async function executeBridgeCommand(
 
 async function handleMessages(
   sessionId: string,
-  upsert: { messages: proto.IWebMessageInfo[]; type: string },
+  upsert: { messages: WebMessageInfo[]; type: string },
   socket: WASocket
 ): Promise<void> {
   if (upsert.type !== 'notify') return;
@@ -124,7 +123,7 @@ async function handleMessages(
 async function processMessage(
   sessionId: string,
   telegramId: string,
-  msg: proto.IWebMessageInfo,
+  msg: WebMessageInfo,
   socket: WASocket,
   replyOverride?: (text: string) => Promise<void>
 ): Promise<void> {
@@ -182,7 +181,7 @@ async function processMessage(
       await replyOverride(initialText);
       return replyOverride;
     }
-    const sent = await socket.sendMessage(groupJid, { text: initialText }, { quoted: msg }) as { key?: proto.IMessageKey } | undefined;
+    const sent = await socket.sendMessage(groupJid, { text: initialText }, { quoted: msg }) as { key?: import("@crysnovax/baileys").WAMessageKey } | undefined;
     const key = sent?.key;
     return async (nextText: string) => {
       if (!key) {

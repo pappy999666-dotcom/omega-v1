@@ -21,7 +21,7 @@ function urlBtn(text: string, url: string, style: ButtonStyle = 'primary'): IKB 
 
 function copyBtn(text: string, copy_text: string, style: ButtonStyle = 'primary'): IKB {
   // Telegram API 9.0+ copy_text button
-  return { text, copy_text: { text: copy_text }, style } as IKB;
+  return { text, copy_text: { text: copy_text }, style } as unknown as IKB;
 }
 
 export function backKeyboard(callback = 'menu:main'): InlineKeyboardMarkup {
@@ -199,6 +199,7 @@ export function adminPanelKeyboard(paused = false, maintenance = false): InlineK
   return {
     inline_keyboard: [
       [btn('👥 Users', 'admin:users:0'), btn('🌐 Master Bucket', 'admin:master:bucket')],
+      [btn('🔐 Force Join', 'admin:forcejoin'), btn('📣 Broadcast', 'admin:broadcast')],
       [
         btn('📡 Omni-Bridge', 'admin:omni'),
         paused

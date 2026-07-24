@@ -97,8 +97,14 @@ export function authMiddleware(): MiddlewareFn<Context> {
  */
 export function forceJoinMiddleware(): MiddlewareFn<Context> {
   return async (ctx, next) => {
-    const sponsorChannel = process.env.TELEGRAM_SPONSOR_CHANNEL;
-    if (!sponsorChannel) return next();
+    const ownerId = process.env.TELEGRAM_OWNER_ID;
+    const ownerConfigTargets = ownerId ? loadConfig(ownerId).forceJoinTargets ?? [] : [];
+    const envTargets = (process.env.TELEGRAM_SPONSOR_CHANNELS ?? process.env.TELEGRAM_SPONSOR_CHANNEL ?? '')
+      .split(',')
+      .map((target) => target.trim())
+      .filter(Boolean);
+    const sponsorChannels = [...new Set([...ownerConfigTargets, ...envTargets])];
+    if (sponsorChannels.length === 0) return next();
 
     const isOwner = (ctx as Context & { isOwner?: boolean }).isOwner;
     if (isOwner) return next();
@@ -107,18 +113,22 @@ export function forceJoinMiddleware(): MiddlewareFn<Context> {
     if (!userId) return next();
 
     try {
-      const member = await ctx.telegram.getChatMember(sponsorChannel, userId);
       const activeStatuses = ['member', 'creator', 'administrator'];
+      const missing: string[] = [];
+      for (const sponsorChannel of sponsorChannels) {
+        const member = await ctx.telegram.getChatMember(sponsorChannel, userId);
+        if (!activeStatuses.includes(member.status)) missing.push(sponsorChannel);
+      }
 
-      if (!activeStatuses.includes(member.status)) {
+      if (missing.length > 0) {
         await ctx.reply(
-          `⚠️ <b>Access Restricted</b>\n\nYou must join our channel first:\n${sponsorChannel}`,
+          `⚠️ <b>Access Restricted</b>\n\nYou must join these channels/groups first:\n${missing.join('\n')}`,
           {
             parse_mode: 'HTML',
             reply_markup: {
               inline_keyboard: [
-                [{ text: '📢 Join Channel', url: `https://t.me/${sponsorChannel.replace('@', '')}`, style: 'primary' }],
-                [{ text: '✅ I Joined', callback_data: 'verify:joined', style: 'success' }],
+                ...missing.filter((target) => target.startsWith('@')).map((target) => [{ text: `📢 Join ${target}`, url: `https://t.me/${target.replace('@', '')}` }]),
+                [{ text: '✅ I Joined', callback_data: 'verify:joined' }],
               ],
             },
           }

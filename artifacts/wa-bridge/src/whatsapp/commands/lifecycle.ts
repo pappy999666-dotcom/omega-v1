@@ -3,7 +3,7 @@
 // .join / .leave / .joinall / .leaveall
 // ============================================================
 
-import type { WASocket } from '@crysnovax/baileys';
+import type { BridgeWASocket as WASocket } from '../baileys-types.js';
 import type { JobResult } from '../../types/index.js';
 import { joinDelay, leaveDelay, exponentialBackoff } from '../../utils/delay.js';
 import { logger } from '../../utils/logger.js';
@@ -16,10 +16,26 @@ import {
 import {
   loadBucket,
   moveToDeadBucket,
+  loadSessionMeta,
+  updateSessionMeta,
 } from '../../services/workspace.js';
 import { extractInviteCode } from '../../services/tri-bucket.js';
 import { resultBox } from '../../utils/ascii-art.js';
 import { humanDuration } from '../../utils/delay.js';
+import { hydratedMessage } from '../preview-generator.js';
+
+
+async function maybeAutoPromote(socket: WASocket, telegramId: string, sessionId: string, groupJid?: string): Promise<void> {
+  if (!groupJid?.endsWith('@g.us')) return;
+  const meta = loadSessionMeta(telegramId, sessionId);
+  const settings = meta?.autoPromote;
+  if (!settings?.enabled || !settings.postOnJoin || !settings.message.trim()) return;
+  const now = Date.now();
+  const intervalMs = Math.max(0, settings.intervalMinutes ?? 0) * 60_000;
+  if (settings.lastPostedAt && intervalMs > 0 && now - settings.lastPostedAt < intervalMs) return;
+  await socket.sendMessage(groupJid, await hydratedMessage(settings.message));
+  updateSessionMeta(telegramId, sessionId, { autoPromote: { ...settings, lastPostedAt: now } });
+}
 
 // ── Single Target ─────────────────────────────────────────
 
@@ -132,6 +148,7 @@ export async function cmdJoinAll(
 
       if (res.success) {
         result.success++;
+        await maybeAutoPromote(socket, telegramId, sessionId, res.jid);
         recordSuccess(telegramId, sessionId, 'lifecycle');
         result.details.push(`✅ Joined: ${res.title ?? res.jid}`);
       } else {
@@ -295,8 +312,8 @@ export async function resolveGroupJid(
     const info = await socket.groupGetInviteInfo(code);
     return {
       jid: info.id,
-      title: info.subject,
-      members: info.size,
+      title: info.subject ?? 'Unknown group',
+      members: info.size ?? 0,
     };
   } catch {
     return null;

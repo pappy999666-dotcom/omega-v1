@@ -4,7 +4,7 @@
 // ============================================================
 
 import { getLinkPreview } from 'link-preview-js';
-import type { WASocket, AnyMessageContent } from '@crysnovax/baileys';
+import type { AnyMessageContent } from './baileys-types.js';
 import { logger } from '../utils/logger.js';
 
 const URL_REGEX =
@@ -53,10 +53,10 @@ export async function fetchLinkMeta(url: string): Promise<LinkMeta | null> {
     if (data.mediaType === 'website') {
       return {
         url,
-        title: data.title,
-        description: data.description,
-        imageUrl: data.images?.[0],
-        siteName: data.siteName,
+        title: 'title' in data ? data.title : undefined,
+        description: 'description' in data ? data.description : undefined,
+        imageUrl: 'images' in data ? data.images?.[0] : undefined,
+        siteName: 'siteName' in data ? data.siteName : undefined,
       };
     }
 
@@ -81,9 +81,11 @@ export async function fetchLinkMeta(url: string): Promise<LinkMeta | null> {
  */
 export async function hydratedMessage(
   text: string,
-  existingPreview?: { url?: string; title?: string; description?: string }
+  existingPreview?: { url?: string; title?: string; description?: string; thumbnail?: Uint8Array; canonicalUrl?: string; favicon?: string; linkPreviewMetadata?: unknown },
+  options: { suppressPreview?: boolean } = {}
 ): Promise<AnyMessageContent> {
   const url = existingPreview?.url ?? extractFirstUrl(text);
+  if (options.suppressPreview) return { text, linkPreview: null };
   if (!url) return { text };
 
   // Baileys expects the link-preview-js field names, notably `matched-text`.
@@ -95,8 +97,11 @@ export async function hydratedMessage(
     text,
     linkPreview: {
       'matched-text': existingPreview.url,
+      'canonical-url': existingPreview.canonicalUrl ?? existingPreview.url,
       title: existingPreview.title ?? '',
       description: existingPreview.description ?? '',
+      jpegThumbnail: existingPreview.thumbnail,
+      linkPreviewMetadata: existingPreview.linkPreviewMetadata,
     },
   } as AnyMessageContent;
 }
