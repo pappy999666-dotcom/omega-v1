@@ -16,7 +16,7 @@ import {
 } from '../../services/circuit-breaker.js';
 import { resultBox } from '../../utils/ascii-art.js';
 import { humanDuration } from '../../utils/delay.js';
-import { loadConfig } from '../../services/workspace.js';
+import { loadSessionConfig } from '../../services/workspace.js';
 import { statusDesignEngine, type StatusTheme } from '../../services/StatusDesignEngine.js';
 import { gcDesignAllocator } from '../../services/GCDesignAllocator.js';
 import { sendGroupStatus } from '../groupStatus.js';
@@ -83,7 +83,7 @@ export async function cmdAllStatus(
   activeRuns.set(sessionId, true);
 
   const groups = await getJoinedGroups(socket);
-  const config = loadConfig(telegramId);
+  const config = loadSessionConfig(telegramId, sessionId);
   const stickyThemes = Object.fromEntries(
     Object.entries(config.statusDesignStickyThemes ?? {}).filter((entry): entry is [string, StatusTheme] =>
       statusDesignEngine.themes.includes(entry[1] as StatusTheme)
@@ -106,11 +106,12 @@ export async function cmdAllStatus(
       break;
     }
 
-    // Circuit breaker check
+    // Circuit breaker check: slow down instead of abandoning the campaign.
     if (isCircuitOpen(telegramId, sessionId, 'allstatus')) {
       result.rateLimited++;
-      result.details.push(`🚦 Circuit open — ${groups.length - i} groups skipped`);
-      break;
+      result.details.push(`🚦 Circuit open — backing off before ${group.subject}`);
+      await opts.onProgress?.(`🚦 allstatus backoff before ${i + 1}/${groups.length}; queue preserved.`);
+      await exponentialBackoff(Math.max(consecutiveFailures, 1), 30_000, 300_000);
     }
 
     // Frozen check
@@ -120,61 +121,58 @@ export async function cmdAllStatus(
       break;
     }
 
-    try {
-      const designedText = config.statusDesignEnabled !== false && rawUrl && !opts.mediaBuffer
-        ? statusDesignEngine.render({
-            theme: campaign.themeFor(group.id),
-            url: rawUrl,
-            message: text.replace(rawUrl, '').trim() || undefined,
-          }).text
-        : text;
+    let posted = false;
+    let lastError = '';
+    for (let attempt = 1; attempt <= 5 && !posted; attempt += 1) {
+      try {
+        const designedText = config.statusDesignEnabled !== false && rawUrl && !opts.mediaBuffer
+          ? statusDesignEngine.render({
+              theme: campaign.themeFor(group.id),
+              url: rawUrl,
+              message: text.replace(rawUrl, '').trim() || undefined,
+            }).text
+          : text;
 
-      await sendGroupStatus(socket, sessionId, group.id, designedText, {
-        mediaBuffer: opts.mediaBuffer,
-        mediaType: opts.mediaType as 'image' | 'video' | 'audio' | undefined,
-        caption: opts.caption ?? designedText,
-      });
+        await sendGroupStatus(socket, sessionId, group.id, designedText, {
+          mediaBuffer: opts.mediaBuffer,
+          mediaType: opts.mediaType as 'image' | 'video' | 'audio' | undefined,
+          caption: opts.caption ?? designedText,
+        });
+        posted = true;
+      } catch (err) {
+        lastError = String(err);
+        consecutiveFailures++;
+        if (/rate|429|spam/i.test(lastError)) {
+          result.rateLimited++;
+          recordFailure(telegramId, sessionId, 'allstatus');
+          await opts.onProgress?.(`🚦 allstatus retry ${attempt}/5 for ${group.subject}`);
+          await exponentialBackoff(attempt, 5000, 120_000);
+        } else if (/not-authorized|forbidden|not in group|bad request|404/i.test(lastError)) {
+          result.skipped++;
+          result.details.push(`⏭️ ${group.subject}: ${lastError.slice(0, 50)}`);
+          break;
+        } else {
+          await exponentialBackoff(attempt, 2000, 30_000);
+        }
+      }
+    }
 
+    if (posted) {
       result.success++;
       consecutiveFailures = 0;
       recordSuccess(telegramId, sessionId, 'allstatus');
       result.details.push(`✅ ${group.subject}`);
-
-      // Progress update every 10 groups
-      if (i % 10 === 0 && opts.onProgress) {
-        await opts.onProgress(
-          `📡 allstatus ${i + 1}/${groups.length} — ✅${result.success} ❌${result.failed}`
-        );
-      }
-
-      // Jittered delay between sends
-      await allstatusDelay();
-    } catch (err) {
-      const msg = String(err);
-      consecutiveFailures++;
-
-      if (msg.includes('rate') || msg.includes('429') || msg.includes('spam')) {
-        result.rateLimited++;
-        const tripped = recordFailure(telegramId, sessionId, 'allstatus');
-        result.details.push(`🚦 Rate limited on ${group.subject}`);
-
-        if (tripped) {
-          await opts.onProgress?.(
-            `🚦 Rate limit circuit tripped — pausing for 1h`
-          );
-          break;
-        }
-
-        // Exponential backoff on rate errors
-        await exponentialBackoff(consecutiveFailures, 5000, 120_000);
-      } else {
-        result.failed++;
-        result.details.push(`❌ ${group.subject}: ${msg.slice(0, 50)}`);
-        if (consecutiveFailures >= 5) {
-          await exponentialBackoff(consecutiveFailures, 2000, 30_000);
-        }
-      }
+    } else if (!result.details.at(-1)?.includes(group.subject)) {
+      result.failed++;
+      result.details.push(`❌ ${group.subject}: ${lastError.slice(0, 50)}`);
     }
+
+    if (i % 10 === 0 && opts.onProgress) {
+      await opts.onProgress(
+        `📡 allstatus ${i + 1}/${groups.length} — ✅${result.success} ❌${result.failed} ⏭️${result.skipped} 🚦${result.rateLimited}`
+      );
+    }
+    await allstatusDelay();
   }
 
   activeRuns.delete(sessionId);
