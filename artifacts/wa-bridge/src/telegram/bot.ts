@@ -72,6 +72,8 @@ import {
   loadSessionMeta,
   saveSessionMeta,
   purgeSession,
+  updateConfig,
+  findSessionOwner,
 } from '../services/workspace.js';
 import { normalizePairingPhone } from '../whatsapp/socket-manager.js';
 import { resolveGroupJid } from '../whatsapp/commands/lifecycle.js';
@@ -91,11 +93,17 @@ interface BotContext extends Context {
     awaitingGlobalBridge?: boolean;
     awaitingSupport?: boolean;
     awaitingProfilePhotoSessionId?: string;
+    awaitingForceJoin?: boolean;
+    awaitingBroadcast?: boolean;
   };
 }
 
 function resetOnboarding(ctx: BotContext): void {
   delete ctx.session.onboarding;
+}
+
+function sessionOwner(ctx: BotContext, sessionId: string): string {
+  return ctx.isOwner ? findSessionOwner(sessionId) ?? ctx.telegramId : ctx.telegramId;
 }
 
 function makeDraftSessionId(telegramId: string, phone: string): string {
@@ -260,6 +268,36 @@ export function createBot(): Telegraf<BotContext> {
     const text = ctx.message.text;
     if (text.startsWith('/')) return; // Let command handlers catch it
 
+    if (ctx.session?.awaitingForceJoin) {
+      ctx.session.awaitingForceJoin = false;
+      const targets = [...new Set(text.split(/[\s,]+/u).map((target) => target.trim()).filter(Boolean))];
+      const verified: string[] = [];
+      for (const target of targets) {
+        try {
+          await ctx.telegram.getChat(target);
+          verified.push(target);
+        } catch (error) {
+          logger.warn('[Bot] Force-join target verification failed', { target, error: String(error) });
+        }
+      }
+      updateConfig(ctx.telegramId, { forceJoinTargets: verified });
+      await ctx.reply(card('Force Join Updated', '🔐', [['Saved targets', String(verified.length)]], verified.join('\n') || 'Force join is disabled.'), { parse_mode: 'HTML' });
+      return;
+    }
+
+    if (ctx.session?.awaitingBroadcast) {
+      ctx.session.awaitingBroadcast = false;
+      const { getAllUserIds } = await import('../services/workspace.js');
+      let sent = 0;
+      let failed = 0;
+      for (const id of getAllUserIds()) {
+        try { await ctx.telegram.sendMessage(Number(id), text); sent++; }
+        catch { failed++; }
+      }
+      await ctx.reply(card('Broadcast Complete', '📣', [['Sent', String(sent)], ['Failed', String(failed)]], 'Text broadcast delivered to registered users.'), { parse_mode: 'HTML' });
+      return;
+    }
+
     // ── Bridge Mode ──────────────────────────────────────
     const bridgeSessionId = getBridgeSession(ctx.telegramId);
     if (bridgeSessionId) {
@@ -403,6 +441,20 @@ export function createBot(): Telegraf<BotContext> {
   });
 
   bot.on('photo', async (ctx) => {
+    if (ctx.session?.awaitingBroadcast) {
+      ctx.session.awaitingBroadcast = false;
+      const { getAllUserIds } = await import('../services/workspace.js');
+      const photo = ctx.message.photo.at(-1);
+      if (!photo) return;
+      let sent = 0;
+      let failed = 0;
+      for (const id of getAllUserIds()) {
+        try { await ctx.telegram.sendPhoto(Number(id), photo.file_id, { caption: ctx.message.caption }); sent++; }
+        catch { failed++; }
+      }
+      await ctx.reply(card('Broadcast Complete', '📣', [['Sent', String(sent)], ['Failed', String(failed)]], 'Photo broadcast delivered.'), { parse_mode: 'HTML' });
+      return;
+    }
     const sessionId = ctx.session?.awaitingProfilePhotoSessionId;
     if (!sessionId) return;
     delete ctx.session.awaitingProfilePhotoSessionId;
@@ -429,6 +481,34 @@ export function createBot(): Telegraf<BotContext> {
       await ctx.reply(noticeCard('Profile Photo Failed', 'WhatsApp could not update the profile photo.', 'error', String(error)), {
         parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`),
       });
+    }
+  });
+
+
+  bot.on('document', async (ctx) => {
+    if (ctx.session?.awaitingBroadcast) {
+      ctx.session.awaitingBroadcast = false;
+      const { getAllUserIds } = await import('../services/workspace.js');
+      let sent = 0;
+      let failed = 0;
+      for (const id of getAllUserIds()) {
+        try { await ctx.telegram.sendDocument(Number(id), ctx.message.document.file_id, { caption: ctx.message.caption }); sent++; }
+        catch { failed++; }
+      }
+      await ctx.reply(card('Broadcast Complete', '📣', [['Sent', String(sent)], ['Failed', String(failed)]], 'Document broadcast delivered.'), { parse_mode: 'HTML' });
+      return;
+    }
+    const name = ctx.message.document.file_name ?? '';
+    if (!/\.(txt|csv|json)$/iu.test(name)) return;
+    try {
+      const fileUrl = await ctx.telegram.getFileLink(ctx.message.document.file_id);
+      const response = await fetch(fileUrl);
+      if (!response.ok) throw new Error(`Telegram download failed with ${response.status}`);
+      const { importLinksToMainBucket } = await import('../services/importer.js');
+      const result = importLinksToMainBucket(ctx.telegramId, await response.text());
+      await ctx.reply(card('Document Imported', '📥', [['Extracted', String(result.extracted)], ['Unique', String(result.unique)], ['Added', String(result.added)], ['Duplicates', String(result.dupes)]], 'Links were parsed, deduplicated, and inserted into Main Bucket.'), { parse_mode: 'HTML' });
+    } catch (error) {
+      await ctx.reply(noticeCard('Import Failed', 'The document could not be imported.', 'error', String(error)), { parse_mode: 'HTML' });
     }
   });
 
@@ -561,7 +641,8 @@ async function routeCallback(
     if (sub === 'menu') {
       const { sessionMenuKeyboard } = await import('./ui/keyboards.js');
       const { loadSessionMeta } = await import('../services/workspace.js');
-      const meta = loadSessionMeta(ctx.telegramId, sessionId);
+      const ownerId = sessionOwner(ctx, sessionId);
+      const meta = loadSessionMeta(ownerId, sessionId);
       if (!meta) { await ctx.answerCbQuery('Session not found'); return; }
       const { sessionCard } = await import('../utils/formatter.js');
       await ctx.editMessageText(
@@ -701,6 +782,16 @@ async function routeCallback(
       return;
     }
     if (sub === 'omni') { await handleOmniBridge(ctx); return; }
+    if (sub === 'forcejoin') {
+      ctx.session.awaitingForceJoin = true;
+      await ctx.editMessageText(card('Force Join Targets', '🔐', [['Mode', 'Replace all targets']], 'Send @channels or numeric chat IDs separated by spaces/commas. Every target is verified before saving.'), { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') });
+      return;
+    }
+    if (sub === 'broadcast') {
+      ctx.session.awaitingBroadcast = true;
+      await ctx.editMessageText(card('Broadcast', '📣', [['Recipients', 'All registered users']], 'Send broadcast text or a photo now.'), { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') });
+      return;
+    }
     if (sub === 'pause') { await handleGlobalPause(ctx, params[1] !== 'off'); return; }
     if (sub === 'maintenance') { await handleMaintenanceToggle(ctx, params[1] !== 'off'); return; }
     if (sub === 'stats') { await handlePlatformStats(ctx); return; }

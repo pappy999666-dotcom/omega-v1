@@ -66,6 +66,8 @@ function defaultConfig(telegramId: string): UserConfig {
     statusDesignEnabled: true,
     statusDesignTheme: 'clean',
     statusDesignStickyThemes: {},
+    forceJoinTargets: [],
+    broadcastEnabled: true,
     joinedAt: Date.now(),
     lastActivity: Date.now(),
   };
@@ -141,7 +143,7 @@ export function loadConfig(telegramId: string): UserConfig {
   if (!fs.existsSync(p)) return defaultConfig(telegramId);
   try {
     const stored = JSON.parse(fs.readFileSync(p, 'utf8')) as Partial<UserConfig>;
-    return { ...defaultConfig(telegramId), ...stored, sudoNumbers: stored.sudoNumbers ?? [] };
+    return { ...defaultConfig(telegramId), ...stored, sudoNumbers: stored.sudoNumbers ?? [], forceJoinTargets: stored.forceJoinTargets ?? [] };
   } catch {
     return defaultConfig(telegramId);
   }
@@ -364,4 +366,17 @@ export function getAllUserIds(): string[] {
   return fs.readdirSync(WORKSPACE_ROOT, { withFileTypes: true })
     .filter((d) => d.isDirectory())
     .map((d) => d.name);
+}
+
+
+export function loadPlatformSessions(): SessionMeta[] {
+  return getAllUserIds().flatMap((telegramId) => Object.values(loadAllSessions(telegramId)));
+}
+
+
+export function findSessionOwner(sessionId: string): string | null {
+  for (const telegramId of getAllUserIds()) {
+    if (loadSessionMeta(telegramId, sessionId)) return telegramId;
+  }
+  return null;
 }

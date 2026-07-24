@@ -1,9 +1,8 @@
 import { logger } from '../utils/logger.js';
 
 export const STATUS_THEMES = [
-  'luxury', 'premium', 'vip', 'cyber', 'hacker', 'gothic', 'noir', 'glass',
-  'modern', 'elegant', 'royal', 'clean', 'minimal', 'kawaii', 'yamii', 'sakura',
-  'anime', 'neon', 'shadow', 'galaxy',
+  'cyber', 'girly', 'guys', 'gothic', 'kawaii', 'yami', 'vampire', 'angel',
+  'webcore', 'dark', 'prestige', 'y2k', 'brat', 'clean',
 ] as const;
 
 export type StatusTheme = (typeof STATUS_THEMES)[number];
@@ -21,33 +20,39 @@ export interface StatusDesignResult {
   url: string;
 }
 
-type ThemeRenderer = (input: Required<Pick<StatusDesignInput, 'url' | 'title' | 'message'>>) => string;
-
-const separated = (top: string, url: string, bottom: string): string =>
-  `${top}\n\n\n${url}\n\n\n${bottom}`;
-
-const renderers: Record<StatusTheme, ThemeRenderer> = {
-  luxury: ({ url, title, message }) => separated(`╔═══ ◆ ${title} ◆ ═══╗\n      ${message}`, url, '╚══════ ◇ ══════╝'),
-  premium: ({ url, title, message }) => separated(`┏━━━━━━━━━━━━━━┓\n┃  ${title.toUpperCase()}\n┗━ ${message}`, url, '━━ VERIFIED ACCESS ━━'),
-  vip: ({ url, title, message }) => separated(`╭─── VIP PASS ───╮\n│ ${title}\n│ ${message}`, url, '╰── ADMIT ONE ──╯'),
-  cyber: ({ url, title, message }) => separated(`[SYS://ONLINE]\n> ${title.toUpperCase()}\n> ${message}`, url, '[END_TRANSMISSION]'),
-  hacker: ({ url, title, message }) => separated(`root@status:~$ open\nACCESS: ${title}\n${message}`, url, 'root@status:~$ _'),
-  gothic: ({ url, title, message }) => separated(`┏━━━━ † ━━━━┓\n   ${title}\n   ${message}`, url, '┗━━━━ † ━━━━┛'),
-  noir: ({ url, title, message }) => separated(`BLACK EDITION\n────────────\n${title}\n${message}`, url, '────────────\nENTER THE STORY'),
-  glass: ({ url, title, message }) => separated(`╭ · · · · · · ╮\n  ${title}\n  ${message}\n╰ · · · · · · ╯`, url, 'CLEAR ACCESS / OPEN NOW'),
-  modern: ({ url, title, message }) => separated(`${title.toUpperCase()}  /  NOW\n${message}\n────────────`, url, 'EXPLORE →'),
-  elegant: ({ url, title, message }) => separated(`— ${title} —\n\n${message}`, url, 'With distinction\n────────────'),
-  royal: ({ url, title, message }) => separated(`♔  ROYAL NOTICE  ♔\n${title}\n╔ ${message} ╗`, url, '♜  BY INVITATION  ♜'),
-  clean: ({ url, title, message }) => separated(`${title}\n${message}`, url, 'Open link to continue'),
-  minimal: ({ url, title, message }) => separated(`${title.toLowerCase()}\n—\n${message}`, url, 'view more.'),
-  kawaii: ({ url, title, message }) => separated(`୨୧  ${title}  ୨୧\n${message}\n⌒⌒⌒⌒⌒`, url, '୨୧ tap to discover ୨୧'),
-  yamii: ({ url, title, message }) => separated(`「 闇 」 ${title}\n━━━━━━━━\n${message}`, url, '影の向こうへ  /  BEYOND'),
-  sakura: ({ url, title, message }) => separated(`﹏﹏ SAKURA ﹏﹏\n${title}\n${message}`, url, '花 • OPEN • 花'),
-  anime: ({ url, title, message }) => separated(`『 ${title.toUpperCase()} 』\nEPISODE: NOW\n${message}`, url, '次回へつづく — CONTINUE'),
-  neon: ({ url, title, message }) => separated(`╔═ N E O N ═╗\n${title.toUpperCase()}\n>>> ${message}`, url, '╚═ LIVE SIGNAL ═╝'),
-  shadow: ({ url, title, message }) => separated(`▓▒░ ${title} ░▒▓\n${message}\n░░░░░░░░░░`, url, 'STEP OUT OF THE SHADOW'),
-  galaxy: ({ url, title, message }) => separated(`✦ .  GALAXY SIGNAL  . ✦\n${title}\n⋆ ${message} ⋆`, url, '✧ DESTINATION UNLOCKED ✧'),
+type ThemeSpec = {
+  label: string;
+  top: string;
+  divider: string;
+  accent?: string;
 };
+
+const THEMES: Record<StatusTheme, ThemeSpec> = {
+  cyber: { label: 'CYBER DROP', top: '⌁  CYBER DROP  ⌁', divider: '━━━ neon access ━━━', accent: '⚡' },
+  girly: { label: 'GIRLY EDIT', top: '♡  GIRLY EDIT  ♡', divider: '──── pretty link ────', accent: '💗' },
+  guys: { label: 'GUYS ONLY', top: '◆  GUYS ONLY  ◆', divider: '──── tap in ────', accent: '🔥' },
+  gothic: { label: 'GOTHIC', top: '†  GOTHIC NOTICE  †', divider: '━━━━ midnight gate ━━━━', accent: '🕯' },
+  kawaii: { label: 'KAWAII', top: '୨୧  KAWAII DROP  ୨୧', divider: '﹏﹏ open link ﹏﹏', accent: '🌸' },
+  yami: { label: 'YAMI', top: '「 闇 」 YAMI SIGNAL', divider: '━━━━ shadow path ━━━━', accent: '🖤' },
+  vampire: { label: 'VAMPIRE', top: '☾  VAMPIRE ACCESS  ☽', divider: '──── bloodline ────', accent: '🩸' },
+  angel: { label: 'ANGEL', top: '✦  ANGEL NOTICE  ✦', divider: '──── soft access ────', accent: '🪽' },
+  webcore: { label: 'WEBCORE', top: '⌘  webcore://live', divider: '──── link.exe ────', accent: '💿' },
+  dark: { label: 'DARK', top: '▓  DARK MODE  ▓', divider: '━━━━ clean access ━━━━', accent: '◼' },
+  prestige: { label: 'PRESTIGE', top: '♛  PRESTIGE ACCESS  ♛', divider: '──── verified link ────', accent: '✨' },
+  y2k: { label: 'Y2K', top: '☆  Y2K PORTAL  ☆', divider: '──── click 2 enter ────', accent: '🛸' },
+  brat: { label: 'BRAT', top: 'brat status update', divider: '──── say less ────', accent: '💚' },
+  clean: { label: 'UPDATE', top: 'Update', divider: '────────────', accent: '•' },
+};
+
+function compact(spec: ThemeSpec, title: string, url: string, message: string): string {
+  return [
+    spec.top,
+    `${spec.accent ?? '•'} ${title}`,
+    spec.divider,
+    url,
+    message,
+  ].join('\n');
+}
 
 export class StatusDesignEngine {
   public readonly themes = [...STATUS_THEMES];
@@ -62,11 +67,9 @@ export class StatusDesignEngine {
       const url = input.url.trim();
       this.assertSafeUrl(url);
       const theme = this.normalizeTheme(input.theme);
-      const text = renderers[theme]({
-        url,
-        title: input.title?.trim() || 'Exclusive Update',
-        message: input.message?.trim() || 'A new experience is ready for you.',
-      });
+      const title = (input.title?.trim() || THEMES[theme].label).slice(0, 64);
+      const message = (input.message?.trim() || 'Tap the link to continue.').slice(0, 320);
+      const text = compact(THEMES[theme], title, url, message);
       this.assertPreviewIntegrity(text, url);
       return { theme, text, url };
     } catch (error) {
@@ -77,11 +80,7 @@ export class StatusDesignEngine {
 
   assertSafeUrl(url: string): void {
     let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      throw new Error('A valid absolute URL is required');
-    }
+    try { parsed = new URL(url); } catch { throw new Error('A valid absolute URL is required'); }
     if (!['http:', 'https:'].includes(parsed.protocol) || /[\r\n\s]/u.test(url)) {
       throw new Error('Only unmodified HTTP(S) URLs are supported');
     }
@@ -89,9 +88,7 @@ export class StatusDesignEngine {
 
   assertPreviewIntegrity(text: string, url: string): void {
     const matches = text.split(url).length - 1;
-    if (matches !== 1 || !text.includes(`\n\n${url}\n\n`)) {
-      throw new Error('Generated design violates link-preview spacing or URL integrity');
-    }
+    if (matches !== 1) throw new Error('Generated design must contain the URL exactly once');
   }
 }
 

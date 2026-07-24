@@ -199,6 +199,7 @@ export function adminPanelKeyboard(paused = false, maintenance = false): InlineK
   return {
     inline_keyboard: [
       [btn('👥 Users', 'admin:users:0'), btn('🌐 Master Bucket', 'admin:master:bucket')],
+      [btn('🔐 Force Join', 'admin:forcejoin'), btn('📣 Broadcast', 'admin:broadcast')],
       [
         btn('📡 Omni-Bridge', 'admin:omni'),
         paused
