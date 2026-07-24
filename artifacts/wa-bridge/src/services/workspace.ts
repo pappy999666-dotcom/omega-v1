@@ -167,6 +167,43 @@ export function updateConfig(
 
 // ── Sessions ──────────────────────────────────────────────
 
+
+export function sessionConfigPath(telegramId: string, sessionId: string): string {
+  return path.join(sessionDir(telegramId, sessionId), 'config.json');
+}
+
+export function loadSessionConfig(telegramId: string, sessionId: string): UserConfig {
+  const base = loadConfig(telegramId);
+  const p = sessionConfigPath(telegramId, sessionId);
+  if (!fs.existsSync(p)) return { ...base, stickerMacros: { ...base.stickerMacros }, sudoNumbers: [...(base.sudoNumbers ?? [])], forceJoinTargets: [...(base.forceJoinTargets ?? [])], statusDesignStickyThemes: { ...(base.statusDesignStickyThemes ?? {}) } };
+  try {
+    const stored = JSON.parse(fs.readFileSync(p, 'utf8')) as Partial<UserConfig>;
+    return {
+      ...base,
+      ...stored,
+      telegramId,
+      stickerMacros: { ...(base.stickerMacros ?? {}), ...(stored.stickerMacros ?? {}) },
+      sudoNumbers: stored.sudoNumbers ?? base.sudoNumbers ?? [],
+      forceJoinTargets: stored.forceJoinTargets ?? base.forceJoinTargets ?? [],
+      statusDesignStickyThemes: { ...(base.statusDesignStickyThemes ?? {}), ...(stored.statusDesignStickyThemes ?? {}) },
+    };
+  } catch {
+    return base;
+  }
+}
+
+export function saveSessionConfig(telegramId: string, sessionId: string, config: UserConfig): void {
+  const p = sessionConfigPath(telegramId, sessionId);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify({ ...config, telegramId }, null, 2));
+}
+
+export function updateSessionConfig(telegramId: string, sessionId: string, patch: Partial<UserConfig>): UserConfig {
+  const updated = { ...loadSessionConfig(telegramId, sessionId), ...patch, lastActivity: Date.now() };
+  saveSessionConfig(telegramId, sessionId, updated);
+  return updated;
+}
+
 export function sessionMetaPath(telegramId: string, sessionId: string): string {
   return path.join(sessionDir(telegramId, sessionId), 'meta.json');
 }

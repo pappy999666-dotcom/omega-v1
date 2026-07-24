@@ -125,7 +125,7 @@ export const ALL_COMMANDS = [
   // Stop
   'stop', 'stopspam', 'spam',
   // Settings
-  'setprefix', 'setcmd', 'setsudo', 'delsudo', 'sudo', 'prefix',
+  'setprefix', 'setcmd', 'delcmd', 'setsudo', 'delsudo', 'sudo', 'prefix',
   // Info
   'menu', 'help', 'ping', 'info', 'groups', 'jid',
   // Bucket

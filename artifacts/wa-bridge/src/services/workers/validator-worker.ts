@@ -49,7 +49,7 @@ async function processValidation(job: Job<JobPayload>): Promise<JobResult> {
     failed: result.errors,
     skipped: 0,
     rateLimited: result.rateLimitPaused ? 1 : 0,
-    details: [`Activated: ${result.activated}`, `Dead: ${result.killed}`, `Errors: ${result.errors}`],
+    details: [`Activated: ${result.activated}`, `Dead: ${result.killed}`, `Errors: ${result.errors}`, `Retries: ${result.retries}`, `Remaining in Main: ${result.remaining}`],
     duration: Date.now() - start,
   };
 }
