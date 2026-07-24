@@ -476,8 +476,9 @@ async function processMessage(
     // ── tochat ──
     case 'tochat': {
       const [target, ...msgParts] = args;
-      if (!target || msgParts.length === 0) { await reply(`Usage: ${config.prefix}tochat [jid/link] [message]`); break; }
-      const res = await cmdToChat(socket, sessionId, target, msgParts.join(' '));
+      const message = msgParts.join(' ').trim() || quotedText.trim();
+      if (!target || !message) { await reply(`Usage: ${config.prefix}tochat [jid/link] [message], or reply to a message with ${config.prefix}tochat [jid/link]`); break; }
+      const res = await cmdToChat(socket, sessionId, target, message);
       await reply(res.success ? '✅ Message sent!' : `❌ Failed: ${res.error}`);
       break;
     }
@@ -485,12 +486,13 @@ async function processMessage(
     // ── tochatx ──
     case 'tochatx': {
       const [target, countStr, ...msgParts] = args;
-      if (!target || !countStr || msgParts.length === 0) {
-        await reply(`Usage: ${config.prefix}tochatx [jid/link] [count] [message]`);
+      const message = msgParts.join(' ').trim() || quotedText.trim();
+      if (!target || !countStr || !message) {
+        await reply(`Usage: ${config.prefix}tochatx [jid/link] [count] [message], or reply to a message with ${config.prefix}tochatx [jid/link] [count]`);
         break;
       }
       const count = Math.min(parseInt(countStr, 10), 50);
-      const res = await cmdToChatX(socket, sessionId, target, count, msgParts.join(' '));
+      const res = await cmdToChatX(socket, sessionId, target, count, message);
       await reply(`✅ Sent ${res.sent}/${count} — ${res.failed} failed`);
       break;
     }
@@ -544,9 +546,9 @@ async function processMessage(
     case 'togstatusx': {
       const repeat = command === 'togstatusx' ? Math.min(Math.max(Number.parseInt(args.shift() ?? '', 10) || 0, 1), 50) : 1;
       const target = args.shift();
-      const message = args.join(' ');
+      const message = args.join(' ').trim() || quotedText.trim();
       if (!target || !message) {
-        await reply(warningCard('TARGET AND MESSAGE REQUIRED', `Usage: ${config.prefix}${command}${command.endsWith('x') ? ' <count>' : ''} <jid or invite link> <message>`));
+        await reply(warningCard('TARGET AND MESSAGE REQUIRED', `Usage: ${config.prefix}${command}${command.endsWith('x') ? ' <count>' : ''} <jid or invite link> <message>, or reply to a message.`));
         break;
       }
       const resolved = target.includes('chat.whatsapp.com') ? await resolveGroupJid(socket, target) : null;

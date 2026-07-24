@@ -129,7 +129,7 @@ export const ALL_COMMANDS = [
   // Info
   'menu', 'help', 'ping', 'info', 'groups', 'jid',
   // Bucket
-  'addlink', 'bucket', 'listlinks',
+  'addlink',
 ] as const;
 
 export type CommandName = typeof ALL_COMMANDS[number];
