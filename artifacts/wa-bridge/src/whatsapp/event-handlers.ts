@@ -24,6 +24,7 @@ import {
 } from '../utils/ascii-art.js';
 import { hydratedMessage } from './preview-generator.js';
 import { statusDesignEngine } from '../services/StatusDesignEngine.js';
+import { postAutoPromoteNow } from '../services/auto-promote.js';
 
 // Map from sessionId → telegramId (populated at init)
 const sessionOwnerMap = new Map<string, string>();
@@ -570,6 +571,7 @@ async function processMessage(
       const link = args[0];
       if (!link) { await reply('Usage: .join [group_link]'); break; }
       const res = await cmdJoin(socket, link);
+      if (res.success && res.jid) await postAutoPromoteNow(sessionId, res.jid, socket).catch((error) => logger.warn('[AutoPromote] Join post failed', { sessionId, error: String(error) }));
       await reply(res.success
         ? `✅ Joined: ${bold(res.title ?? res.jid ?? 'group')}`
         : `❌ Join failed: ${res.error}`);

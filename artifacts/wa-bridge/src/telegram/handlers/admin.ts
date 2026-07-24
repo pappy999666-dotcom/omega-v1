@@ -198,7 +198,7 @@ export async function executeOmniCommand(
   command: string,
   text: string
 ): Promise<void> {
-  const jobId = await enqueueJob('wa:omni', {
+  const jobId = await enqueueJob('wa-omni', {
     telegramId: ctx.telegramId,
     sessionId: 'omni',
     type: 'omni_bridge',
@@ -267,4 +267,58 @@ function humanUptime(): string {
   const h = Math.floor(ms / 3_600_000);
   const m = Math.floor((ms % 3_600_000) / 60_000);
   return `${h}h ${m}m`;
+}
+
+export async function handleForceJoinPanel(ctx: Context & { telegramId: string }): Promise<void> {
+  const cfg = loadConfig(ctx.telegramId);
+  const targets = cfg.forceJoinTargets ?? [];
+  const body = targets.length
+    ? targets.map((target, index) => `${index + 1}. ${H.code(target.id)} ${target.title ? `— ${H.bold(target.title)}` : ''}`).join('\n')
+    : 'No force-join targets configured.';
+  await ctx.editMessageText(`${header('Force Join Targets', '🔐')}\n\n${body}\n\n${H.blockquote('Send /fj_add @channel, /fj_remove @channel, or /fj_clear to manage targets.')}`, {
+    parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel'),
+  }).catch(() => {});
+}
+
+export async function addForceJoinTarget(ctx: Context & { telegramId: string }, raw: string): Promise<void> {
+  const id = raw.trim();
+  if (!id) throw new Error('Target is required');
+  const chat = await ctx.telegram.getChat(id);
+  const cfg = loadConfig(ctx.telegramId);
+  const existing = cfg.forceJoinTargets ?? [];
+  const normalized = String((chat as { username?: string; id: number | string }).username ? `@${(chat as { username: string }).username}` : chat.id);
+  const next = [...existing.filter((target) => target.id !== normalized), { id: normalized, title: (chat as { title?: string }).title ?? normalized, inviteUrl: (chat as { username?: string }).username ? `https://t.me/${(chat as { username: string }).username}` : undefined }];
+  updateConfig(ctx.telegramId, { forceJoinTargets: next });
+  await ctx.reply(`${header('Force Join Added', '✅')}\n\n${H.code(normalized)}`, { parse_mode: 'HTML' });
+}
+
+export async function removeForceJoinTarget(ctx: Context & { telegramId: string }, raw: string): Promise<void> {
+  const id = raw.trim();
+  const cfg = loadConfig(ctx.telegramId);
+  updateConfig(ctx.telegramId, { forceJoinTargets: (cfg.forceJoinTargets ?? []).filter((target) => target.id !== id) });
+  await ctx.reply(`${header('Force Join Removed', '✅')}\n\n${H.code(id)}`, { parse_mode: 'HTML' });
+}
+
+export async function clearForceJoinTargets(ctx: Context & { telegramId: string }): Promise<void> {
+  updateConfig(ctx.telegramId, { forceJoinTargets: [] });
+  await ctx.reply(`${header('Force Join Cleared', '✅')}`, { parse_mode: 'HTML' });
+}
+
+export async function handleBroadcastPanel(ctx: Context & { telegramId: string }): Promise<void> {
+  await ctx.editMessageText(`${header('Broadcast Center', '📣')}\n\nSend /broadcast with text, or reply /broadcast to a photo, video, audio, or document caption/message. It will be delivered to every registered user.`, { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') }).catch(() => {});
+}
+
+export async function broadcastToUsers(ctx: Context, options?: { text?: string; copyFromMessageId?: number }): Promise<void> {
+  const userIds = getAllUserIds().filter((id) => /^\d+$/u.test(id));
+  let sent = 0;
+  for (const id of userIds) {
+    try {
+      if (options?.copyFromMessageId && ctx.chat?.id) await ctx.telegram.copyMessage(Number(id), ctx.chat.id, options.copyFromMessageId);
+      else if (options?.text) await ctx.telegram.sendMessage(Number(id), options.text, { parse_mode: 'HTML' });
+      sent++;
+    } catch (error) {
+      logger.warn('[Broadcast] Delivery failed', { id, error: String(error) });
+    }
+  }
+  await ctx.reply(`${header('Broadcast Complete', '📣')}\n\nDelivered to ${sent}/${userIds.length} users.`, { parse_mode: 'HTML' });
 }

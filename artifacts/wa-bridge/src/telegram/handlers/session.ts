@@ -13,6 +13,7 @@ import {
   purgeSession as wsPurgeSession,
   loadConfig,
   updateSessionMeta,
+  getAllUserIds,
 } from '../../services/workspace.js';
 import {
   initSocket,
@@ -65,27 +66,30 @@ export async function handleSessionsList(
   ctx: Context & { telegramId: string },
   page = 0
 ): Promise<void> {
-  const sessions = Object.values(loadAllSessions(ctx.telegramId));
+  const isOwner = (ctx as Context & { isOwner?: boolean }).isOwner === true;
+  const sessions = isOwner
+    ? getAllUserIds().flatMap((userId) => Object.values(loadAllSessions(userId)))
+    : Object.values(loadAllSessions(ctx.telegramId));
 
   if (sessions.length === 0) {
     await ctx.editMessageText?.(
-      noticeCard('Your WhatsApp Sessions', 'No sessions are configured yet. Create your first session below.', 'info'),
+      noticeCard(isOwner ? 'Platform WhatsApp Sessions' : 'Your WhatsApp Sessions', 'No sessions are configured yet. Create your first session below.', 'info'),
       {
         parse_mode: 'HTML',
         reply_markup: sessionsListKeyboard([], 0),
       }
     ) ?? await ctx.reply(
-      noticeCard('Your WhatsApp Sessions', 'No sessions are configured yet.', 'info'),
+      noticeCard(isOwner ? 'Platform WhatsApp Sessions' : 'Your WhatsApp Sessions', 'No sessions are configured yet.', 'info'),
       { parse_mode: 'HTML', reply_markup: sessionsListKeyboard([], 0) }
     );
     return;
   }
 
-  const text = card('Your WhatsApp Sessions', '📱', [['Configured', String(sessions.length)]], 'Select a named session to view controls or create another one.');
+  const text = card(isOwner ? 'Platform WhatsApp Sessions' : 'Your WhatsApp Sessions', '📱', [['Configured', String(sessions.length)]], isOwner ? 'Owner view includes every user session across the platform.' : 'Select a named session to view controls or create another one.');
   const sessionList = sessions.map((s) => ({
     id: s.sessionId,
     phone: s.phone,
-    label: s.label,
+    label: isOwner ? `${s.label ?? s.phone} · ${s.telegramId}` : s.label,
     status: s.status,
   }));
 

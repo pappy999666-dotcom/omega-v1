@@ -18,6 +18,7 @@ export interface UserConfig {
   statusDesignEnabled?: boolean; // unique per-GC designs for mass status campaigns
   statusDesignTheme?: string; // preferred theme for single-GC status designs
   statusDesignStickyThemes?: Record<string, string>; // group JID → preferred theme
+  forceJoinTargets?: ForceJoinTarget[];
   joinedAt: number;
   lastActivity: number;
 }
@@ -36,6 +37,20 @@ export interface SessionMeta {
   linkCollectionEnabled?: boolean;
   linksCollected?: number;
   joinManager?: JoinManagerState;
+  autoPromote?: AutoPromoteSettings;
+}
+
+export interface ForceJoinTarget {
+  id: string;
+  title?: string;
+  inviteUrl?: string;
+}
+
+export interface AutoPromoteSettings {
+  enabled: boolean;
+  message: string;
+  intervalMinutes: number;
+  lastPostedAt?: number;
 }
 
 export interface JoinManagerState {

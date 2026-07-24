@@ -65,10 +65,10 @@ export function getSubRedis(): Redis {
 // ── Queue Names ───────────────────────────────────────────
 
 export const QUEUE_NAMES = {
-  OUTREACH: 'wa:outreach',
-  VALIDATOR: 'wa:validator',
-  LIFECYCLE: 'wa:lifecycle',
-  OMNI: 'wa:omni',
+  OUTREACH: 'wa-outreach',
+  VALIDATOR: 'wa-validator',
+  LIFECYCLE: 'wa-lifecycle',
+  OMNI: 'wa-omni',
 } as const;
 
 // ── Queue Instances ───────────────────────────────────────

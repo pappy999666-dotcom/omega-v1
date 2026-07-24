@@ -5,6 +5,8 @@
 // ============================================================
 
 import 'dotenv/config';
+import { ensureRuntimeEnv } from './web/env-prompt.js';
+import { startWebServer } from './web/server.js';
 import { logger } from './utils/logger.js';
 import { getRedis, shutdownQueues } from './services/queue.js';
 import { startOutreachWorker } from './services/workers/outreach-worker.js';
@@ -21,6 +23,7 @@ import { setLifecycleBotRef } from './services/workers/lifecycle-worker.js';
 import { initSocket } from './whatsapp/socket-manager.js';
 import type { BaileysEventMap } from '@crysnovax/baileys';
 import { sleep } from './utils/delay.js';
+import { startAutoPromoteScheduler } from './services/auto-promote.js';
 
 // ── ASCII Banner ──────────────────────────────────────────
 
@@ -45,6 +48,7 @@ function printBanner(): void {
 
 async function bootstrap(): Promise<void> {
   printBanner();
+  await ensureRuntimeEnv();
   logger.info('[Boot] Starting WA-Bridge...');
 
   // 1. Verify environment
@@ -121,7 +125,11 @@ async function bootstrap(): Promise<void> {
   logger.info('[Boot] Restoring sessions from disk...');
   await restoreSessions();
 
-  // 8. Launch Telegram bot
+  // 8. Start scheduled auto-promote loop and web dashboard
+  startAutoPromoteScheduler();
+  await startWebServer();
+
+  // 9. Launch Telegram bot
   logger.info('[Boot] Launching Telegram bot...');
   await bot.launch({
     allowedUpdates: [

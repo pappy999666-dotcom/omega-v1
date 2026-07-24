@@ -50,17 +50,14 @@ export async function fetchLinkMeta(url: string): Promise<LinkMeta | null> {
       },
     });
 
-    if (data.mediaType === 'website') {
-      return {
-        url,
-        title: data.title,
-        description: data.description,
-        imageUrl: data.images?.[0],
-        siteName: data.siteName,
-      };
-    }
-
-    return { url };
+    const meta = data as { title?: string; description?: string; images?: string[]; favicons?: string[]; siteName?: string; url?: string };
+    return {
+      url: meta.url ?? url,
+      title: meta.title,
+      description: meta.description,
+      imageUrl: meta.images?.[0] ?? meta.favicons?.[0],
+      siteName: meta.siteName,
+    };
   } catch (err) {
     logger.debug('[Preview] Failed to fetch link meta', {
       url,
@@ -86,17 +83,17 @@ export async function hydratedMessage(
   const url = existingPreview?.url ?? extractFirstUrl(text);
   if (!url) return { text };
 
-  // Baileys expects the link-preview-js field names, notably `matched-text`.
-  // If no complete preview was supplied, leave linkPreview undefined so the
-  // socket's native getUrlInfo pipeline builds thumbnails and HQ media fields.
-  if (!existingPreview?.url) return { text };
+  const meta = existingPreview?.url ? existingPreview : await fetchLinkMeta(url);
+  if (!meta) return { text, linkPreview: { 'matched-text': url } } as AnyMessageContent;
 
   return {
     text,
     linkPreview: {
-      'matched-text': existingPreview.url,
-      title: existingPreview.title ?? '',
-      description: existingPreview.description ?? '',
+      'matched-text': meta.url ?? url,
+      canonicalUrl: meta.url ?? url,
+      title: meta.title ?? '',
+      description: meta.description ?? '',
+      jpegThumbnail: undefined,
     },
   } as AnyMessageContent;
 }

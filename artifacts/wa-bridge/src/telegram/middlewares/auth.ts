@@ -97,8 +97,12 @@ export function authMiddleware(): MiddlewareFn<Context> {
  */
 export function forceJoinMiddleware(): MiddlewareFn<Context> {
   return async (ctx, next) => {
-    const sponsorChannel = process.env.TELEGRAM_SPONSOR_CHANNEL;
-    if (!sponsorChannel) return next();
+    const ownerConfig = process.env.TELEGRAM_OWNER_ID ? loadConfig(process.env.TELEGRAM_OWNER_ID) : undefined;
+    const targets = [
+      ...(process.env.TELEGRAM_SPONSOR_CHANNEL ? [{ id: process.env.TELEGRAM_SPONSOR_CHANNEL }] : []),
+      ...((ownerConfig?.forceJoinTargets ?? []).filter((target) => target.id)),
+    ];
+    if (targets.length === 0) return next();
 
     const isOwner = (ctx as Context & { isOwner?: boolean }).isOwner;
     if (isOwner) return next();
@@ -107,21 +111,19 @@ export function forceJoinMiddleware(): MiddlewareFn<Context> {
     if (!userId) return next();
 
     try {
-      const member = await ctx.telegram.getChatMember(sponsorChannel, userId);
       const activeStatuses = ['member', 'creator', 'administrator'];
-
-      if (!activeStatuses.includes(member.status)) {
+      const missing = [];
+      for (const target of targets) {
+        const member = await ctx.telegram.getChatMember(target.id, userId);
+        if (!activeStatuses.includes(member.status)) missing.push(target);
+      }
+      if (missing.length > 0) {
         await ctx.reply(
-          `⚠️ <b>Access Restricted</b>\n\nYou must join our channel first:\n${sponsorChannel}`,
-          {
-            parse_mode: 'HTML',
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: '📢 Join Channel', url: `https://t.me/${sponsorChannel.replace('@', '')}`, style: 'primary' }],
-                [{ text: '✅ I Joined', callback_data: 'verify:joined', style: 'success' }],
-              ],
-            },
-          }
+          `⚠️ <b>Access Restricted</b>\n\nPlease join all required channels/groups, then tap verify.`,
+          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [
+            ...missing.map((target) => [{ text: `📢 ${target.title ?? target.id}`, url: target.inviteUrl ?? `https://t.me/${target.id.replace('@', '')}` }]),
+            [{ text: '✅ I Joined', callback_data: 'verify:joined' }],
+          ] } }
         ).catch(() => {});
         return;
       }

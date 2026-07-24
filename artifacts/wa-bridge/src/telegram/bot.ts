@@ -51,6 +51,12 @@ import {
   handleGlobalPause,
   handleMaintenanceToggle,
   handlePlatformStats,
+  handleForceJoinPanel,
+  addForceJoinTarget,
+  removeForceJoinTarget,
+  clearForceJoinTargets,
+  handleBroadcastPanel,
+  broadcastToUsers,
 } from './handlers/admin.js';
 import {
   mainMenuKeyboard,
@@ -70,12 +76,15 @@ import {
   loadConfig,
   loadBucket,
   loadSessionMeta,
+  loadSessionMetaAny,
+  findSessionOwner,
   saveSessionMeta,
   purgeSession,
 } from '../services/workspace.js';
 import { normalizePairingPhone } from '../whatsapp/socket-manager.js';
 import { resolveGroupJid } from '../whatsapp/commands/lifecycle.js';
 import { executeBridgeCommand } from '../whatsapp/event-handlers.js';
+import { importLinksToMain } from '../services/link-import.js';
 
 // ── Context Extension ─────────────────────────────────────
 
@@ -185,6 +194,27 @@ export function createBot(): Telegraf<BotContext> {
 
   bot.command('admin', ownerOnly() as Parameters<typeof bot.use>[0], async (ctx) => {
     await handleAdminPanel(ctx);
+  });
+
+  bot.command('fj_add', ownerOnly() as Parameters<typeof bot.use>[0], async (ctx) => {
+    const target = ctx.message.text.split(' ').slice(1).join(' ');
+    await addForceJoinTarget(ctx, target);
+  });
+
+  bot.command('fj_remove', ownerOnly() as Parameters<typeof bot.use>[0], async (ctx) => {
+    const target = ctx.message.text.split(' ').slice(1).join(' ');
+    await removeForceJoinTarget(ctx, target);
+  });
+
+  bot.command('fj_clear', ownerOnly() as Parameters<typeof bot.use>[0], async (ctx) => {
+    await clearForceJoinTargets(ctx);
+  });
+
+  bot.command('broadcast', ownerOnly() as Parameters<typeof bot.use>[0], async (ctx) => {
+    const text = ctx.message.text.split(' ').slice(1).join(' ').trim();
+    if (text) await broadcastToUsers(ctx, { text });
+    else if (ctx.message.reply_to_message) await broadcastToUsers(ctx, { copyFromMessageId: ctx.message.reply_to_message.message_id });
+    else await ctx.reply('Reply to media or use /broadcast your message');
   });
 
   // /jid [link] — resolve group JID (admin utility)
@@ -402,6 +432,24 @@ export function createBot(): Telegraf<BotContext> {
     }
   });
 
+
+  bot.on('document', async (ctx) => {
+    const doc = ctx.message.document;
+    if (!doc.file_name || !/\.(txt|csv|json)$/iu.test(doc.file_name)) return;
+    try {
+      const fileUrl = await ctx.telegram.getFileLink(doc.file_id);
+      const response = await fetch(fileUrl);
+      if (!response.ok) throw new Error(`Telegram download failed with ${response.status}`);
+      const content = await response.text();
+      const result = importLinksToMain(ctx.telegramId, doc.file_name, content);
+      await ctx.reply(card('Document Import Complete', '📥', [
+        ['Extracted', String(result.extracted)], ['Added', String(result.added)], ['Duplicates', String(result.dupes)],
+      ], 'Links were parsed, deduplicated, and inserted into your Main Bucket.'), { parse_mode: 'HTML' });
+    } catch (error) {
+      await ctx.reply(noticeCard('Document Import Failed', 'Could not process that document.', 'error', String(error)), { parse_mode: 'HTML' });
+    }
+  });
+
   bot.on('photo', async (ctx) => {
     const sessionId = ctx.session?.awaitingProfilePhotoSessionId;
     if (!sessionId) return;
@@ -561,7 +609,8 @@ async function routeCallback(
     if (sub === 'menu') {
       const { sessionMenuKeyboard } = await import('./ui/keyboards.js');
       const { loadSessionMeta } = await import('../services/workspace.js');
-      const meta = loadSessionMeta(ctx.telegramId, sessionId);
+      const ownerId = ctx.isOwner ? findSessionOwner(sessionId) ?? ctx.telegramId : ctx.telegramId;
+      const meta = ctx.isOwner ? loadSessionMetaAny(sessionId) : loadSessionMeta(ctx.telegramId, sessionId);
       if (!meta) { await ctx.answerCbQuery('Session not found'); return; }
       const { sessionCard } = await import('../utils/formatter.js');
       await ctx.editMessageText(
@@ -570,7 +619,7 @@ async function routeCallback(
       ).catch(() => {});
       return;
     }
-    if (sub === 'info') { await handleSessionInfo(ctx, sessionId); return; }
+    if (sub === 'info') { await handleSessionInfo({ ...ctx, telegramId: (ctx.isOwner ? findSessionOwner(sessionId) ?? ctx.telegramId : ctx.telegramId) } as BotContext, sessionId); return; }
     if (sub === 'groups') {
       const socket = getSocket(sessionId);
       if (!socket) {
@@ -591,11 +640,11 @@ async function routeCallback(
       );
       return;
     }
-    if (sub === 'freeze') { await handleFreezeSession(ctx, sessionId); return; }
-    if (sub === 'unfreeze') { await handleUnfreezeSession(ctx, sessionId); return; }
-    if (sub === 'reinit') { await handleReinitSession(ctx, sessionId); return; }
-    if (sub === 'purge' && params[2] === 'confirm') { await handlePurgeConfirm(ctx, sessionId); return; }
-    if (sub === 'purge') { await handlePurgeSession(ctx, sessionId); return; }
+    if (sub === 'freeze') { await handleFreezeSession({ ...ctx, telegramId: (ctx.isOwner ? findSessionOwner(sessionId) ?? ctx.telegramId : ctx.telegramId) } as BotContext, sessionId); return; }
+    if (sub === 'unfreeze') { await handleUnfreezeSession({ ...ctx, telegramId: (ctx.isOwner ? findSessionOwner(sessionId) ?? ctx.telegramId : ctx.telegramId) } as BotContext, sessionId); return; }
+    if (sub === 'reinit') { await handleReinitSession({ ...ctx, telegramId: (ctx.isOwner ? findSessionOwner(sessionId) ?? ctx.telegramId : ctx.telegramId) } as BotContext, sessionId); return; }
+    if (sub === 'purge' && params[2] === 'confirm') { await handlePurgeConfirm({ ...ctx, telegramId: (ctx.isOwner ? findSessionOwner(sessionId) ?? ctx.telegramId : ctx.telegramId) } as BotContext, sessionId); return; }
+    if (sub === 'purge') { await handlePurgeSession({ ...ctx, telegramId: (ctx.isOwner ? findSessionOwner(sessionId) ?? ctx.telegramId : ctx.telegramId) } as BotContext, sessionId); return; }
     if (sub === 'pfp') {
       const operation = params[2];
       const socket = getSocket(sessionId);
@@ -621,13 +670,13 @@ async function routeCallback(
     if (sub === 'bridge') { await handleBridgeSession(ctx, sessionId); return; }
     if (sub === 'collect') {
       const enabled = params[2] === 'on' ? true : params[2] === 'off' ? false : undefined;
-      await handleLinkCollection(ctx, sessionId, enabled);
+      await handleLinkCollection({ ...ctx, telegramId: (ctx.isOwner ? findSessionOwner(sessionId) ?? ctx.telegramId : ctx.telegramId) } as BotContext, sessionId, enabled);
       return;
     }
-    if (sub === 'joinmgr') { await handleJoinManager(ctx, sessionId); return; }
+    if (sub === 'joinmgr') { await handleJoinManager({ ...ctx, telegramId: (ctx.isOwner ? findSessionOwner(sessionId) ?? ctx.telegramId : ctx.telegramId) } as BotContext, sessionId); return; }
     if (sub === 'join') {
       const operation = params[2] as 'start' | 'pause' | 'stop' | undefined;
-      await handleJoinManager(ctx, sessionId, operation);
+      await handleJoinManager({ ...ctx, telegramId: (ctx.isOwner ? findSessionOwner(sessionId) ?? ctx.telegramId : ctx.telegramId) } as BotContext, sessionId, operation);
       return;
     }
     return;
@@ -704,6 +753,8 @@ async function routeCallback(
     if (sub === 'pause') { await handleGlobalPause(ctx, params[1] !== 'off'); return; }
     if (sub === 'maintenance') { await handleMaintenanceToggle(ctx, params[1] !== 'off'); return; }
     if (sub === 'stats') { await handlePlatformStats(ctx); return; }
+    if (sub === 'forcejoin') { await handleForceJoinPanel(ctx); return; }
+    if (sub === 'broadcast') { await handleBroadcastPanel(ctx); return; }
     return;
   }
 

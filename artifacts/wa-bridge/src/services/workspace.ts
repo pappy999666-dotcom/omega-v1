@@ -66,6 +66,7 @@ function defaultConfig(telegramId: string): UserConfig {
     statusDesignEnabled: true,
     statusDesignTheme: 'clean',
     statusDesignStickyThemes: {},
+    forceJoinTargets: [],
     joinedAt: Date.now(),
     lastActivity: Date.now(),
   };
@@ -364,4 +365,16 @@ export function getAllUserIds(): string[] {
   return fs.readdirSync(WORKSPACE_ROOT, { withFileTypes: true })
     .filter((d) => d.isDirectory())
     .map((d) => d.name);
+}
+
+export function findSessionOwner(sessionId: string): string | null {
+  for (const userId of getAllUserIds()) {
+    if (loadSessionMeta(userId, sessionId)) return userId;
+  }
+  return null;
+}
+
+export function loadSessionMetaAny(sessionId: string): SessionMeta | null {
+  const owner = findSessionOwner(sessionId);
+  return owner ? loadSessionMeta(owner, sessionId) : null;
 }
