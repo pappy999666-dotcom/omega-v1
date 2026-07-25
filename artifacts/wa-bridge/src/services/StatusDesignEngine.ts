@@ -44,13 +44,12 @@ const THEMES: Record<StatusTheme, ThemeSpec> = {
   clean: { label: 'UPDATE', top: 'Update', divider: '────────────', accent: '•' },
 };
 
-function compact(spec: ThemeSpec, title: string, url: string, message: string): string {
+function compact(spec: ThemeSpec, title: string, url: string): string {
   return [
     spec.top,
     `${spec.accent ?? '•'} ${title}`,
     spec.divider,
     url,
-    message,
   ].join('\n');
 }
 
@@ -68,8 +67,10 @@ export class StatusDesignEngine {
       this.assertSafeUrl(url);
       const theme = this.normalizeTheme(input.theme);
       const title = (input.title?.trim() || THEMES[theme].label).slice(0, 64);
-      const message = (input.message?.trim() || 'Tap the link to continue.').slice(0, 320);
-      const text = compact(THEMES[theme], title, url, message);
+      // Keep generated status cards compact. The optional message remains in
+      // the input contract for callers, but descriptions are intentionally
+      // omitted so long web metadata cannot overwhelm the status.
+      const text = compact(THEMES[theme], title, url);
       this.assertPreviewIntegrity(text, url);
       return { theme, text, url };
     } catch (error) {

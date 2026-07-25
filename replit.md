@@ -34,7 +34,7 @@ _Describe the high-level user-facing capabilities of this app once they exist._
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- Status cards should stay compact: use the URL's title and Omega design only; omit web/URL descriptions because they can make WhatsApp statuses too long.
 
 ## Gotchas
 
