@@ -20,6 +20,7 @@ import { loadSessionConfig } from '../../services/workspace.js';
 import { statusDesignEngine, type StatusTheme } from '../../services/StatusDesignEngine.js';
 import { gcDesignAllocator } from '../../services/GCDesignAllocator.js';
 import { sendGroupStatus } from '../groupStatus.js';
+import { generateStatusCard } from '../../services/status-card-pipeline.js';
 
 // Track active allstatus/allchat runs
 const activeRuns = new Map<string, boolean>();
@@ -126,11 +127,7 @@ export async function cmdAllStatus(
     for (let attempt = 1; attempt <= 5 && !posted; attempt += 1) {
       try {
         const designedText = config.statusDesignEnabled !== false && rawUrl && !opts.mediaBuffer
-          ? statusDesignEngine.render({
-              theme: campaign.themeFor(group.id),
-              url: rawUrl,
-              message: text.replace(rawUrl, '').trim() || undefined,
-            }).text
+          ? await generateStatusCard(text, campaign.themeFor(group.id))
           : text;
 
         await sendGroupStatus(socket, sessionId, group.id, designedText, {

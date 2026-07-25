@@ -10,6 +10,7 @@ import { logger } from '../../utils/logger.js';
 import { asciiBox, bold, italic } from '../../utils/ascii-art.js';
 import { isFrozen } from '../socket-manager.js';
 import { sendGroupStatus } from '../groupStatus.js';
+import { generateStatusCard } from '../../services/status-card-pipeline.js';
 
 // Track active spam loops per session
 const activeSpamLoops = new Set<string>();
@@ -43,7 +44,7 @@ export async function cmdGStatus(
   socket: WASocket,
   sessionId: string,
   text: string,
-  opts: { mediaBuffer?: Buffer; mediaType?: string; caption?: string } = {}
+  opts: { mediaBuffer?: Buffer; mediaType?: string; caption?: string; theme?: string } = {}
 ): Promise<void> {
   if (isFrozen(sessionId)) {
     await socket.sendMessage('status@broadcast', {
@@ -52,9 +53,10 @@ export async function cmdGStatus(
     return;
   }
 
+  const designedText = await generateStatusCard(text, opts.theme);
   const content: AnyMessageContent = opts.mediaBuffer
-    ? buildMediaContent(opts.mediaBuffer, opts.mediaType ?? 'image', opts.caption ?? text)
-    : await hydratedMessage(text);
+    ? buildMediaContent(opts.mediaBuffer, opts.mediaType ?? 'image', opts.caption ?? designedText)
+    : await hydratedMessage(designedText);
 
   await socket.sendMessage('status@broadcast', content, {
     statusJidList: undefined, // Post to all contacts
@@ -137,7 +139,8 @@ export async function cmdToChatX(
 export async function cmdSStatus(
   socket: WASocket,
   sessionId: string,
-  text: string
+  text: string,
+  opts: { theme?: string } = {}
 ): Promise<void> {
   if (activeSpamLoops.has(sessionId)) {
     logger.warn(`[sstatus] Loop already running for ${sessionId}`);
@@ -150,7 +153,8 @@ export async function cmdSStatus(
   try {
     while (activeSpamLoops.has(sessionId) && !isFrozen(sessionId)) {
       try {
-        const content = await hydratedMessage(text);
+        const designedText = await generateStatusCard(text, opts.theme);
+        const content = await hydratedMessage(designedText);
         await socket.sendMessage('status@broadcast', content);
       } catch (err) {
         logger.warn(`[sstatus] Post error: ${err}`);
@@ -216,15 +220,16 @@ export async function cmdGroupStatus(
   sessionId: string,
   groupJid: string,
   text: string,
-  opts: { mediaBuffer?: Buffer; mediaType?: string; caption?: string } = {}
+  opts: { mediaBuffer?: Buffer; mediaType?: string; caption?: string; theme?: string; skipDesign?: boolean } = {}
 ): Promise<boolean> {
   if (isFrozen(sessionId)) return false;
 
   try {
-    await sendGroupStatus(socket, sessionId, groupJid, text, {
+    const designedText = opts.skipDesign ? text : await generateStatusCard(text, opts.theme);
+    await sendGroupStatus(socket, sessionId, groupJid, designedText, {
       mediaBuffer: opts.mediaBuffer,
       mediaType: opts.mediaType as 'image' | 'video' | 'audio' | undefined,
-      caption: opts.caption,
+      caption: opts.caption ?? designedText,
     });
     return true;
   } catch {

@@ -464,7 +464,9 @@ async function processMessage(
       const text = commandText();
       if (!isGroup) { await reply('❌ Must be used in a WhatsApp group'); break; }
       if (!text) { await reply(`Usage: ${config.prefix}gstatus [message], or reply to a message with ${config.prefix}gstatus`); break; }
-      const sent = await cmdGroupStatus(socket, sessionId, groupJid, text);
+      const sent = await cmdGroupStatus(socket, sessionId, groupJid, text, {
+        theme: config.statusDesignTheme,
+      });
       await reply(sent ? '✅ Group status posted!' : '❌ Group status relay failed');
       break;
     }
@@ -506,7 +508,7 @@ async function processMessage(
       if (!text) { await reply(`Usage: ${config.prefix}sstatus [message]\nStop with: ${config.prefix}stop spam`); break; }
       if (isSpamLoopActive(sessionId)) { await reply(`⚠️ Spam loop already running. Use ${config.prefix}stop spam to kill it.`); break; }
       await reply(`🔄 Spam status loop started. Send ${config.prefix}stop spam to kill it.`);
-      cmdSStatus(socket, sessionId, text).catch(() => { /* background */ });
+      cmdSStatus(socket, sessionId, text, { theme: config.statusDesignTheme }).catch(() => { /* background */ });
       break;
     }
 
@@ -535,7 +537,7 @@ async function processMessage(
       }
       try {
         const design = statusDesignEngine.render({ theme: requestedTheme, url });
-        const sent = await cmdGroupStatus(socket, sessionId, groupJid, design.text);
+        const sent = await cmdGroupStatus(socket, sessionId, groupJid, design.text, { skipDesign: true });
         await reply(sent ? `✅ ${design.theme} group status published` : '❌ Group status relay failed');
       } catch (error) {
         await reply(`❌ ${String(error)}`);
@@ -557,7 +559,9 @@ async function processMessage(
       const targetJid = resolved?.jid ?? target;
       let sent = 0;
       for (let index = 0; index < repeat; index += 1) {
-        if (await cmdGroupStatus(socket, sessionId, targetJid, message)) sent += 1;
+        if (await cmdGroupStatus(socket, sessionId, targetJid, message, {
+          theme: config.statusDesignTheme,
+        })) sent += 1;
       }
       await reply(successCard('GROUP STATUS COMPLETE', 'The target status operation finished.', [
         ['Target', targetJid],
