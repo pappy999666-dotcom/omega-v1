@@ -1,9 +1,20 @@
+// ============================================================
+// WA-Bridge — Omega Status Card Generator
+// Procedural, compact, WhatsApp-native aesthetic
+// Format: decoration → URL → title → decoration (no boxes)
+// ============================================================
+
 import crypto from 'crypto';
 import { logger } from '../utils/logger.js';
 
 export const STATUS_THEMES = [
-  'cyber', 'girly', 'guys', 'gothic', 'kawaii', 'yami', 'vampire', 'angel',
-  'webcore', 'dark', 'prestige', 'y2k', 'brat', 'clean',
+  // New theme families
+  'kawaii', 'sakura', 'japanese', 'cyber', 'minimal', 'luxury',
+  'dreamcore', 'angelcore', 'gothic', 'soft', 'cloud', 'moon',
+  'ribbon', 'pixel', 'flower', 'stars', 'hearts',
+  // Legacy aliases (kept for backward compat — mapped to families below)
+  'girly', 'guys', 'yami', 'vampire', 'angel', 'webcore',
+  'dark', 'prestige', 'y2k', 'brat', 'clean',
 ] as const;
 
 export type StatusTheme = (typeof STATUS_THEMES)[number];
@@ -21,203 +32,263 @@ export interface StatusDesignResult {
   url: string;
 }
 
-type ThemeSpec = {
-  label: string;
-  accents: readonly string[];
-  titleWords: readonly string[];
+// ── Theme Family Mapping ──────────────────────────────────
+
+type ThemeFamily =
+  | 'floral' | 'lunar' | 'ethereal' | 'tech' | 'luxury'
+  | 'cute' | 'cloud' | 'pixel' | 'stars' | 'minimal' | 'japanese';
+
+const THEME_TO_FAMILY: Record<StatusTheme, ThemeFamily> = {
+  // New
+  kawaii: 'floral', sakura: 'floral', flower: 'floral',
+  moon: 'lunar', gothic: 'lunar', vampire: 'lunar',
+  dreamcore: 'ethereal', angelcore: 'ethereal', soft: 'ethereal',
+  cyber: 'tech', webcore: 'tech', dark: 'tech',
+  luxury: 'luxury', prestige: 'luxury',
+  ribbon: 'cute', hearts: 'cute', y2k: 'cute', brat: 'cute',
+  cloud: 'cloud', pixel: 'pixel', stars: 'stars',
+  minimal: 'minimal', clean: 'minimal',
+  japanese: 'japanese',
+  // Legacy
+  girly: 'floral', guys: 'cute', yami: 'lunar',
+  angel: 'ethereal',
 };
 
-const THEMES: Record<StatusTheme, ThemeSpec> = {
-  cyber: { label: 'CYBER DROP', accents: ['⌁', '⚡', '⌘', '▣'], titleWords: ['neon', 'access', 'signal', 'online'] },
-  girly: { label: 'GIRLY EDIT', accents: ['♡', '💗', '୨୧', '✿'], titleWords: ['pretty', 'sweet', 'lovely', 'link'] },
-  guys: { label: 'GUYS ONLY', accents: ['◆', '🔥', '◈', '✦'], titleWords: ['tap', 'in', 'open', 'now'] },
-  gothic: { label: 'GOTHIC', accents: ['†', '🕯', '☾', '♱'], titleWords: ['midnight', 'gate', 'shadow', 'entry'] },
-  kawaii: { label: 'KAWAII', accents: ['୨୧', '🌸', '♡', '꒰'], titleWords: ['soft', 'cute', 'open', 'link'] },
-  yami: { label: 'YAMI', accents: ['「', '闇', '🖤', '┆'], titleWords: ['shadow', 'path', 'dark', 'signal'] },
-  vampire: { label: 'VAMPIRE', accents: ['☾', '🩸', '†', '♛'], titleWords: ['bloodline', 'after', 'dark', 'hours'] },
-  angel: { label: 'ANGEL', accents: ['✦', '🪽', '♡', '⋆'], titleWords: ['soft', 'access', 'heaven', 'sent'] },
-  webcore: { label: 'WEBCORE', accents: ['⌘', '💿', '⌁', '::'], titleWords: ['link.exe', 'web', 'portal', 'live'] },
-  dark: { label: 'DARK', accents: ['▓', '◼', '▰', '■'], titleWords: ['clean', 'access', 'dark', 'mode'] },
-  prestige: { label: 'PRESTIGE', accents: ['♛', '✨', '◆', '✦'], titleWords: ['verified', 'private', 'select', 'access'] },
-  y2k: { label: 'Y2K', accents: ['☆', '🛸', '✧', '💿'], titleWords: ['click', '2', 'enter', 'portal'] },
-  brat: { label: 'BRAT', accents: ['💚', '★', '!', '✶'], titleWords: ['say', 'less', 'status', 'update'] },
-  clean: { label: 'UPDATE', accents: ['•', '—', '·', '°'], titleWords: ['open', 'link', 'update', 'shared'] },
-};
+// ── Component Pools ───────────────────────────────────────
+//
+// True procedural generation: headers, title frames, and footers are
+// independently selected. The Cartesian product of these pools creates
+// thousands of unique combinations without any fixed templates.
 
-type BorderStyle = {
-  topLeft: string;
-  topRight: string;
-  bottomLeft: string;
-  bottomRight: string;
-  horizontal: string;
-  vertical: string;
-};
-
-type DesignLayout = {
-  border: BorderStyle;
-  decoration: string;
-  title: (title: string, accent: string) => string;
-  footer: (accent: string, words: readonly string[]) => string;
-  spacing: number;
-  alignment: 'center' | 'left' | 'right';
-};
-
-const BORDER_FAMILIES: readonly [string, string, string, string, string, string][] = [
-  ['╭', '╮', '╰', '╯', '─', '│'],
-  ['┌', '┐', '└', '┘', '─', '│'],
-  ['╔', '╗', '╚', '╝', '═', '║'],
-  ['┏', '┓', '┗', '┛', '━', '┃'],
-  ['◤', '◥', '◣', '◢', '━', '┃'],
-  ['┍', '┑', '┕', '┙', '━', '│'],
-  ['┎', '┒', '┖', '┚', '═', '║'],
-  ['╓', '╖', '╙', '╜', '─', '║'],
-  ['╒', '╕', '╘', '╛', '═', '│'],
-  ['╭', '╮', '╰', '╯', '·', '│'],
-  ['⟅', '⟆', '⟅', '⟆', '═', '│'],
-  ['《', '》', '《', '》', '━', '│'],
-  ['〔', '〕', '〖', '〗', '─', '│'],
-  ['⟦', '⟧', '⟦', '⟧', '━', '│'],
-  ['❲', '❳', '❲', '❳', '─', '│'],
-  ['⸢', '⸣', '⸤', '⸥', '─', '│'],
-];
-
-const HORIZONTAL_VARIANTS = ['─', '━', '═', '—', '·', '⋅', '╌', '╍', '┄', '┅', '⎯', '﹏'];
-const DECORATION_PAIRS = [
-  ['✿', '✿'], ['♡', '♡'], ['☆', '☆'], ['✦', '✦'], ['⋆', '⋆'], ['☾', '☽'],
-  ['⌁', '⌁'], ['⌘', '⌘'], ['୨୧', '୨୧'], ['「', '」'], ['《', '》'], ['◈', '◈'],
-  ['†', '†'], ['꒰', '꒱'], ['◤', '◥'], ['⟦', '⟧'], ['❀', '❀'], ['⚡', '⚡'],
-];
-const DECORATION_MIDDLES = ['·°。·', '・。°・', '⋆｡', '｡⋆', '✧･ﾟ', 'ﾟ･✧', '┈┈', '⸻', '···', '°˖✧', '✧˖°'];
-
-// These pools are intentionally compositional. Their Cartesian products create
-// hundreds of possible components without turning the engine into a template
-// library: every render chooses border, decoration, title, footer, spacing, and
-// alignment independently.
-const BORDER_STYLES: BorderStyle[] = BORDER_FAMILIES.flatMap((family, familyIndex) =>
-  HORIZONTAL_VARIANTS.slice(0, familyIndex % 5 === 0 ? HORIZONTAL_VARIANTS.length : 7).map((horizontal) => ({
-    topLeft: family[0],
-    topRight: family[1],
-    bottomLeft: family[2],
-    bottomRight: family[3],
-    horizontal,
-    vertical: family[5],
-  })),
-);
-
-const DECORATIONS = DECORATION_PAIRS.flatMap(([left, right], pairIndex) =>
-  DECORATION_MIDDLES.map((middle, middleIndex) =>
-    pairIndex % 2 === 0 || middleIndex % 2 === 0 ? `${left}${middle}${right}` : `${left} ${middle} ${right}`,
-  ),
-);
-
-type TitleLayout = (title: string, accent: string) => string;
-type FooterLayout = (accent: string, words: readonly string[]) => string;
-
-const TITLE_FRAMES = [
-  ['「', '」'], ['⌞', '⌝'], ['⟦', '⟧'], ['╰─', '─╯'], ['《', '》'], ['〔', '〕'],
-  ['❲', '❳'], ['⸢', '⸥'], ['꒰', '꒱'], ['◤', '◥'], ['‹', '›'], ['⟅', '⟆'],
-] as const;
-const TITLE_SEPARATORS = [' ', '  ', ' · ', '・', ' ⋆ ', ' — ', ' ⟡ ', ' ° ', ' :: ', ' / '] as const;
-const TITLE_LAYOUTS: TitleLayout[] = TITLE_FRAMES.flatMap(([left, right]) =>
-  TITLE_SEPARATORS.map((separator) => (title, accent) =>
-    `${left}${separator === ' ' ? ` ${accent} ${separator}` : `${separator}${accent}${separator}`}${title}${separator}${accent} ${right}`,
-  ),
-);
-
-const FOOTER_FRAMES = [
-  ['╰', '╯'], ['⌁', '⌁'], ['「', '」'], ['⟡', '⟡'], ['┈', '┈'], ['⋆', '⋆'],
-  ['·', '·'], ['✦', '✦'], ['☾', '☽'], ['◈', '◈'], ['—', '—'], ['⌞', '⌝'],
-] as const;
-const FOOTER_SEPARATORS = [' ', ' · ', ' / ', ' — ', ' ⋆ ', ' ⟡ ', '・', ' :: ', ' + ', ' … '] as const;
-const FOOTER_LAYOUTS: FooterLayout[] = FOOTER_FRAMES.flatMap(([left, right]) =>
-  FOOTER_SEPARATORS.map((separator) => (accent, words) =>
-    `${left} ${words[0]}${separator}${words[1]} ${accent} ${right}`,
-  ),
-);
-
-const SPACING_PATTERNS = [0, 0, 1, 1, 1, 2, 2, 3];
-const ALIGNMENTS: DesignLayout['alignment'][] = ['center', 'center', 'center', 'left', 'right'];
-
-function visibleWidth(value: string): number {
-  return [...value].reduce((width, char) => {
-    const codePoint = char.codePointAt(0) ?? 0;
-    if (/\p{Mark}/u.test(char) || (codePoint >= 0xfe00 && codePoint <= 0xfe0f)) return width;
-    return width + (codePoint >= 0x1100 ? 2 : 1);
-  }, 0);
+interface FamilyPools {
+  headers: readonly string[];
+  titleFrames: ReadonlyArray<readonly [string, string]>; // [left, right]
+  footers: readonly string[];
 }
 
-function repeatToWidth(character: string, width: number): string {
-  if (width <= 0) return '';
-  return Array.from({ length: width }, () => character).join('');
-}
+const FAMILY_POOLS: Record<ThemeFamily, FamilyPools> = {
+  floral: {
+    headers: [
+      '✿・°。・✿', '❀════❀', '✿°｡・°✿', '꒰🌸꒱', '🌸⸝⸝🌸',
+      '✿ · ✿ · ✿', '❀・✿・❀', '🌸・°。🌸', '✿｡✿', '꒷꒦꒷꒦꒷',
+      '·˚ ༘ ✿', '˚₊‧꒰🌸꒱‧₊˚', '✾ · ✾', '🌺・🌸・🌺',
+      '⸝⸝ ✿ ⸝⸝', '✿ ゜ ✿', '꒰ ✿ ꒱',
+    ],
+    titleFrames: [
+      ['♡', '♡'], ['✿', '✿'], ['❀', '❀'], ['꒰', '꒱'], ['🌸', '🌸'],
+      ['⸝⸝', '⸝⸝'], ['˚', '˚'], ['·', '·'], ['〜', '〜'], ['⌒', '⌒'],
+      ['｢', '｣'], ['✾', '✾'],
+    ],
+    footers: [
+      '♡ Join Us ♡', '✿ See You Inside ✿', '❀ Open Link ❀',
+      '˚₊ · ͟͟͞͞꒰ Tap to Join ꒱', '✿ Click Here ✿', '🌸 Welcome 🌸',
+      '꒰ Meet New Friends ꒱', '✿ Enter ✿', '❀ Visit Now ❀',
+      '·˚ ♡ Enjoy ♡ ˚·', '✿・・✿', '🌸 Stay Cute 🌸',
+    ],
+  },
 
-function centerLine(value: string, width: number, alignment: DesignLayout['alignment'] = 'center'): string {
-  const remaining = Math.max(0, width - visibleWidth(value));
-  const left = alignment === 'left' ? 0 : alignment === 'right' ? remaining : Math.floor(remaining / 2);
-  return `${' '.repeat(left)}${value}${' '.repeat(remaining - left)}`;
-}
+  lunar: {
+    headers: [
+      '☾⋆｡', '☾ · ☽', '⋆｡☽', '☾━━━☽', '† ☾ †',
+      '♱ · ♱', '☾⋆·˚', '⋆ ☾ ⋆', '☽｡⋆', '☾ ⸻ ☽',
+      '·͜· ☾ ·͜·', '🌙 · 🌙', '☾ · · · ☽',
+    ],
+    titleFrames: [
+      ['☾', '☽'], ['†', '†'], ['♱', '♱'], ['⋆', '⋆'], ['「', '」'],
+      ['◆', '◆'], ['『', '』'], ['⌞', '⌝'], ['·', '·'], ['‹', '›'],
+    ],
+    footers: [
+      '☾ Welcome ☽', '† Enter ✦', '⋆｡ Step Inside ｡⋆',
+      '☾ After Dark ☽', '✦ Midnight ✦', '† Join the Night †',
+      '☽ Enter the Gate ☾', '⋆ Come In ⋆', '☾ Open ☽',
+    ],
+  },
+
+  ethereal: {
+    headers: [
+      '✧･ﾟ: *✧･ﾟ:*', '⊹₊ ⋆', '✧ ゜ ✧', '⟡ · ⟡', '˚ · ˚',
+      '⋆｡°✩', '✦ ✧ ✦', '· ⋆ ·', '˚₊‧⁺', '⁺˚⋆',
+      '✧ · ✧ · ✧', '゜゚・。⊹', '⟡ ゜ ⟡', '✩ · ✩',
+      '˚₊· ͟͟͞͞꒷', '⊹ · ⊹', '✦ ⋆ ✦',
+    ],
+    titleFrames: [
+      ['⟡', '⟡'], ['✧', '✧'], ['⋆', '⋆'], ['✦', '✦'], ['˚', '˚'],
+      ['⊹', '⊹'], ['·', '·'], ['°', '°'], ['゜', '゜'], ['♡', '♡'],
+      ['✩', '✩'],
+    ],
+    footers: [
+      '✧ Enjoy ✧', '⊹ Stay Awesome ⊹', '✦ Access ✦',
+      '⟡ Visit ⟡', '˚ Welcome ˚', '✧ Open Link ✧',
+      '· Step In ·', '⋆ Enter ⋆', '✩ Join Now ✩',
+      '゜ Come Inside ゜',
+    ],
+  },
+
+  tech: {
+    headers: [
+      '⌁ ⚡ ⌁', '◈ :: ◈', '⌘ ⌁ ⌘', '⌁━━⌁', '⚡ ◈ ⚡',
+      ':: ⌘ ::', '▣ · ▣', '⌘━━⌘', '◈ ⌁ ◈',
+      '⚡⌁⚡', '::▣::', '⌘ · ⌘',
+    ],
+    titleFrames: [
+      ['⌞', '⌝'], ['◈', '◈'], ['⌘', '⌘'], ['⟦', '⟧'], ['[', ']'],
+      ['::', '::'], ['◆', '◆'], ['▣', '▣'], ['⌁', '⌁'], ['‹', '›'],
+    ],
+    footers: [
+      '◈ Access Granted ◈', '⌘ Execute ⌘', '⚡ Connect ⚡',
+      ':: Open Link ::', '▣ Enter System ▣', '⌁ Join Now ⌁',
+      '◈ Tap In ◈', '⌘ Login ⌘',
+    ],
+  },
+
+  luxury: {
+    headers: [
+      '♛ ✦ ♛', '◆ ✨ ◆', '✦ ♛ ✦', '❖ · ❖', '♛━━♛',
+      '◆ · ◆', '✦ ◆ ✦', '❖ ✦ ❖', '♛ · ✦ · ♛',
+      '◆━━━◆', '✦✦✦',
+    ],
+    titleFrames: [
+      ['♛', '♛'], ['✦', '✦'], ['◆', '◆'], ['❖', '❖'], ['✨', '✨'],
+      ['‹', '›'], ['「', '」'], ['⌞', '⌝'], ['·', '·'],
+    ],
+    footers: [
+      '♛ Verified Access ♛', '✦ Private Link ✦', '◆ Select Members ◆',
+      '❖ Enter ❖', '✨ Premium ✨', '♛ Join Now ♛',
+      '◆ Exclusive ◆', '✦ Welcome ✦',
+    ],
+  },
+
+  cute: {
+    headers: [
+      '╭─ 🎀 ─╮', '♡━━━♡', '🎀 · 🎀', '⌈✦⌋', '✶ · ✶',
+      '💗 · 💗', '╭──♡──╮', '🎀・🎀', '♡ · ♡ · ♡',
+      '✶✶✶', '💕 · 💕', '🎀 ─ 🎀',
+    ],
+    titleFrames: [
+      ['🎀', '🎀'], ['♡', '♡'], ['💗', '💗'], ['✶', '✶'], ['·', '·'],
+      ['꒰', '꒱'], ['「', '」'], ['⌈', '⌉'], ['✦', '✦'], ['💕', '💕'],
+    ],
+    footers: [
+      '♡ See You Inside ♡', '🎀 Join Us 🎀', '💗 Welcome 💗',
+      '✶ Tap to Enter ✶', '꒰ Open Link ꒱', '♡ Meet New Friends ♡',
+      '🎀 Say Less 🎀', '💕 Come In 💕', '✶ Join Now ✶',
+    ],
+  },
+
+  cloud: {
+    headers: [
+      '☁️ ～ ☁️', '～ ° ～', '☁ · ☁ · ☁', '～～～', '° ☁️ °',
+      '˚ ～ ˚', '☁️ · · · ☁️', '～ ˚ ～',
+    ],
+    titleFrames: [
+      ['☁️', '☁️'], ['～', '～'], ['°', '°'], ['˚', '˚'], ['·', '·'],
+      ['〜', '〜'], ['❀', '❀'],
+    ],
+    footers: [
+      '☁️ Float In ☁️', '～ Welcome ～', '° Drift Inside °',
+      '˚ Open Link ˚', '☁ Join Now ☁', '～ Enter ～',
+    ],
+  },
+
+  pixel: {
+    headers: [
+      '■ ◆ ■', '★ ◆ ★', '▪ ■ ▪', '◆◆◆', '■━■━■',
+      '★ · ★', '▪ ◆ ▪', '■ · ■ · ■',
+    ],
+    titleFrames: [
+      ['■', '■'], ['◆', '◆'], ['★', '★'], ['▪', '▪'], ['▰', '▰'],
+      ['[', ']'], ['‹', '›'], ['·', '·'],
+    ],
+    footers: [
+      '■ Enter ■', '◆ Click ◆', '★ Join ★', '▪ Open ▪',
+      '■ Access ■', '◆ Tap In ◆',
+    ],
+  },
+
+  stars: {
+    headers: [
+      '✧ ✦ ✧', '✩ ✦ ✩', '⭐ · ⭐', '✦━━✦', '✧ · ✧ · ✧',
+      '✩ · ✩', '✦ ✧ ✦ ✧ ✦', '⭐ ✦ ⭐', '✧✧✧',
+      '✦ · ✦', '✩━━✩', '☆ ✦ ☆',
+    ],
+    titleFrames: [
+      ['✧', '✧'], ['✦', '✦'], ['✩', '✩'], ['⭐', '⭐'], ['☆', '☆'],
+      ['★', '★'], ['·', '·'], ['⋆', '⋆'],
+    ],
+    footers: [
+      '✦ Join Now ✦', '✧ Shine Inside ✧', '✩ Welcome ✩',
+      '⭐ Open Link ⭐', '✦ Enter ✦', '☆ Tap In ☆',
+      '✧ Enjoy ✧', '✩ Access ✩',
+    ],
+  },
+
+  minimal: {
+    headers: [
+      '· · ·', '— ○ —', '∙ ∙ ∙', '─────', '· — ·',
+      '○ · ○', '─ · ─', '···', '— · —',
+      '∙∙∙', '○ ─ ○',
+    ],
+    titleFrames: [
+      ['·', '·'], ['—', '—'], ['○', '○'], ['‹', '›'], ['[', ']'],
+      ['(', ')'], ['|', '|'], ['-', '-'],
+    ],
+    footers: [
+      '· Open Link ·', '— Join ——', '○ Enter ○',
+      '· Tap In ·', '— Welcome —', '∙ Access ∙',
+    ],
+  },
+
+  japanese: {
+    headers: [
+      '「◆」', '〜★〜', '・ω・', '「✦」', '〜 ♡ 〜',
+      '「 ✿ 」', '・☆・', '〜✧〜', '「◈」', '。♡。',
+      '・｡・', '〜 ⟡ 〜',
+    ],
+    titleFrames: [
+      ['「', '」'], ['〔', '〕'], ['【', '】'], ['『', '』'], ['〖', '〗'],
+      ['·', '·'], ['・', '・'], ['♡', '♡'], ['✦', '✦'],
+    ],
+    footers: [
+      '「 ようこそ 」', '〜 Join Us 〜', '・参加する・',
+      '「 Open Link 」', '〜 Welcome 〜', '・Enter・',
+      '「 Tap In 」', '〜 どうぞ 〜',
+    ],
+  },
+};
+
+// ── Utilities ─────────────────────────────────────────────
 
 function hashNumber(seed: string): number {
-  return Number.parseInt(crypto.createHash('sha256').update(seed).digest('hex').slice(0, 12), 16);
+  return Number.parseInt(
+    crypto.createHash('sha256').update(seed).digest('hex').slice(0, 12),
+    16
+  );
 }
 
 function choose<T>(items: readonly T[], seed: string, offset: number): T {
   return items[hashNumber(`${seed}:${offset}`) % items.length]!;
 }
 
-function clampTitle(title: string, width: number): string {
+function clampTitle(title: string, maxChars = 28): string {
   const cleaned = title.replace(/\s+/gu, ' ').trim();
-  const maxWidth = Math.max(12, width - 8);
-  if (visibleWidth(cleaned) <= maxWidth) return cleaned;
-  const chars = [...cleaned];
-  let result = '';
-  for (const char of chars) {
-    if (visibleWidth(`${result}${char}…`) > maxWidth) break;
-    result += char;
-  }
-  return `${result}…`;
+  if (cleaned.length <= maxChars) return cleaned;
+  return `${cleaned.slice(0, maxChars - 1)}…`;
 }
 
-function makeLayout(seed: string): DesignLayout {
-  const border = choose(BORDER_STYLES, seed, 1);
-  return {
-    border,
-    decoration: choose(DECORATIONS, seed, 2),
-    title: choose(TITLE_LAYOUTS, seed, 3),
-    footer: choose(FOOTER_LAYOUTS, seed, 4),
-    spacing: choose(SPACING_PATTERNS, seed, 5),
-    alignment: choose(ALIGNMENTS, seed, 6),
-  };
+function compose(
+  pool: FamilyPools,
+  title: string,
+  url: string,
+  seed: string
+): string {
+  const header = choose(pool.headers, seed, 1);
+  const [frameL, frameR] = choose(pool.titleFrames, seed, 2);
+  const footer = choose(pool.footers, seed, 3);
+  const titleLine = `${frameL} ${clampTitle(title)} ${frameR}`;
+  return [header, url, titleLine, footer].join('\n');
 }
 
-function compose(spec: ThemeSpec, title: string, url: string, seed: string): string {
-  const layout = makeLayout(seed);
-  const urlWidth = visibleWidth(url);
-  // The frame grows with the URL. This keeps short links airy while preventing
-  // long WhatsApp links from being squeezed against decorative characters.
-  const frameWidth = Math.max(28, urlWidth + 8, visibleWidth(title) + 10, visibleWidth(layout.decoration) + 10);
-  const innerWidth = frameWidth - 2;
-  const accent = choose(spec.accents, seed, 7);
-  const words = [choose(spec.titleWords, seed, 8), choose(spec.titleWords, seed, 9)];
-  const titleLine = layout.title(clampTitle(title, innerWidth), accent);
-  const footerLine = layout.footer(accent, words);
-  const horizontal = repeatToWidth(layout.border.horizontal, frameWidth - 2);
-  const top = `${layout.border.topLeft}${horizontal}${layout.border.topRight}`;
-  const bottom = `${layout.border.bottomLeft}${horizontal}${layout.border.bottomRight}`;
-  const frame = (line: string, alignment = layout.alignment) =>
-    `${layout.border.vertical}${centerLine(line, innerWidth, alignment)}${layout.border.vertical}`;
-  const urlLine = frame(url, 'center');
-  const lines = [
-    top,
-    ...Array.from({ length: layout.spacing }, () => frame('')),
-    frame(layout.decoration, 'center'),
-    urlLine,
-    frame(titleLine, layout.alignment),
-    frame(footerLine, 'center'),
-    bottom,
-  ];
-  return lines.join('\n');
-}
+// ── Engine ────────────────────────────────────────────────
 
 export class StatusDesignEngine {
   public readonly themes = [...STATUS_THEMES];
@@ -232,23 +303,48 @@ export class StatusDesignEngine {
       const url = input.url.trim();
       this.assertSafeUrl(url);
       const theme = this.normalizeTheme(input.theme);
-      const title = (input.title?.replaceAll(url, '').trim() || THEMES[theme].label).slice(0, 64);
-      // Keep generated status cards compact. The optional message remains in
-      // the input contract for callers, but descriptions are intentionally
-      // omitted so long web metadata cannot overwhelm the status.
-      const seed = `${theme}:${url}:${title}:${Date.now()}:${crypto.randomUUID()}`;
-      const text = compose(THEMES[theme], title, url, seed);
+      const family = THEME_TO_FAMILY[theme] ?? 'floral';
+      const pool = FAMILY_POOLS[family];
+
+      // Derive a short display title: prefer fetched metadata, then the theme family label.
+      const rawTitle = input.title?.replaceAll(url, '').trim();
+      const title = rawTitle && rawTitle.length > 1 ? rawTitle : this.defaultTitle(theme);
+
+      // Seed combines theme + url + time + randomness for true per-render uniqueness.
+      const seed = `${theme}:${url}:${Date.now()}:${crypto.randomUUID()}`;
+      const text = compose(pool, title, url, seed);
       this.assertPreviewIntegrity(text, url);
       return { theme, text, url };
     } catch (error) {
-      logger.error('[StatusDesignEngine] Render failed', { error: String(error), theme: input.theme });
+      logger.error('[StatusDesignEngine] Render failed', {
+        error: String(error),
+        theme: input.theme,
+      });
       throw error;
     }
   }
 
+  private defaultTitle(theme: StatusTheme): string {
+    const labels: Partial<Record<StatusTheme, string>> = {
+      kawaii: 'Kawaii Group', sakura: 'Sakura Chat', flower: 'Garden Chat',
+      japanese: 'Japanese Hub', cyber: 'Cyber Network', minimal: 'Community',
+      luxury: 'Private Access', dreamcore: 'Dream Space', angelcore: 'Angel Hub',
+      gothic: 'Night Gate', soft: 'Soft Space', cloud: 'Cloud Chat',
+      moon: 'Moonlit Hub', ribbon: 'Cute Group', pixel: 'Pixel Zone',
+      stars: 'Star Lounge', hearts: 'Heart Space',
+      girly: 'Girls Chat', guys: 'Guys Hub', yami: 'Dark Side',
+      vampire: 'Night Clan', angel: 'Angel Zone', webcore: 'Web Portal',
+      dark: 'Dark Mode', prestige: 'Premium Access', y2k: 'Y2K Portal',
+      brat: 'Brat Zone', clean: 'Community',
+    };
+    return labels[theme] ?? 'Community';
+  }
+
   assertSafeUrl(url: string): void {
     let parsed: URL;
-    try { parsed = new URL(url); } catch { throw new Error('A valid absolute URL is required'); }
+    try { parsed = new URL(url); } catch {
+      throw new Error('A valid absolute URL is required');
+    }
     if (!['http:', 'https:'].includes(parsed.protocol) || /[\r\n\s]/u.test(url)) {
       throw new Error('Only unmodified HTTP(S) URLs are supported');
     }

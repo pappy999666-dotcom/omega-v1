@@ -417,3 +417,44 @@ export function findSessionOwner(sessionId: string): string | null {
   }
   return null;
 }
+
+// ── Platform Config (global settings shared across all users) ─────
+
+const PLATFORM_CONFIG_PATH = path.join(WORKSPACE_ROOT, '_platform', 'config.json');
+
+interface PlatformConfig {
+  globalMenuUrl?: string;
+}
+
+function loadPlatformConfig(): PlatformConfig {
+  if (!fs.existsSync(PLATFORM_CONFIG_PATH)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(PLATFORM_CONFIG_PATH, 'utf8')) as PlatformConfig;
+  } catch {
+    return {};
+  }
+}
+
+function savePlatformConfig(config: PlatformConfig): void {
+  fs.mkdirSync(path.dirname(PLATFORM_CONFIG_PATH), { recursive: true });
+  fs.writeFileSync(PLATFORM_CONFIG_PATH, JSON.stringify(config, null, 2));
+}
+
+/** Get the platform-wide global menu URL, or null if unset. */
+export function getGlobalMenuUrl(): string | null {
+  return loadPlatformConfig().globalMenuUrl ?? null;
+}
+
+/** Set the platform-wide global menu URL. */
+export function setGlobalMenuUrl(url: string): void {
+  savePlatformConfig({ ...loadPlatformConfig(), globalMenuUrl: url });
+  logger.info('[Platform] Global menu URL updated');
+}
+
+/** Remove the platform-wide global menu URL. */
+export function clearGlobalMenuUrl(): void {
+  const config = loadPlatformConfig();
+  delete config.globalMenuUrl;
+  savePlatformConfig(config);
+  logger.info('[Platform] Global menu URL cleared');
+}

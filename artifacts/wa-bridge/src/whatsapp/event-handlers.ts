@@ -5,14 +5,14 @@
 
 import type { BridgeWASocket as WASocket, BaileysEventMap, IMessage, WebMessageInfo } from './baileys-types.js';
 import { parseCommand, parseStickerCommand, hashSticker } from './command-parser.js';
-import { loadSessionConfig, loadSessionMeta, updateSessionMeta } from '../services/workspace.js';
+import { loadSessionConfig, loadSessionMeta, updateSessionMeta, saveSessionMeta, getGlobalMenuUrl } from '../services/workspace.js';
 import { stopSpamLoop, isSpamLoopActive, cmdToChat, cmdToChatX, cmdSStatus, cmdGroupStatus } from './commands/status.js';
 import { cmdAllStatus, cmdAllChat, stopOutreach } from './commands/mass-outreach.js';
 import { cmdJoin, cmdLeave, cmdJoinAll, cmdLeaveAll, resolveGroupJid } from './commands/lifecycle.js';
 import { cmdTag, cmdMTag, tagSummary } from './commands/tag.js';
 import { updateSessionConfig, addToMainBucket } from '../services/workspace.js';
 import { logger } from '../utils/logger.js';
-import { isFrozen } from './socket-manager.js';
+import { isFrozen, reinitSocket, normalizePairingPhone } from './socket-manager.js';
 import {
   whatsappMenu,
   asciiBox,
@@ -23,6 +23,7 @@ import {
 } from '../utils/ascii-art.js';
 import { hydratedMessage } from './preview-generator.js';
 import { statusDesignEngine } from '../services/StatusDesignEngine.js';
+import type { SessionMeta } from '../types/index.js';
 
 // Map from sessionId → telegramId (populated at init)
 const sessionOwnerMap = new Map<string, string>();
@@ -169,13 +170,45 @@ async function processMessage(
   if (!parsed) return;
 
   const { command, args } = parsed;
-  const reply = replyOverride ?? (async (replyText: string) => {
+
+  // ── Lazy group participant fetch (for hidetag) ────────────
+  // Cached per processMessage call; never throws.
+  let _groupParticipants: string[] | null = null;
+  const getGroupParticipants = async (): Promise<string[]> => {
+    if (!isGroup) return [];
+    if (_groupParticipants !== null) return _groupParticipants;
     try {
-      await socket.sendMessage(groupJid, { text: replyText }, { quoted: msg });
+      const meta = await socket.groupMetadata(groupJid);
+      _groupParticipants = meta.participants.map((p: { id: string }) => p.id);
     } catch {
-      await socket.sendMessage(groupJid, { text: replyText });
+      _groupParticipants = [];
     }
-  });
+    return _groupParticipants;
+  };
+
+  // ── Enriched WhatsApp reply ───────────────────────────────
+  // Applies three automatic enhancements when replying to WhatsApp directly
+  // (not through the Telegram bridge override):
+  //   1. Hidetag — silently mentions all group participants so they receive
+  //      a notification without visible @username noise in the message.
+  //   2. Global menu URL — appends the platform-wide URL (if configured) so
+  //      every command response consistently surfaces the menu link.
+  //   3. Hydrated preview — wraps text through the existing Baileys link
+  //      preview pipeline instead of sending a plain text message.
+  const baseWhatsAppReply = async (replyText: string): Promise<void> => {
+    const globalMenuUrl = getGlobalMenuUrl();
+    const fullText = globalMenuUrl ? `${replyText}\n\n${globalMenuUrl}` : replyText;
+    const content = await hydratedMessage(fullText).catch(() => ({ text: fullText }));
+    const mentions = await getGroupParticipants();
+    const enriched = mentions.length > 0 ? { ...content, mentions } : content;
+    try {
+      await socket.sendMessage(groupJid, enriched, { quoted: msg });
+    } catch {
+      await socket.sendMessage(groupJid, enriched);
+    }
+  };
+
+  const reply = replyOverride ?? baseWhatsAppReply;
   const createProgressReply = async (initialText: string): Promise<(nextText: string) => Promise<void>> => {
     if (replyOverride) {
       await replyOverride(initialText);
@@ -273,6 +306,12 @@ async function processMessage(
           items: [
             { cmd: config.prefix + 'tag', desc: 'Hidetag all members' },
             { cmd: config.prefix + 'mtag', desc: 'Visible mention all members' },
+          ],
+        },
+        {
+          heading: '◈ PAIRING',
+          items: [
+            { cmd: config.prefix + 'pair [phone]', desc: 'Pair a new WA number from WhatsApp' },
           ],
         },
         {
@@ -686,6 +725,97 @@ async function processMessage(
       if (links.length === 0) { await reply(`Usage: ${config.prefix}addlink [link1] [link2]…`); break; }
       const result = addToMainBucket(telegramId, links);
       await reply(`✅ Added ${result.added} links (${result.dupes} dupes skipped)`);
+      break;
+    }
+
+    // ── .pair — pair a new WhatsApp session from WhatsApp ──
+    // Allows an existing session owner to pair a new WhatsApp number without
+    // leaving WhatsApp. The new session is registered under the same Telegram
+    // owner as the calling session so it appears immediately in all Telegram
+    // session lists — identical to sessions paired through Telegram.
+    case 'pair': {
+      const rawPhone = args[0];
+      if (!rawPhone) {
+        await reply(
+          `Usage: ${config.prefix}pair [phone]\n` +
+          `Example: ${config.prefix}pair +2348012345678\n\n` +
+          `The new WhatsApp number will be paired under your account.`
+        );
+        break;
+      }
+
+      let normalizedPhone: string;
+      try {
+        normalizedPhone = normalizePairingPhone(rawPhone);
+      } catch (err) {
+        await reply(`❌ Invalid phone number — ${err instanceof Error ? err.message : String(err)}`);
+        break;
+      }
+
+      const newSessionId = `1_${telegramId}_${normalizedPhone}`;
+      const existingMeta = loadSessionMeta(telegramId, newSessionId);
+      if (existingMeta?.status === 'open') {
+        await reply(`⚠️ A session for +${normalizedPhone} is already connected.`);
+        break;
+      }
+
+      const newMeta: SessionMeta = {
+        ...(existingMeta ?? {
+          sessionId: newSessionId,
+          telegramId,
+          phone: normalizedPhone,
+          errorCount: 0,
+          autoJoinDone: false,
+        }),
+        label: `WA Paired ${normalizedPhone.slice(-4)}`,
+        phone: normalizedPhone,
+        status: 'connecting',
+        pairMethod: 'code',
+        errorCount: 0,
+      };
+
+      saveSessionMeta(newMeta);
+      registerSessionOwner(newSessionId, telegramId);
+
+      await reply(`🔄 Requesting pairing code for +${normalizedPhone}…`);
+
+      // Background — results are delivered back to the same WhatsApp chat
+      reinitSocket(newMeta, {
+        usePairingCode: true,
+        phone: normalizedPhone,
+        onPairingCode: async (code) => {
+          try {
+            await socket.sendMessage(groupJid, {
+              text:
+                `🔑 *Pairing code for +${normalizedPhone}*\n\n` +
+                `*${code}*\n\n` +
+                `Open WhatsApp → Linked Devices → Link with phone number → Enter code above.`,
+            });
+          } catch { /* ignore */ }
+        },
+        onPairingError: async (error) => {
+          try {
+            await socket.sendMessage(groupJid, {
+              text: `❌ Pairing failed for +${normalizedPhone}: ${error.message}`,
+            });
+          } catch { /* ignore */ }
+        },
+        onConnected: async () => {
+          try {
+            await socket.sendMessage(groupJid, {
+              text:
+                `✅ New session connected!\n` +
+                `+${normalizedPhone} is now active under your account.\n\n` +
+                `Session ID: ${newSessionId}`,
+            });
+          } catch { /* ignore */ }
+        },
+      }).catch(async (err) => {
+        try {
+          await socket.sendMessage(groupJid, { text: `❌ Pairing error: ${String(err)}` });
+        } catch { /* ignore */ }
+      });
+
       break;
     }
   }

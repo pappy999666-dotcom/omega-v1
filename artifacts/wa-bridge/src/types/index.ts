@@ -24,6 +24,12 @@ export interface UserConfig {
   lastActivity: number;
 }
 
+export interface SessionMenuMedia {
+  type: 'image' | 'video';
+  filePath: string;
+  mimeType: string;
+}
+
 export interface SessionMeta {
   sessionId: string;            // e.g. "1_{tg_id}_{phone}"
   telegramId: string;
@@ -39,6 +45,7 @@ export interface SessionMeta {
   linksCollected?: number;
   joinManager?: JoinManagerState;
   autoPromote?: AutoPromoteSettings;
+  menuMedia?: SessionMenuMedia | null;
 }
 
 export interface AutoPromoteSettings {

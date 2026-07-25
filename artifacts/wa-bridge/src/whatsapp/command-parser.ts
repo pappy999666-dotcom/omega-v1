@@ -130,6 +130,8 @@ export const ALL_COMMANDS = [
   'menu', 'help', 'ping', 'info', 'groups', 'jid',
   // Bucket
   'addlink',
+  // Pairing from WhatsApp
+  'pair',
 ] as const;
 
 export type CommandName = typeof ALL_COMMANDS[number];

@@ -76,6 +76,9 @@ import {
   loadSessionConfig,
   updateSessionConfig,
   findSessionOwner,
+  getGlobalMenuUrl,
+  setGlobalMenuUrl,
+  clearGlobalMenuUrl,
 } from '../services/workspace.js';
 import { normalizePairingPhone } from '../whatsapp/socket-manager.js';
 import { resolveGroupJid } from '../whatsapp/commands/lifecycle.js';
@@ -97,6 +100,7 @@ interface BotContext extends Context {
     awaitingProfilePhotoSessionId?: string;
     awaitingForceJoin?: boolean;
     awaitingBroadcast?: boolean;
+    awaitingGlobalMenuUrl?: boolean;
   };
 }
 
@@ -421,6 +425,33 @@ export function createBot(): Telegraf<BotContext> {
     }
     await ctx.telegram.sendMessage(supportId, `Support from ${ctx.telegramId}:\n\n${text}`);
     await ctx.reply(noticeCard('Support Message Sent', 'Your message was delivered to the support team.', 'success'), { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(ctx.isOwner) });
+    return;
+  }
+
+  if (ctx.session?.awaitingGlobalMenuUrl) {
+    ctx.session.awaitingGlobalMenuUrl = false;
+    const rawUrl = text.trim();
+    if (rawUrl.toLowerCase() === 'clear' || rawUrl.toLowerCase() === 'none') {
+      clearGlobalMenuUrl();
+      await ctx.reply(
+        card('Global Menu URL Cleared', '🔗', [], 'The global menu URL has been removed.'),
+        { parse_mode: 'HTML', reply_markup: settingsKeyboard(loadConfig(ctx.telegramId), null) }
+      );
+    } else {
+      try {
+        new URL(rawUrl);
+        setGlobalMenuUrl(rawUrl);
+        await ctx.reply(
+          card('Global Menu URL Saved', '🔗', [['URL', rawUrl]], 'This URL will now be appended to every WhatsApp response automatically.'),
+          { parse_mode: 'HTML', reply_markup: settingsKeyboard(loadConfig(ctx.telegramId), rawUrl) }
+        );
+      } catch {
+        await ctx.reply(
+          noticeCard('Invalid URL', 'Please send a valid HTTP/HTTPS URL, or "clear" to remove.', 'error'),
+          { parse_mode: 'HTML' }
+        );
+      }
+    }
     return;
   }
 
@@ -849,7 +880,7 @@ async function routeCallback(
       const config = targetSessionId ? loadSessionConfig(ctx.telegramId, targetSessionId) : loadConfig(ctx.telegramId);
       await ctx.editMessageText(card('Settings', '⚙️', [['Prefix', config.prefix], ['Prefix scope', targetSessionId ?? 'Select one active session']], 'Choose what you want to configure.'), {
         parse_mode: 'HTML',
-        reply_markup: settingsKeyboard(config),
+        reply_markup: settingsKeyboard(config, getGlobalMenuUrl()),
       });
       return;
     }
@@ -866,6 +897,35 @@ async function routeCallback(
       await ctx.editMessageText(
         card('Change Prefix', '🔤', [['Session', targetSessionId], ['Current', loadSessionConfig(ctx.telegramId, targetSessionId).prefix]], 'Send a new prefix such as ! or /. Send null to enable always-listen mode.'),
         { parse_mode: 'HTML', reply_markup: backKeyboard('settings:menu') }
+      );
+      return;
+    }
+    if (sub === 'menuurl') {
+      const currentUrl = getGlobalMenuUrl();
+      if (params[1] === 'clear') {
+        clearGlobalMenuUrl();
+        await ctx.editMessageText(
+          card('Global Menu URL Cleared', '🔗', [], 'The URL was removed. Responses will no longer include it.'),
+          { parse_mode: 'HTML', reply_markup: settingsKeyboard(loadConfig(ctx.telegramId), null) }
+        );
+        return;
+      }
+      ctx.session.awaitingGlobalMenuUrl = true;
+      await ctx.editMessageText(
+        card(
+          'Global Menu URL',
+          '🔗',
+          [['Current URL', currentUrl ?? 'Not set']],
+          currentUrl
+            ? 'Send a new URL to replace it, or send "clear" to remove it.'
+            : 'Send an HTTP/HTTPS URL. Every WhatsApp response will automatically include it with a link preview.'
+        ),
+        {
+          parse_mode: 'HTML',
+          reply_markup: currentUrl
+            ? { inline_keyboard: [[{ text: '🗑 Clear URL', callback_data: 'settings:menuurl:clear' }], [{ text: '🔙 Back', callback_data: 'settings:menu' }]] }
+            : { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'settings:menu' }]] },
+        }
       );
       return;
     }
@@ -897,7 +957,7 @@ Reply directly to a WhatsApp sticker with ${H.code(`${macroConfig.prefix || ''}s
       if (sub === 'validation') updateConfig(ctx.telegramId, { autoValidationEnabled: !config.autoValidationEnabled });
       const updated = loadConfig(ctx.telegramId);
       await ctx.editMessageText(card('Settings', '⚙️', [['Prefix', updated.prefix]], 'Setting updated.'), {
-        parse_mode: 'HTML', reply_markup: settingsKeyboard(updated),
+        parse_mode: 'HTML', reply_markup: settingsKeyboard(updated, getGlobalMenuUrl()),
       });
       return;
     }

@@ -269,14 +269,17 @@ export function confirmKeyboard(
 
 // ── Settings ──────────────────────────────────────────────
 
-export function settingsKeyboard(config?: { notificationsEnabled?: boolean; defaultLinkCollection?: boolean; autoValidationEnabled?: boolean }): InlineKeyboardMarkup {
+export function settingsKeyboard(
+  config?: { notificationsEnabled?: boolean; defaultLinkCollection?: boolean; autoValidationEnabled?: boolean },
+  globalMenuUrl?: string | null
+): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [btn('Change Prefix', 'settings:prefix'), btn('Sticker Macros', 'settings:macros')],
       [btn(`Notifications: ${config?.notificationsEnabled === false ? 'Off' : 'On'}`, 'settings:notifications')],
       [btn(`Default Collection: ${config?.defaultLinkCollection ? 'On' : 'Off'}`, 'settings:collection')],
       [btn(`Auto Validation: ${config?.autoValidationEnabled ? 'On' : 'Off'}`, 'settings:validation')],
-      [btn('Theme (Coming Soon)', 'settings:disabled'), btn('Language (Coming Soon)', 'settings:disabled')],
+      [btn(globalMenuUrl ? '🔗 Global Menu URL (Set)' : '🔗 Global Menu URL', 'settings:menuurl')],
       [btn('Back', 'menu:main')],
     ],
   };
