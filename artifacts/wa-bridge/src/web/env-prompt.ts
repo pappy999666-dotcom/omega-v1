@@ -7,7 +7,10 @@ import fs from 'fs';
 import readline from 'readline/promises';
 import { stdin as input, stdout as output } from 'process';
 
-const REQUIRED_ENV = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_OWNER_ID', 'WEB_DOMAIN'] as const;
+// The dashboard binds locally and does not require a public domain to start.
+// Keep bot-only and degraded-mode tests runnable without optional web hosting
+// or Redis configuration.
+const REQUIRED_ENV = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_OWNER_ID'] as const;
 
 export async function ensureRuntimeEnv(): Promise<void> {
   const missing = REQUIRED_ENV.filter((key) => !process.env[key]);
