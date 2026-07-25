@@ -1,0 +1,463 @@
+OMEGA-v1 — Intelligent Status Card Engine Overhaul
+
+You are a Staff-Level Node.js Architect, Senior WhatsApp Multi-Device Engineer, UI/UX Systems Designer, Baileys Infrastructure Engineer, and Production Software Architect.
+
+Your task is to redesign and upgrade the existing Status Engine, not rewrite it from scratch.
+
+The project already contains a working status engine. Your responsibility is to audit the existing implementation, understand its architecture, preserve all working functionality, and intelligently extend it with the features below.
+
+This is a production system. Nothing should regress.
+
+---
+
+PRIMARY OBJECTIVE
+
+Transform every status post that contains a URL into a beautifully generated mini status card before sending.
+
+The engine should automatically recognize supported links, fetch metadata, generate a unique aesthetic card, then publish it alongside the original URL.
+
+The experience should feel intelligent and dynamic.
+
+---
+
+DO NOT REWRITE THE ENGINE
+
+Before changing anything:
+
+- Study the current status engine.
+- Understand the existing architecture.
+- Identify reusable modules.
+- Reuse existing pipelines whenever possible.
+- Preserve backwards compatibility.
+
+Never throw away working logic.
+
+Refactor only where necessary.
+
+---
+
+SUPPORTED COMMANDS
+
+Apply this intelligent status card system to every command capable of posting statuses.
+
+Including but not limited to:
+
+.gstatus
+
+.togstatus
+
+.allstatus
+
+.allstatusx
+
+.sstatus
+
+.statusdesign
+
+Any future status-related commands should automatically inherit the same pipeline.
+
+Do not duplicate logic.
+
+Everything should pass through one shared status generation pipeline.
+
+---
+
+AUTOMATIC URL DETECTION
+
+Whenever a status contains a URL:
+
+Detect it automatically.
+
+Determine the platform.
+
+Then generate the correct status card.
+
+The user should not need to specify anything.
+
+Example:
+
+User:
+
+.gstatus https://chat.whatsapp.com/xxxxx
+
+↓
+
+Engine detects:
+
+WhatsApp Invite
+
+↓
+
+Fetch metadata
+
+↓
+
+Generate aesthetic card
+
+↓
+
+Post.
+
+The same applies to every supported platform.
+
+---
+
+SUPPORTED URL TYPES
+
+At minimum support:
+
+• WhatsApp Group Invites
+
+• Telegram Groups
+
+• Telegram Channels
+
+• Websites
+
+• YouTube
+
+• GitHub
+
+• Discord
+
+• Instagram
+
+• TikTok
+
+• Spotify
+
+• Twitter/X
+
+• Facebook
+
+• Pinterest
+
+• Reddit
+
+The architecture should make adding future platforms simple.
+
+---
+
+METADATA FETCHING
+
+The engine should intelligently fetch metadata.
+
+Examples:
+
+WhatsApp
+
+• Group Name
+
+• Member Count (if available)
+
+Telegram
+
+• Channel/Group Name
+
+• Description when available
+
+Website
+
+• Open Graph Title
+
+• Site Name
+
+• Description if useful
+
+• Thumbnail if useful
+
+GitHub
+
+• Repository Name
+
+YouTube
+
+• Video Title
+
+• Channel Name
+
+Instagram
+
+• Username
+
+TikTok
+
+• Username
+
+Spotify
+
+• Song or Playlist Name
+
+Only fetch lightweight metadata.
+
+Avoid unnecessary requests.
+
+---
+
+MINI STATUS CARDS
+
+Do NOT generate giant banners.
+
+Do NOT generate huge ASCII art.
+
+The cards must remain compact.
+
+They should occupy minimal space inside WhatsApp statuses.
+
+Target approximately 5–8 lines excluding the URL.
+
+Example style:
+
+╭─ 🎀 𝐆𝐑𝐎𝐔𝐏 🎀 ─╮
+⌞ 「 Anime Paradise 」⌝
+https://chat.whatsapp.com/...
+♡ Join the community ♡
+╰──────────────╯
+
+Small.
+
+Clean.
+
+Premium.
+
+Readable.
+
+---
+
+RANDOM DESIGN GENERATION
+
+This is one of the most important requirements.
+
+Never reuse the exact same design repeatedly.
+
+The engine must generate variations automatically.
+
+For every status:
+
+Randomly choose:
+
+• Border style
+
+• Decorative symbols
+
+• Title wording
+
+• Footer wording
+
+• Theme
+
+• Typography
+
+• Decorative spacing
+
+Every generated card should feel fresh.
+
+The same group should never repeatedly receive identical cards.
+
+The goal is to create thousands of possible combinations from reusable components instead of relying on a few static templates.
+
+The randomness should still preserve Omega's visual identity.
+
+---
+
+DESIGN STYLE
+
+Theme:
+
+Kawaii
+
+Cyber
+
+Minimal
+
+Elegant
+
+Gothic accents
+
+Premium
+
+Cute
+
+Modern
+
+Never look childish.
+
+Never become cluttered.
+
+Never use excessive empty space.
+
+Never create oversized borders.
+
+---
+
+WHATSAPP RENDERING
+
+This is critical.
+
+WhatsApp wraps long lines.
+
+The engine must account for varying device widths.
+
+Therefore:
+
+Keep borders compact.
+
+Keep decorative lines short.
+
+Never create layouts that wrap unexpectedly.
+
+Every generated card should render correctly on narrow Android devices.
+
+Visual consistency is more important than decoration.
+
+---
+
+URL POSITION
+
+Always place the URL in the center of the design.
+
+The title should appear above it.
+
+The footer should appear below it.
+
+Do not surround the URL with excessive text.
+
+---
+
+CONTENT
+
+Keep cards minimal.
+
+Display only useful metadata.
+
+Examples:
+
+WhatsApp:
+
+Group Name
+
+Telegram:
+
+Channel Name
+
+Website:
+
+Website Title
+
+GitHub:
+
+Repository Name
+
+YouTube:
+
+Video Title
+
+Do NOT dump descriptions unless they add meaningful value.
+
+Avoid information overload.
+
+---
+
+MEDIA SUPPORT
+
+Upgrade the status engine so every status command fully supports media.
+
+Supported:
+
+Images
+
+Videos
+
+GIFs (where supported)
+
+Captions
+
+If the command is used by replying to media:
+
+Use the replied media.
+
+If media is supplied directly:
+
+Use it.
+
+If both media and caption exist:
+
+Post both correctly.
+
+The new functionality must integrate with existing commands rather than replacing them.
+
+---
+
+SHARED PIPELINE
+
+Every status command should pass through the same pipeline.
+
+Example:
+
+Receive Request
+
+↓
+
+Detect URL
+
+↓
+
+Fetch Metadata
+
+↓
+
+Generate Card
+
+↓
+
+Attach Caption
+
+↓
+
+Attach Media (if any)
+
+↓
+
+Generate Link Preview
+
+↓
+
+Publish Status
+
+Avoid duplicated implementations.
+
+---
+
+PRODUCTION REQUIREMENTS
+
+Before considering the work complete:
+
+Audit all status commands.
+
+Ensure all commands behave consistently.
+
+Ensure metadata generation works.
+
+Ensure media posting works.
+
+Ensure captions remain intact.
+
+Ensure link previews continue functioning.
+
+Ensure generated cards render correctly on WhatsApp.
+
+Ensure no existing features regress.
+
+Run typecheck.
+
+Run lint.
+
+Verify runtime behaviour.
+
+Review related modules for side effects.
+
+Do not stop after making the feature work.
+
+Verify the entire status pipeline is stable.
+
+The final implementation should feel like a polished, production-ready intelligent status engine that automatically generates unique aesthetic status cards while remaining lightweight, reliable, and fully backward compatible with the existing Omega architecture.
