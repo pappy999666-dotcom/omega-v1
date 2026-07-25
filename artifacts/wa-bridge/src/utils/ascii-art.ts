@@ -26,7 +26,7 @@ export function asciiBox(opts: AsciiBoxOptions): string {
     .join('\n');
 }
 
-/** Lightweight spacing divider; intentionally contains no box-drawing artwork. */
+/** Lightweight spacing divider */
 export const divider = (): string => '';
 
 export function successCard(title: string, message: string, rows: [string, string][] = []): string {
@@ -38,9 +38,96 @@ export function warningCard(title: string, message: string, rows: [string, strin
 }
 
 export function errorCard(title: string, message: string, details?: string): string {
-  return [asciiBox({ title, emoji: '❌', rows: [], footer: message }), details ? `\n${mono(details)}` : '']
+  return [asciiBox({ title, emoji: '❌', rows: [], footer: message }), details ? `\n${mono(details.slice(0, 200))}` : '']
     .filter(Boolean)
     .join('\n');
+}
+
+// ── Premium Cards ─────────────────────────────────────────
+
+/** Rich ping card with latency and session status */
+export function pingCard(opts: { latency: number; sessionId: string; status: string }): string {
+  const statusEmoji = opts.status === 'FROZEN' ? '❄️' : opts.status === 'MEASURING' ? '🔄' : '🟢';
+  return asciiBox({
+    title: 'PONG',
+    emoji: '🏓',
+    rows: [
+      ['Latency', opts.status === 'MEASURING' ? '…' : `${opts.latency}ms`],
+      ['Session', opts.sessionId],
+      ['Status', `${statusEmoji} ${opts.status}`],
+    ],
+  });
+}
+
+/** Rich session info card */
+export function infoCard(opts: {
+  sessionId: string;
+  status: string;
+  groups: number;
+  prefix: string;
+  nullMode: boolean;
+  spamLoop: boolean;
+  sudoCount: number;
+}): string {
+  const statusEmoji = opts.status === 'FROZEN' ? '❄️' : opts.status === 'ONLINE' ? '🟢' : '🔴';
+  return asciiBox({
+    title: 'SESSION STATUS',
+    emoji: '📱',
+    rows: [
+      ['Status', `${statusEmoji} ${opts.status}`],
+      ['Session', opts.sessionId],
+      ['Groups', String(opts.groups)],
+      ['Prefix', opts.prefix],
+      ['Null Mode', opts.nullMode ? '◉ ON' : '◎ OFF'],
+      ['Spam Loop', opts.spamLoop ? '🔄 RUNNING' : '◎ OFF'],
+      ['Sudo Users', String(opts.sudoCount)],
+    ],
+    footer: 'OMEGA SYSTEM · ALL ENGINES READY',
+  });
+}
+
+/** Sudo registry list card */
+export function sudoListCard(numbers: string[]): string {
+  if (numbers.length === 0) {
+    return asciiBox({
+      title: 'SUDO REGISTRY',
+      emoji: '🔐',
+      rows: [['Authorized', '0']],
+      footer: 'No sudo operators configured.',
+    });
+  }
+  const roster = numbers.map((n, i) => `${i + 1}. +${n}`).join('\n');
+  return [
+    asciiBox({
+      title: 'SUDO REGISTRY',
+      emoji: '🔐',
+      rows: [['Authorized', String(numbers.length)]],
+    }),
+    `\n${quote(roster)}`,
+  ].join('\n');
+}
+
+/** Groups list card */
+export function groupsCard(groups: { name: string; count: number }[]): string {
+  if (groups.length === 0) {
+    return asciiBox({
+      title: 'JOINED GROUPS',
+      emoji: '📋',
+      rows: [['Total', '0']],
+      footer: 'No groups joined.',
+    });
+  }
+  const visible = groups.slice(0, 25);
+  const list = visible.map((g, i) => `${i + 1}. ${g.name} [${g.count}]`).join('\n');
+  const overflow = groups.length > 25 ? `\n+${groups.length - 25} more` : '';
+  return [
+    asciiBox({
+      title: 'JOINED GROUPS',
+      emoji: '📋',
+      rows: [['Total', String(groups.length)]],
+    }),
+    `\n${quote(list + overflow)}`,
+  ].join('\n');
 }
 
 export function resultBox(opts: {
@@ -52,16 +139,16 @@ export function resultBox(opts: {
   duration: string;
 }): string {
   return asciiBox({
-    title: `${opts.op.toUpperCase()} RESULT`,
+    title: `${opts.op.toUpperCase()} COMPLETE`,
     emoji: '📊',
     rows: [
-      ['Successful', String(opts.success)],
+      ['Success', String(opts.success)],
       ['Failed', String(opts.failed)],
       ['Skipped', String(opts.skipped)],
       ['Rate limited', String(opts.rateLimited)],
       ['Duration', opts.duration],
     ],
-    footer: 'Operation complete.',
+    footer: 'Operation finished.',
   });
 }
 

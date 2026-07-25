@@ -17,9 +17,15 @@ import {
   whatsappMenu,
   asciiBox,
   bold,
+  italic,
+  quote,
   errorCard,
   successCard,
   warningCard,
+  pingCard,
+  infoCard,
+  sudoListCard,
+  groupsCard,
 } from '../utils/ascii-art.js';
 import { hydratedMessage } from './preview-generator.js';
 import { statusDesignEngine } from '../services/StatusDesignEngine.js';
@@ -65,6 +71,43 @@ function extractMessageText(message: IMessage | null | undefined): string {
     ?? message.videoMessage?.caption
     ?? message.documentMessage?.caption
     ?? '';
+}
+
+// ── Sudo Resolution ───────────────────────────────────────
+// Priority: raw args → quoted msg sender → @mentioned JIDs
+
+function resolveSudoTargets(
+  args: string[],
+  msg: WebMessageInfo
+): string[] {
+  // 1. Raw phone numbers in args
+  if (args.length > 0) {
+    const numbers = args
+      .map((a) => normalizeWhatsAppNumber(a))
+      .filter((n) => n.length >= 7);
+    if (numbers.length > 0) return numbers;
+  }
+
+  const contextInfo =
+    msg.message?.extendedTextMessage?.contextInfo
+    ?? msg.message?.imageMessage?.contextInfo
+    ?? msg.message?.videoMessage?.contextInfo;
+
+  // 2. Quoted message — resolve sender JID
+  if (contextInfo?.participant) {
+    const n = normalizeWhatsAppNumber(contextInfo.participant);
+    if (n.length >= 7) return [n];
+  }
+
+  // 3. @mentioned JIDs
+  if (contextInfo?.mentionedJid?.length) {
+    const numbers = (contextInfo.mentionedJid as string[])
+      .map((jid) => normalizeWhatsAppNumber(jid))
+      .filter((n) => n.length >= 7);
+    if (numbers.length > 0) return numbers;
+  }
+
+  return [];
 }
 
 // ── Main Event Router ─────────────────────────────────────
@@ -187,14 +230,6 @@ async function processMessage(
   };
 
   // ── Enriched WhatsApp reply ───────────────────────────────
-  // Applies three automatic enhancements when replying to WhatsApp directly
-  // (not through the Telegram bridge override):
-  //   1. Hidetag — silently mentions all group participants so they receive
-  //      a notification without visible @username noise in the message.
-  //   2. Global menu URL — appends the platform-wide URL (if configured) so
-  //      every command response consistently surfaces the menu link.
-  //   3. Hydrated preview — wraps text through the existing Baileys link
-  //      preview pipeline instead of sending a plain text message.
   const baseWhatsAppReply = async (replyText: string): Promise<void> => {
     const globalMenuUrl = getGlobalMenuUrl();
     const fullText = globalMenuUrl ? `${replyText}\n\n${globalMenuUrl}` : replyText;
@@ -253,12 +288,10 @@ async function processMessage(
 
     // ── Ping ──
     case 'ping': {
-      const start = Date.now();
-      await reply(asciiBox({
-        title: 'PONG',
-        emoji: '🏓',
-        rows: [['Latency', `${Date.now() - start}ms`], ['Session', sessionId]],
-      }));
+      const latency = Date.now();
+      // Send first, then measure round-trip
+      const updatePing = await createProgressReply(pingCard({ latency: 0, sessionId, status: 'MEASURING' }));
+      await updatePing(pingCard({ latency: Date.now() - latency, sessionId, status: isFrozen(sessionId) ? 'FROZEN' : 'ONLINE' }));
       break;
     }
 
@@ -297,7 +330,6 @@ async function processMessage(
             { cmd: config.prefix + 'leave [jid]', desc: 'Leave a group' },
             { cmd: config.prefix + 'joinall', desc: 'Join all active bucket links' },
             { cmd: config.prefix + 'left', desc: 'Leave the current group' },
-            { cmd: config.prefix + 'leave [jid/link]', desc: 'Leave a specified group' },
             { cmd: config.prefix + 'leaveall', desc: 'Leave all groups' },
           ],
         },
@@ -320,8 +352,8 @@ async function processMessage(
             { cmd: config.prefix + 'setprefix [p]', desc: 'Change command prefix' },
             { cmd: config.prefix + 'setcmd [cmd]', desc: 'Bind quoted sticker to command' },
             { cmd: config.prefix + 'delcmd', desc: 'Delete quoted sticker binding' },
-            { cmd: config.prefix + 'setsudo [number]', desc: 'Approve a command number' },
-            { cmd: config.prefix + 'delsudo [number]', desc: 'Remove command access' },
+            { cmd: config.prefix + 'setsudo [number]', desc: 'Grant command access (or reply to msg)' },
+            { cmd: config.prefix + 'delsudo [number]', desc: 'Revoke command access' },
             { cmd: config.prefix + 'info', desc: 'Session information' },
             { cmd: config.prefix + 'groups', desc: 'List joined groups' },
           ],
@@ -338,17 +370,14 @@ async function processMessage(
         groupCount = Object.keys(groups).length;
       } catch { /* ignore */ }
 
-      await reply(asciiBox({
-        title: 'SESSION INFO',
-        emoji: '📱',
-        rows: [
-          ['Session', sessionId],
-          ['Status', isFrozen(sessionId) ? '❄️ FROZEN' : '🟢 ACTIVE'],
-          ['Groups', String(groupCount)],
-          ['Prefix', config.prefix || 'null'],
-          ['Null Mode', config.nullPrefix ? 'ON' : 'OFF'],
-          ['Spam Loop', isSpamLoopActive(sessionId) ? '🔄 RUNNING' : 'OFF'],
-        ],
+      await reply(infoCard({
+        sessionId,
+        status: isFrozen(sessionId) ? 'FROZEN' : 'ONLINE',
+        groups: groupCount,
+        prefix: config.prefix || 'null',
+        nullMode: config.nullPrefix,
+        spamLoop: isSpamLoopActive(sessionId),
+        sudoCount: (config.sudoNumbers ?? []).length,
       }));
       break;
     }
@@ -357,14 +386,10 @@ async function processMessage(
     case 'groups': {
       try {
         const groups = await socket.groupFetchAllParticipating();
-        const list = Object.values(groups)
-          .slice(0, 30)
-          .map((g, i) => `${i + 1}. ${bold(g.subject)} [${g.participants.length}]`)
-          .join('\n');
-        const total = Object.keys(groups).length;
-        await reply(`${bold('📋 JOINED GROUPS')} (${total} total)\n\n${list}${total > 30 ? '\n…and more' : ''}`);
+        const list = Object.values(groups);
+        await reply(groupsCard(list.map((g) => ({ name: g.subject, count: g.participants.length }))));
       } catch (err) {
-        await reply(`❌ Failed to fetch groups: ${err}`);
+        await reply(errorCard('GROUPS FETCH FAILED', 'WhatsApp rejected the group list request.', String(err)));
       }
       break;
     }
@@ -373,16 +398,16 @@ async function processMessage(
     case 'prefix':
     case 'setprefix': {
       if (command === 'prefix' && args.length === 0) {
-        await reply(asciiBox({ title: 'PREFIX', emoji: '⌨️', rows: [['Current', config.prefix || 'null'], ['Usage', `${config.prefix}setprefix <prefix>`]] }));
+        await reply(asciiBox({ title: 'COMMAND PREFIX', emoji: '⌨️', rows: [['Current', config.prefix || 'null'], ['Usage', `${config.prefix}setprefix <prefix>`]] }));
         break;
       }
       const newPrefix = args[0];
       if (!newPrefix) {
-        await reply(`Current prefix: ${bold(config.prefix || 'null')}\nUsage: ${config.prefix}setprefix [prefix]`);
+        await reply(asciiBox({ title: 'COMMAND PREFIX', emoji: '⌨️', rows: [['Current', config.prefix || 'null'], ['Usage', `${config.prefix}setprefix [prefix]`]] }));
         break;
       }
       updateSessionConfig(telegramId, sessionId, { prefix: newPrefix === 'null' ? '' : newPrefix, nullPrefix: newPrefix === 'null' });
-      await reply(`✅ Prefix updated to: ${bold(newPrefix)}`);
+      await reply(successCard('PREFIX UPDATED', `Commands now respond to: ${bold(newPrefix)}`, [['New prefix', newPrefix]]));
       break;
     }
 
@@ -406,7 +431,7 @@ async function processMessage(
         const macros = { ...config.stickerMacros };
         delete macros[hash];
         updateSessionConfig(telegramId, sessionId, { stickerMacros: macros });
-        await reply(successCard('STICKER COMMAND DELETED', 'The quoted sticker no longer triggers a command.', [['Hash', hash]]));
+        await reply(successCard('STICKER UNBOUND', 'The quoted sticker no longer triggers a command.', [['Hash', hash.slice(0, 12) + '…']]));
         break;
       }
 
@@ -424,8 +449,8 @@ async function processMessage(
       const normalizedBinding = [parsedBinding.command, ...parsedBinding.args].join(' ');
       const macros = { ...config.stickerMacros, [hash]: normalizedBinding };
       updateSessionConfig(telegramId, sessionId, { stickerMacros: macros });
-      await reply(successCard('STICKER COMMAND SAVED', 'The sticker macro is ready.', [
-        ['Hash', hash],
+      await reply(successCard('STICKER BOUND', 'The macro is active — send that sticker to execute the command.', [
+        ['Hash', hash.slice(0, 12) + '…'],
         ['Command', normalizedBinding],
       ]));
       break;
@@ -434,33 +459,65 @@ async function processMessage(
     // ── Sudo Access ──
     case 'sudo': {
       const sudo = config.sudoNumbers ?? [];
-      await reply(asciiBox({
-        title: 'SUDO ACCESS',
-        emoji: '🔐',
-        rows: [['Approved numbers', String(sudo.length)]],
-        footer: sudo.length ? sudo.map((number) => `+${number}`).join('\n') : 'No sudo numbers configured.',
-      }));
+      await reply(sudoListCard(sudo));
       break;
     }
+
     case 'setsudo':
     case 'delsudo': {
+      // Owner-only gate
       if (!isOwnerSender && !replyOverride) {
         await reply(errorCard('OWNER ONLY', 'Only the paired session owner can change sudo access.'));
         break;
       }
-      const number = normalizeWhatsAppNumber(args[0]);
-      if (!number || number.length < 7) {
-        await reply(warningCard('VALID NUMBER REQUIRED', `Usage: ${config.prefix}${command} <international number>`));
+
+      // Resolve targets: raw args → quoted message sender → @mentions
+      const targets = resolveSudoTargets(args, msg);
+
+      if (targets.length === 0) {
+        await reply(warningCard(
+          'NO TARGET FOUND',
+          `Provide a number, reply to someone's message, or @mention a user.\n\nUsage: ${config.prefix}${command} +2348012345678`
+        ));
         break;
       }
+
       const current = new Set(config.sudoNumbers ?? []);
-      if (command === 'setsudo') current.add(number);
-      else current.delete(number);
+      const changed: string[] = [];
+
+      for (const number of targets) {
+        if (command === 'setsudo') {
+          if (!current.has(number)) {
+            current.add(number);
+            changed.push(`+${number}`);
+          }
+        } else {
+          if (current.has(number)) {
+            current.delete(number);
+            changed.push(`+${number}`);
+          }
+        }
+      }
+
       updateSessionConfig(telegramId, sessionId, { sudoNumbers: [...current] });
+
+      if (changed.length === 0) {
+        await reply(warningCard(
+          command === 'setsudo' ? 'ALREADY AUTHORIZED' : 'NOT IN LIST',
+          `${targets.map((n) => `+${n}`).join(', ')} ${command === 'setsudo' ? 'already has access.' : 'was not found in the sudo list.'}`
+        ));
+        break;
+      }
+
       await reply(successCard(
-        command === 'setsudo' ? 'SUDO ADDED' : 'SUDO REMOVED',
-        command === 'setsudo' ? 'This number can now run ordinary commands.' : 'Command access was removed.',
-        [['Number', `+${number}`]]
+        command === 'setsudo' ? 'SUDO GRANTED' : 'SUDO REVOKED',
+        command === 'setsudo'
+          ? `${changed.length > 1 ? 'These numbers' : 'This number'} can now run commands.`
+          : `Command access was removed.`,
+        [
+          ['Numbers', changed.join(', ')],
+          ['Total sudo', String(current.size)],
+        ]
       ));
       break;
     }
@@ -468,11 +525,11 @@ async function processMessage(
     // ── JID Resolver ──
     case 'jid': {
       const link = args[0];
-      if (!link) { await reply(`Usage: ${config.prefix}jid [group_link]`); break; }
+      if (!link) { await reply(warningCard('LINK REQUIRED', `Usage: ${config.prefix}jid [group_link]`)); break; }
       const info = await resolveGroupJid(socket, link);
-      if (!info) { await reply('❌ Could not resolve JID'); break; }
+      if (!info) { await reply(errorCard('JID NOT RESOLVED', 'WhatsApp could not resolve that invite link.')); break; }
       await reply(asciiBox({
-        title: 'GROUP JID',
+        title: 'GROUP IDENTITY',
         emoji: '🔑',
         rows: [
           ['JID', info.jid],
@@ -490,7 +547,7 @@ async function processMessage(
       if (target === 'spam' || target === 'all') {
         const stoppedSpam = stopSpamLoop(sessionId);
         stopOutreach(sessionId);
-        await reply(successCard('BACKGROUND JOBS STOPPED', stoppedSpam ? 'The status loop was stopped.' : 'Active outreach cancellation was requested.'));
+        await reply(successCard('OPERATIONS HALTED', stoppedSpam ? 'Status loop stopped. All outreach cancelled.' : 'Active outreach cancellation requested.'));
       } else {
         await reply(warningCard('CHOOSE A JOB', `Usage: ${config.prefix}stop spam`));
       }
@@ -501,12 +558,14 @@ async function processMessage(
     case 'smedia':
     case 'gstatus': {
       const text = commandText();
-      if (!isGroup) { await reply('❌ Must be used in a WhatsApp group'); break; }
-      if (!text) { await reply(`Usage: ${config.prefix}gstatus [message], or reply to a message with ${config.prefix}gstatus`); break; }
+      if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Run this command inside a WhatsApp group.')); break; }
+      if (!text) { await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}gstatus [message], or reply to a message.`)); break; }
       const sent = await cmdGroupStatus(socket, sessionId, groupJid, text, {
         theme: config.statusDesignTheme,
       });
-      await reply(sent ? '✅ Group status posted!' : '❌ Group status relay failed');
+      await reply(sent
+        ? successCard('STATUS POSTED', 'The group status was published successfully.')
+        : errorCard('STATUS FAILED', 'WhatsApp rejected the group status relay.'));
       break;
     }
 
@@ -514,10 +573,10 @@ async function processMessage(
     case 'tochat': {
       const [target, ...msgParts] = args;
       const message = msgParts.join(' ').trim() || quotedText.trim();
-      if (!target || !message) { await reply(`Usage: ${config.prefix}tochat [jid/link] [message], or reply to a message with ${config.prefix}tochat [jid/link]`); break; }
+      if (!target || !message) { await reply(warningCard('USAGE', `${config.prefix}tochat [jid/link] [message]`)); break; }
       const res = await cmdToChat(socket, sessionId, target, message);
       await reply(res.success
-        ? successCard('MESSAGE DELIVERED', 'The target chat accepted the message.', [['Target', target], ['Network', 'STABLE']])
+        ? successCard('MESSAGE DELIVERED', 'The target chat accepted the message.', [['Target', target]])
         : errorCard('DELIVERY FAILED', 'WhatsApp rejected the target message.', res.error));
       break;
     }
@@ -527,12 +586,12 @@ async function processMessage(
       const [target, countStr, ...msgParts] = args;
       const message = msgParts.join(' ').trim() || quotedText.trim();
       if (!target || !countStr || !message) {
-        await reply(`Usage: ${config.prefix}tochatx [jid/link] [count] [message], or reply to a message with ${config.prefix}tochatx [jid/link] [count]`);
+        await reply(warningCard('USAGE', `${config.prefix}tochatx [jid/link] [count] [message]`));
         break;
       }
       const count = Math.min(parseInt(countStr, 10), 50);
       const res = await cmdToChatX(socket, sessionId, target, count, message);
-      await reply(successCard('REPEAT DELIVERY COMPLETE', 'The target chat operation finished.', [
+      await reply(successCard('REPEAT DELIVERY COMPLETE', 'The operation finished.', [
         ['Target', target],
         ['Sent', `${res.sent}/${count}`],
         ['Failed', String(res.failed)],
@@ -544,9 +603,9 @@ async function processMessage(
     case 'sstatus':
     case 'spam': {
       const text = args.join(' ');
-      if (!text) { await reply(`Usage: ${config.prefix}sstatus [message]\nStop with: ${config.prefix}stop spam`); break; }
-      if (isSpamLoopActive(sessionId)) { await reply(`⚠️ Spam loop already running. Use ${config.prefix}stop spam to kill it.`); break; }
-      await reply(`🔄 Spam status loop started. Send ${config.prefix}stop spam to kill it.`);
+      if (!text) { await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}sstatus [message]\nStop: ${config.prefix}stop spam`)); break; }
+      if (isSpamLoopActive(sessionId)) { await reply(warningCard('LOOP ACTIVE', `A spam loop is already running. Use ${config.prefix}stop spam to kill it.`)); break; }
+      await reply(successCard('STATUS LOOP STARTED', `Use ${config.prefix}stop spam to stop it.`, [['Message', text.slice(0, 40)]]));
       cmdSStatus(socket, sessionId, text, { theme: config.statusDesignTheme }).catch(() => { /* background */ });
       break;
     }
@@ -555,31 +614,33 @@ async function processMessage(
     case 'settheme': {
       const requestedTheme = args[0]?.toLowerCase();
       if (!statusDesignEngine.themes.includes(requestedTheme as never)) {
-        await reply(warningCard('VALID THEME REQUIRED', `Usage: ${config.prefix}settheme <theme>\nThemes: ${statusDesignEngine.themes.join(', ')}`));
+        await reply(warningCard('VALID THEME REQUIRED', `Themes: ${statusDesignEngine.themes.join(', ')}\n\nUsage: ${config.prefix}settheme <theme>`));
         break;
       }
       updateSessionConfig(telegramId, sessionId, { statusDesignTheme: requestedTheme });
-      await reply(successCard('STATUS THEME SAVED', 'This session will use the selected status design theme.', [['Theme', requestedTheme]]));
+      await reply(successCard('THEME SAVED', 'Status designs will use this theme.', [['Theme', requestedTheme]]));
       break;
     }
 
     case 'godcast':
     case 'statusdesign': {
-      if (!isGroup) { await reply('❌ Must be used in a WhatsApp group'); break; }
+      if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Run this command inside a WhatsApp group.')); break; }
       const requestedTheme = statusDesignEngine.themes.includes(args[0]?.toLowerCase() as never)
         ? args.shift()
         : config.statusDesignTheme;
       const url = args.find((arg) => /^https?:\/\/\S+$/u.test(arg));
       if (!url) {
-        await reply(`Usage: ${config.prefix}statusdesign [theme] [link]\nThemes: ${statusDesignEngine.themes.join(', ')}`);
+        await reply(warningCard('URL REQUIRED', `Usage: ${config.prefix}statusdesign [theme] [link]\nThemes: ${statusDesignEngine.themes.join(', ')}`));
         break;
       }
       try {
         const design = statusDesignEngine.render({ theme: requestedTheme, url });
         const sent = await cmdGroupStatus(socket, sessionId, groupJid, design.text, { skipDesign: true });
-        await reply(sent ? `✅ ${design.theme} group status published` : '❌ Group status relay failed');
+        await reply(sent
+          ? successCard('DESIGNED STATUS PUBLISHED', `Theme applied successfully.`, [['Theme', design.theme]])
+          : errorCard('STATUS RELAY FAILED', 'WhatsApp rejected the group status.'));
       } catch (error) {
-        await reply(`❌ ${String(error)}`);
+        await reply(errorCard('STATUS DESIGN FAILED', 'An error occurred while generating the status.', String(error)));
       }
       break;
     }
@@ -591,7 +652,7 @@ async function processMessage(
       const target = args.shift();
       const message = args.join(' ').trim() || quotedText.trim();
       if (!target || !message) {
-        await reply(warningCard('TARGET AND MESSAGE REQUIRED', `Usage: ${config.prefix}${command}${command.endsWith('x') ? ' <count>' : ''} <jid or invite link> <message>, or reply to a message.`));
+        await reply(warningCard('TARGET AND MESSAGE REQUIRED', `Usage: ${config.prefix}${command}${command.endsWith('x') ? ' <count>' : ''} <jid or invite link> <message>`));
         break;
       }
       const resolved = target.includes('chat.whatsapp.com') ? await resolveGroupJid(socket, target) : null;
@@ -615,10 +676,15 @@ async function processMessage(
       const repeat = command === 'allstatusx' ? Math.min(Math.max(Number.parseInt(args.shift() ?? '', 10) || 0, 1), 20) : 1;
       const text = commandText();
       if (!text) {
-        await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}${command}${command.endsWith('x') ? ' <count>' : ''} <message>, or reply to a message.`));
+        await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}${command}${command.endsWith('x') ? ' <count>' : ''} <message>`));
         break;
       }
-      const updateProgress = await createProgressReply(asciiBox({ title: 'ALL STATUS STARTED', emoji: '📡', rows: [['Repeats', String(repeat)]], footer: 'Progress updates will replace this message.' }));
+      const updateProgress = await createProgressReply(asciiBox({
+        title: 'BROADCAST STARTED',
+        emoji: '📡',
+        rows: [['Repeats', String(repeat)], ['Mode', 'ALL STATUS']],
+        footer: 'Progress updates follow…',
+      }));
       void (async () => {
         for (let index = 0; index < repeat; index += 1) {
           await cmdAllStatus(socket, sessionId, telegramId, text, {
@@ -627,7 +693,7 @@ async function processMessage(
         }
       })().catch(async (error) => {
         logger.error('[EventHandler] allstatus failed', { sessionId, error: String(error) });
-        await updateProgress(errorCard('ALL STATUS FAILED', 'The background campaign could not finish.', String(error)));
+        await updateProgress(errorCard('BROADCAST FAILED', 'The background campaign could not finish.', String(error)));
       });
       break;
     }
@@ -635,13 +701,18 @@ async function processMessage(
     // ── allchat ──
     case 'allchat': {
       const text = commandText();
-      if (!text) { await reply(`Usage: ${config.prefix}allchat [message], or reply to a message with ${config.prefix}allchat`); break; }
-      const updateProgress = await createProgressReply('📣 Starting allchat blast…');
+      if (!text) { await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}allchat [message]`)); break; }
+      const updateProgress = await createProgressReply(asciiBox({
+        title: 'ALLCHAT STARTED',
+        emoji: '📣',
+        rows: [['Mode', 'ALL CHAT'], ['Status', 'RUNNING']],
+        footer: 'Broadcasting to all groups…',
+      }));
       cmdAllChat(socket, sessionId, telegramId, text, {
         onProgress: updateProgress,
       }).catch(async (error) => {
         logger.error('[EventHandler] allchat failed', { sessionId, error: String(error) });
-        await updateProgress(errorCard('ALL CHAT FAILED', 'The background campaign could not finish.', String(error)));
+        await updateProgress(errorCard('ALLCHAT FAILED', 'The background campaign could not finish.', String(error)));
       });
       break;
     }
@@ -649,32 +720,34 @@ async function processMessage(
     // ── join ──
     case 'join': {
       const link = args[0];
-      if (!link) { await reply(`Usage: ${config.prefix}join [group_link]`); break; }
+      if (!link) { await reply(warningCard('LINK REQUIRED', `Usage: ${config.prefix}join [group_link]`)); break; }
       const res = await cmdJoin(socket, link);
       await reply(res.success
-        ? `✅ Joined: ${bold(res.title ?? res.jid ?? 'group')}`
-        : `❌ Join failed: ${res.error}`);
+        ? successCard('JOINED', `Successfully joined the group.`, [['Group', res.title ?? res.jid ?? link]])
+        : errorCard('JOIN FAILED', res.error ?? 'WhatsApp rejected the join request.'));
       break;
     }
 
     // ── Leave current group ──
     case 'left': {
       if (!isGroup) {
-        await reply(warningCard('GROUP ONLY', 'Use this command inside the group you want the account to leave.'));
+        await reply(warningCard('GROUP ONLY', 'Use this command inside the group you want to leave.'));
         break;
       }
-      await reply(warningCard('LEAVING GROUP', 'The account is leaving this group now.'));
+      await reply(warningCard('LEAVING', 'The account is leaving this group now.'));
       const res = await cmdLeave(socket, groupJid);
-      if (!res.success) await reply(errorCard('LEAVE FAILED', res.error ?? 'WhatsApp rejected the request.'));
+      if (!res.success) await reply(errorCard('LEAVE FAILED', res.error ?? 'WhatsApp rejected the leave request.'));
       break;
     }
 
     // ── leave ──
     case 'leave': {
       const target = args[0];
-      if (!target) { await reply(`Usage: ${config.prefix}leave [jid/link]`); break; }
+      if (!target) { await reply(warningCard('TARGET REQUIRED', `Usage: ${config.prefix}leave [jid/link]`)); break; }
       const res = await cmdLeave(socket, target);
-      await reply(res.success ? '✅ Left group' : `❌ Leave failed: ${res.error}`);
+      await reply(res.success
+        ? successCard('LEFT GROUP', 'Successfully left the target group.')
+        : errorCard('LEAVE FAILED', res.error ?? 'WhatsApp rejected the leave request.'));
       break;
     }
 
@@ -682,65 +755,80 @@ async function processMessage(
     case 'joinall': {
       const { loadBucket } = await import('../services/workspace.js');
       const links = loadBucket(telegramId, 'active').map((e) => e.link);
-      if (links.length === 0) { await reply('❌ Active bucket is empty. Add links via Telegram /bucket first.'); break; }
-      const updateProgress = await createProgressReply(`🔗 Starting joinall for ${links.length} links…`);
+      if (links.length === 0) { await reply(warningCard('ACTIVE BUCKET EMPTY', 'Add links via Telegram /bucket first.')); break; }
+      const updateProgress = await createProgressReply(asciiBox({
+        title: 'JOINALL STARTED',
+        emoji: '🔗',
+        rows: [['Links', String(links.length)], ['Mode', 'RANDOMIZED']],
+        footer: 'Processing in background…',
+      }));
       cmdJoinAll(socket, sessionId, telegramId, links, {
         onProgress: updateProgress,
-      }).catch(async (error) => { await updateProgress(`❌ Join all failed: ${String(error)}`); });
+      }).catch(async (error) => { await updateProgress(errorCard('JOINALL FAILED', String(error))); });
       break;
     }
 
     // ── leaveall ──
     case 'leaveall': {
-      const updateProgress = await createProgressReply('🚪 Starting leaveall…');
+      const updateProgress = await createProgressReply(asciiBox({
+        title: 'LEAVEALL STARTED',
+        emoji: '🚪',
+        rows: [['Status', 'RUNNING']],
+        footer: 'Leaving all joined groups…',
+      }));
       cmdLeaveAll(socket, sessionId, telegramId, {
         onProgress: updateProgress,
-      }).catch(async (error) => { await updateProgress(`❌ Leave all failed: ${String(error)}`); });
+      }).catch(async (error) => { await updateProgress(errorCard('LEAVEALL FAILED', String(error))); });
       break;
     }
 
     // ── tag ──
     case 'tag': {
-      if (!isGroup) { await reply('❌ Must be used in a group'); break; }
+      if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
       const text = commandText('📢');
       const res = await cmdTag(socket, sessionId, groupJid, text);
-      await reply(res.success ? tagSummary(res.pinged, 'tag') : `❌ ${res.error}`);
+      await reply(res.success
+        ? tagSummary(res.pinged, 'tag')
+        : errorCard('TAG FAILED', res.error ?? 'Could not fetch group participants.'));
       break;
     }
 
     // ── mtag ──
     case 'mtag': {
-      if (!isGroup) { await reply('❌ Must be used in a group'); break; }
+      if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
       const text = commandText('📢');
       const res = await cmdMTag(socket, sessionId, groupJid, text);
       await reply(res.success
-        ? `✅ Tagged ${res.pinged} members in ${res.messages} message(s)`
-        : `❌ ${res.error}`);
+        ? successCard('MENTION COMPLETE', `Tagged all members in ${res.messages} message(s).`, [['Members', String(res.pinged)]])
+        : errorCard('MTAG FAILED', res.error ?? 'Could not fetch group participants.'));
       break;
     }
 
-    // ── Add links to bucket ���─
+    // ── Add links to bucket ──
     case 'addlink': {
       const links = args.filter((a) => a.includes('chat.whatsapp.com'));
-      if (links.length === 0) { await reply(`Usage: ${config.prefix}addlink [link1] [link2]…`); break; }
+      if (links.length === 0) { await reply(warningCard('VALID LINKS REQUIRED', `Usage: ${config.prefix}addlink [link1] [link2]…`)); break; }
       const result = addToMainBucket(telegramId, links);
-      await reply(`✅ Added ${result.added} links (${result.dupes} dupes skipped)`);
+      await reply(successCard('LINKS ADDED', 'Links saved to main bucket for validation.', [
+        ['Added', String(result.added)],
+        ['Duplicates skipped', String(result.dupes)],
+      ]));
       break;
     }
 
     // ── .pair — pair a new WhatsApp session from WhatsApp ──
-    // Allows an existing session owner to pair a new WhatsApp number without
-    // leaving WhatsApp. The new session is registered under the same Telegram
-    // owner as the calling session so it appears immediately in all Telegram
-    // session lists — identical to sessions paired through Telegram.
     case 'pair': {
       const rawPhone = args[0];
       if (!rawPhone) {
-        await reply(
-          `Usage: ${config.prefix}pair [phone]\n` +
-          `Example: ${config.prefix}pair +2348012345678\n\n` +
-          `The new WhatsApp number will be paired under your account.`
-        );
+        await reply(asciiBox({
+          title: 'PAIR NEW SESSION',
+          emoji: '🔗',
+          rows: [
+            ['Usage', `${config.prefix}pair [phone]`],
+            ['Example', `${config.prefix}pair +2348012345678`],
+          ],
+          footer: 'The new number will be paired under your account.',
+        }));
         break;
       }
 
@@ -748,14 +836,14 @@ async function processMessage(
       try {
         normalizedPhone = normalizePairingPhone(rawPhone);
       } catch (err) {
-        await reply(`❌ Invalid phone number — ${err instanceof Error ? err.message : String(err)}`);
+        await reply(errorCard('INVALID PHONE', err instanceof Error ? err.message : String(err)));
         break;
       }
 
       const newSessionId = `1_${telegramId}_${normalizedPhone}`;
       const existingMeta = loadSessionMeta(telegramId, newSessionId);
       if (existingMeta?.status === 'open') {
-        await reply(`⚠️ A session for +${normalizedPhone} is already connected.`);
+        await reply(warningCard('ALREADY CONNECTED', `A session for +${normalizedPhone} is already active.`));
         break;
       }
 
@@ -777,7 +865,12 @@ async function processMessage(
       saveSessionMeta(newMeta);
       registerSessionOwner(newSessionId, telegramId);
 
-      await reply(`🔄 Requesting pairing code for +${normalizedPhone}…`);
+      await reply(asciiBox({
+        title: 'PAIRING REQUESTED',
+        emoji: '🔄',
+        rows: [['Number', `+${normalizedPhone}`], ['Status', 'REQUESTING CODE']],
+        footer: 'Pairing code incoming…',
+      }));
 
       // Background — results are delivered back to the same WhatsApp chat
       reinitSocket(newMeta, {
@@ -787,32 +880,31 @@ async function processMessage(
           try {
             await socket.sendMessage(groupJid, {
               text:
-                `🔑 *Pairing code for +${normalizedPhone}*\n\n` +
+                `🔑 ${bold('Pairing code for')} +${normalizedPhone}\n\n` +
                 `*${code}*\n\n` +
-                `Open WhatsApp → Linked Devices → Link with phone number → Enter code above.`,
+                `_Open WhatsApp → Linked Devices → Link with phone number → Enter code above._`,
             });
           } catch { /* ignore */ }
         },
         onPairingError: async (error) => {
           try {
             await socket.sendMessage(groupJid, {
-              text: `❌ Pairing failed for +${normalizedPhone}: ${error.message}`,
+              text: errorCard('PAIRING FAILED', `Could not pair +${normalizedPhone}.`, error.message),
             });
           } catch { /* ignore */ }
         },
         onConnected: async () => {
           try {
             await socket.sendMessage(groupJid, {
-              text:
-                `✅ New session connected!\n` +
-                `+${normalizedPhone} is now active under your account.\n\n` +
-                `Session ID: ${newSessionId}`,
+              text: successCard('SESSION CONNECTED', `+${normalizedPhone} is now active under your account.`, [
+                ['Session ID', newSessionId],
+              ]),
             });
           } catch { /* ignore */ }
         },
       }).catch(async (err) => {
         try {
-          await socket.sendMessage(groupJid, { text: `❌ Pairing error: ${String(err)}` });
+          await socket.sendMessage(groupJid, { text: errorCard('PAIRING ERROR', String(err)) });
         } catch { /* ignore */ }
       });
 

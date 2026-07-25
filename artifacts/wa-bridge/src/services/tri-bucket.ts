@@ -1,6 +1,7 @@
 // ============================================================
 // WA-Bridge — Tri-Bucket Validator
 // Main → Active → Dead pipeline with headless validation
+// Premium live dashboard, session failover, high-volume support
 // ============================================================
 
 import path from 'path';
@@ -21,6 +22,41 @@ import type { BridgeWASocket as WASocket } from '../whatsapp/baileys-types.js';
 
 // Track auto-filter running state per user
 const autoFilterRunning = new Set<string>();
+
+// ── WhatsApp Invite Link Extraction ──────────────────────
+
+/**
+ * Extract all unique WhatsApp group invite links from any text.
+ * Handles links embedded in paragraphs, emojis, forwarded messages,
+ * captions, mixed content, and thousands of lines.
+ */
+export function extractAllInviteLinks(text: string): string[] {
+  // Primary: standard chat.whatsapp.com links
+  const primary = text.matchAll(
+    /https?:\/\/chat\.whatsapp\.com\/([A-Za-z0-9_-]{10,})/gu
+  );
+  // Secondary: wa.me/join short links
+  const secondary = text.matchAll(
+    /https?:\/\/wa\.me\/join\/([A-Za-z0-9_-]{10,})/gu
+  );
+  // Tertiary: bare codes in invite-share messages (e.g. "chat.whatsapp.com/AbCdEf…")
+  const tertiary = text.matchAll(
+    /chat\.whatsapp\.com\/([A-Za-z0-9_-]{10,})/gu
+  );
+
+  const seen = new Set<string>();
+  const links: string[] = [];
+
+  for (const match of [...primary, ...secondary, ...tertiary]) {
+    const normalized = `https://chat.whatsapp.com/${match[1]}`;
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      links.push(normalized);
+    }
+  }
+
+  return links;
+}
 
 // ── Validation ────────────────────────────────────────────
 
@@ -83,17 +119,62 @@ export interface ValidateAllResult {
   retries: number;
   remaining: number;
   rateLimitPaused: boolean;
+  sessionSwitched: boolean;
+}
+
+/** Formats a number with thousand separators */
+function fmt(n: number): string {
+  return n.toLocaleString('en-US');
+}
+
+/** Build the live Telegram validator dashboard (HTML) */
+function buildDashboard(opts: {
+  queue: number;
+  live: number;
+  dead: number;
+  pending: number;
+  sessionId: string;
+  sessionIndex: number;
+  speed: string;
+  status: string;
+}): string {
+  const row = (label: string, value: string | number): string =>
+    `${label.padEnd(11)}${String(value)}`;
+
+  const statusLine =
+    opts.status === 'RATE LIMITED'
+      ? '⚠ RATE LIMITED'
+      : opts.status === 'SWITCHING'
+      ? '↻ SWITCHING'
+      : '● ONLINE';
+
+  return [
+    `<blockquote>`,
+    `<b>◈ OMEGA VALIDATOR</b>`,
+    ``,
+    row('Queue', fmt(opts.queue)),
+    row('Live', fmt(opts.live)),
+    row('Dead', fmt(opts.dead)),
+    row('Pending', fmt(opts.pending)),
+    ``,
+    row('Session', `#${String(opts.sessionIndex).padStart(2, '0')}`),
+    row('Status', statusLine),
+    row('Speed', `${opts.speed} links/min`),
+    `</blockquote>`,
+  ].join('\n');
 }
 
 /**
  * Run the full validation pipeline for a user's main bucket.
  * Moves validated links to active/dead, auto-pauses on rate limits.
+ * Supports live dashboard progress and automatic session failover.
  */
 export async function validateAllLinks(
   telegramId: string,
   sessionId: string,
   socket: WASocket,
-  onProgress?: (msg: string) => Promise<void>
+  onProgress?: (msg: string) => Promise<void>,
+  getAlternativeSocket?: (currentSessionId: string) => { socket: WASocket; sessionId: string } | null
 ): Promise<ValidateAllResult> {
   const main = loadBucket(telegramId, 'main').filter(
     (e) => e.status === 'unvalidated'
@@ -106,27 +187,77 @@ export async function validateAllLinks(
     retries: 0,
     remaining: main.length,
     rateLimitPaused: false,
+    sessionSwitched: false,
   };
 
   const toActivate: BucketEntry[] = [];
   const toDead: BucketEntry[] = [];
   let consecutiveRateErrors = 0;
   const startedAt = Date.now();
+  let currentSocket = socket;
+  let currentSessionId = sessionId;
+  let sessionIndex = 1;
 
   for (let i = 0; i < main.length; i++) {
     const entry = main[i]!;
 
     // Circuit breaker check
-    if (isCircuitOpen(telegramId, sessionId, 'validator')) {
+    if (isCircuitOpen(telegramId, currentSessionId, 'validator')) {
+      // Try session failover before giving up
+      if (getAlternativeSocket) {
+        const alt = getAlternativeSocket(currentSessionId);
+        if (alt) {
+          result.sessionSwitched = true;
+          sessionIndex++;
+          currentSocket = alt.socket;
+          currentSessionId = alt.sessionId;
+          consecutiveRateErrors = 0;
+          await onProgress?.(buildDashboard({
+            queue: main.length,
+            live: result.activated,
+            dead: result.killed,
+            pending: main.length - i,
+            sessionId: currentSessionId,
+            sessionIndex,
+            speed: ((i / Math.max((Date.now() - startedAt) / 60000, 0.01))).toFixed(1),
+            status: 'SWITCHING',
+          }));
+          await jitter(2000, 4000);
+          continue;
+        }
+      }
+
       result.rateLimitPaused = true;
       result.remaining = main.length - i;
-      await onProgress?.(`🚦 Rate limit stop after 5 retries. Remaining links kept in Main Bucket: ${result.remaining}`);
+      await onProgress?.(buildDashboard({
+        queue: main.length,
+        live: result.activated,
+        dead: result.killed,
+        pending: result.remaining,
+        sessionId: currentSessionId,
+        sessionIndex,
+        speed: '0.0',
+        status: 'RATE LIMITED',
+      }));
       break;
     }
 
+    // Emit live dashboard on every link
+    const elapsed = Math.max((Date.now() - startedAt) / 60000, 0.01);
+    const speed = (i / elapsed).toFixed(1);
+    await onProgress?.(buildDashboard({
+      queue: main.length,
+      live: result.activated,
+      dead: result.killed,
+      pending: main.length - i,
+      sessionId: currentSessionId,
+      sessionIndex,
+      speed,
+      status: 'ONLINE',
+    }));
+
     try {
-      await onProgress?.(`🔍 Validator Hub\nSession: ${sessionId}\nCurrent link: ${entry.link}\nCompleted: ${i}/${main.length}\nRemaining: ${main.length - i}\nSpeed: ${((i / Math.max((Date.now() - startedAt) / 60000, 0.01))).toFixed(1)}/min\nSuccess: ${result.activated}\nFailed: ${result.killed + result.errors}\nRetries: ${result.retries}`);
-      const vr = await validateLink(socket, entry.link);
+      const vr = await validateLink(currentSocket, entry.link);
 
       if (vr.isValid) {
         toActivate.push({
@@ -139,10 +270,15 @@ export async function validateAllLinks(
         });
         result.activated++;
         consecutiveRateErrors = 0;
-        recordSuccess(telegramId, sessionId, 'validator');
+        recordSuccess(telegramId, currentSessionId, 'validator');
+
+        // Flush to disk every 50 to avoid data loss on crash
+        if (toActivate.length > 0 && toActivate.length % 50 === 0) {
+          moveToActiveBucket(telegramId, toActivate.splice(0));
+        }
       } else if (vr.transient) {
         result.errors++;
-        logger.warn(`[Validator] Transient validation failure preserved in Main: ${entry.link} — ${vr.reason}`);
+        logger.warn(`[Validator] Transient failure preserved in Main: ${entry.link} — ${vr.reason}`);
       } else {
         toDead.push({
           ...entry,
@@ -151,41 +287,63 @@ export async function validateAllLinks(
           status: 'dead',
         });
         result.killed++;
+
+        // Flush dead links every 50
+        if (toDead.length > 0 && toDead.length % 50 === 0) {
+          moveToDeadBucket(telegramId, toDead.splice(0));
+        }
       }
 
-      if (i % 10 === 0 && onProgress) {
-        await onProgress(
-          `🔍 Validating ${i + 1}/${main.length}… ✅${result.activated} 💀${result.killed}`
-        );
-      }
-
-      // Jitter between validations to avoid rate limits
       await jitter(800, 2000);
     } catch (err) {
       const msg = String(err);
-      if (msg.includes('rate') || msg.includes('429')) {
+      if (/rate|429|spam|flood|restrict|too.many/iu.test(msg)) {
         consecutiveRateErrors++;
         result.retries++;
-        const tripped = recordFailure(telegramId, sessionId, 'validator');
+        const tripped = recordFailure(telegramId, currentSessionId, 'validator');
+
         if (consecutiveRateErrors >= 5 || tripped) {
+          // Try session failover
+          if (getAlternativeSocket) {
+            const alt = getAlternativeSocket(currentSessionId);
+            if (alt) {
+              result.sessionSwitched = true;
+              sessionIndex++;
+              currentSocket = alt.socket;
+              currentSessionId = alt.sessionId;
+              consecutiveRateErrors = 0;
+              logger.info(`[Validator] Session failover → ${alt.sessionId}`);
+              await jitter(3000, 6000);
+              continue;
+            }
+          }
+
           result.rateLimitPaused = true;
           result.remaining = main.length - i;
-          await onProgress?.(
-            `🚦 Rate limit stop after 5 retries. Remaining links kept in Main Bucket: ${result.remaining}`
-          );
+          await onProgress?.(buildDashboard({
+            queue: main.length,
+            live: result.activated,
+            dead: result.killed,
+            pending: result.remaining,
+            sessionId: currentSessionId,
+            sessionIndex,
+            speed: '0.0',
+            status: 'RATE LIMITED',
+          }));
           break;
         }
+        await jitter(5000, 15000);
       }
       result.errors++;
       logger.warn(`[Validator] Error on ${entry.link}: ${msg}`);
     }
   }
 
-  result.remaining = loadBucket(telegramId, 'main').filter((e) => e.status === 'unvalidated').length - toActivate.length - toDead.length;
-
-  // Persist results
+  // Persist remaining buffered results
   if (toActivate.length > 0) moveToActiveBucket(telegramId, toActivate);
   if (toDead.length > 0) moveToDeadBucket(telegramId, toDead);
+
+  result.remaining = loadBucket(telegramId, 'main').filter((e) => e.status === 'unvalidated').length;
 
   return result;
 }
@@ -204,7 +362,8 @@ export async function startAutoFilter(
   telegramId: string,
   sessionId: string,
   socket: WASocket,
-  onProgress: (msg: string) => Promise<void>
+  onProgress: (msg: string) => Promise<void>,
+  getAlternativeSocket?: (currentSessionId: string) => { socket: WASocket; sessionId: string } | null
 ): Promise<void> {
   if (autoFilterRunning.has(telegramId)) return;
   autoFilterRunning.add(telegramId);
@@ -216,14 +375,16 @@ export async function startAutoFilter(
       );
 
       if (main.length === 0) {
-        await onProgress('✅ Auto-filter complete — all links processed');
+        await onProgress(
+          `<blockquote><b>◈ OMEGA VALIDATOR</b>\n\nStatus     ✅ COMPLETE\nAll links processed.</blockquote>`
+        );
         break;
       }
 
-      await validateAllLinks(telegramId, sessionId, socket, onProgress);
+      const result = await validateAllLinks(telegramId, sessionId, socket, onProgress, getAlternativeSocket);
 
-      // If rate limited, pause for 1 hour before continuing
-      if (isCircuitOpen(telegramId, sessionId, 'validator')) {
+      // If rate limited with no session to fall over to, pause for 1 hour
+      if (result.rateLimitPaused && !result.sessionSwitched) {
         await jitter(3_600_000, 3_600_000);
       }
     }

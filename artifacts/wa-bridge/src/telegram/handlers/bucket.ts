@@ -1,6 +1,7 @@
 // ============================================================
 // WA-Bridge — Bucket Management Telegram Handlers
 // Tri-bucket validator UI: view, filter, export, purge
+// Live validator dashboard with session failover
 // ============================================================
 
 import type { Context } from 'telegraf';
@@ -17,6 +18,7 @@ import {
   stopAutoFilter,
   startAutoFilter,
   exportBucket,
+  extractAllInviteLinks,
 } from '../../services/tri-bucket.js';
 import { enqueueJob } from '../../services/queue.js';
 import {
@@ -26,8 +28,6 @@ import {
 import { header, H, bucketCard, kv, card, noticeCard, escape } from '../../utils/formatter.js';
 import { logger } from '../../utils/logger.js';
 import { getSocket, getUserSockets } from '../../whatsapp/socket-manager.js';
-
-const LINK_REGEX = /https?:\/\/chat\.whatsapp\.com\/[A-Za-z0-9_-]+/g;
 
 // ── Bucket Status ─────────────────────────────────────────
 
@@ -95,7 +95,8 @@ export async function handleAddLinks(
   ctx: Context & { telegramId: string },
   rawText: string
 ): Promise<void> {
-  const links = rawText.match(LINK_REGEX) ?? [];
+  // Use the enhanced extractor that handles any embedded content
+  const links = extractAllInviteLinks(rawText);
 
   if (links.length === 0) {
     await ctx.reply(
@@ -128,47 +129,80 @@ export async function handleStartFilter(ctx: Context & { telegramId: string }): 
 
   const sessionIds = getUserSockets(ctx.telegramId);
   if (sessionIds.length === 0) {
-    await ctx.answerCbQuery('No active sessions — connect WhatsApp first').catch(() => {});
+    await ctx.answerCbQuery('No active sessions — connect WhatsApp first', { show_alert: true }).catch(() => {});
     return;
   }
 
-  const sessionId = sessionIds[0]!;
-  const socket = getSocket(sessionId);
-  if (!socket) {
-    await ctx.answerCbQuery('Socket not ready').catch(() => {});
+  const primarySessionId = sessionIds[0]!;
+  const primarySocket = getSocket(primarySessionId);
+  if (!primarySocket) {
+    await ctx.answerCbQuery('Socket not ready', { show_alert: true }).catch(() => {});
     return;
   }
 
-  await ctx.answerCbQuery('Filter started').catch(() => {});
+  await ctx.answerCbQuery('Validator started').catch(() => {});
 
   const main = loadBucket(ctx.telegramId, 'main');
+  const pending = main.filter((e) => e.status === 'unvalidated').length;
+
+  // Send the initial dashboard shell
   const progressMsg = await ctx.reply(
-    card('Auto-Filter Running', '🔄', [['Pending', String(main.filter((e) => e.status === 'unvalidated').length)]], 'Validation is running in the background.'),
+    [
+      `<blockquote>`,
+      `<b>◈ OMEGA VALIDATOR</b>`,
+      ``,
+      `Queue      ${pending.toLocaleString('en-US')}`,
+      `Live       0`,
+      `Dead       0`,
+      `Pending    ${pending.toLocaleString('en-US')}`,
+      ``,
+      `Session    #01`,
+      `Status     ● STARTING`,
+      `Speed      0.0 links/min`,
+      `</blockquote>`,
+    ].join('\n'),
     { parse_mode: 'HTML' }
   );
 
-  startAutoFilter(
-    ctx.telegramId,
-    sessionId,
-    socket,
-    async (msg) => {
-      try {
-        await ctx.telegram.editMessageText(
-          ctx.chat!.id,
-          progressMsg.message_id,
-          undefined,
-          escape(msg),
-          { parse_mode: 'HTML' }
-        );
-      } catch {
-        // Edit timeout — ignore
+  const chatId = ctx.chat!.id;
+  const msgId = progressMsg.message_id;
+
+  // Session failover: returns next healthy session
+  const usedSessions = new Set<string>([primarySessionId]);
+  const getAlternativeSocket = (_currentId: string): { socket: import('../../whatsapp/baileys-types.js').BridgeWASocket; sessionId: string } | null => {
+    for (const sid of sessionIds) {
+      if (!usedSessions.has(sid)) {
+        const alt = getSocket(sid);
+        if (alt) {
+          usedSessions.add(sid);
+          return { socket: alt, sessionId: sid };
+        }
       }
     }
+    return null;
+  };
+
+  // Progress callback: edit the existing dashboard message (HTML — do NOT escape)
+  const onProgress = async (html: string): Promise<void> => {
+    try {
+      await ctx.telegram.editMessageText(chatId, msgId, undefined, html, { parse_mode: 'HTML' });
+    } catch {
+      // Edit window expired or message deleted — ignore
+    }
+  };
+
+  startAutoFilter(
+    ctx.telegramId,
+    primarySessionId,
+    primarySocket,
+    onProgress,
+    getAlternativeSocket
   ).then(async () => {
     const active = loadBucket(ctx.telegramId, 'active');
     const dead = loadBucket(ctx.telegramId, 'dead');
+    // Final summary card
     await ctx.reply(
-      card('Filter Complete', '✅', [
+      card('Validator Complete', '✅', [
         ['Active', String(active.length)],
         ['Dead', String(dead.length)],
       ], 'Review or export the validated active bucket.'),

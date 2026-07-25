@@ -63,6 +63,10 @@ export interface LongLike { low?: number; high?: number; unsigned?: boolean; }
 export interface MessageContextInfo {
   mentionedJid?: string[] | null;
   quotedMessage?: IMessage | null;
+  /** JID of the quoted message's original sender (populated in group messages) */
+  participant?: string | null;
+  /** Stanza ID of the quoted message */
+  stanzaId?: string | null;
 }
 
 export interface IMessage {

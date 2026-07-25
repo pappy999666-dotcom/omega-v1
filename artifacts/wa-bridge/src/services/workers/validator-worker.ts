@@ -1,16 +1,22 @@
 // ============================================================
 // WA-Bridge — BullMQ Validator Worker
 // Headless link validation via groupGetInviteInfo
+// Live Telegram dashboard editing + session failover
 // ============================================================
 
 import { Worker, type Job } from 'bullmq';
 import type { JobPayload, JobResult } from '../../types/index.js';
 import { QUEUE_NAMES, getRedis, registerWorker } from '../queue.js';
-import { getSocket } from '../../whatsapp/socket-manager.js';
+import { getSocket, getUserSockets } from '../../whatsapp/socket-manager.js';
 import { validateAllLinks } from '../tri-bucket.js';
 import { logger } from '../../utils/logger.js';
 
-let tgBot: { telegram: { sendMessage: (chatId: number, text: string, opts?: object) => Promise<unknown> } } | null = null;
+let tgBot: {
+  telegram: {
+    sendMessage: (chatId: number, text: string, opts?: object) => Promise<unknown>;
+    editMessageText: (chatId: number, msgId: number, _: null | undefined, text: string, opts?: object) => Promise<unknown>;
+  };
+} | null = null;
 
 export function setValidatorBotRef(bot: typeof tgBot): void {
   tgBot = bot;
@@ -33,23 +39,83 @@ async function processValidation(job: Job<JobPayload>): Promise<JobResult> {
 
   const start = Date.now();
 
-  const onProgress = async (msg: string): Promise<void> => {
-    await job.updateProgress(msg);
-    if (tgBot && chatId) {
+  // Live dashboard: prefer editing an existing message, fall back to sending
+  let progressMsgId = messageId;
+
+  const onProgress = async (html: string): Promise<void> => {
+    await job.updateProgress(html);
+    if (!tgBot || !chatId) return;
+
+    try {
+      if (progressMsgId) {
+        await tgBot.telegram.editMessageText(
+          chatId,
+          progressMsgId,
+          undefined,
+          html,
+          { parse_mode: 'HTML' }
+        );
+      } else {
+        const sent = await tgBot.telegram.sendMessage(chatId, html, { parse_mode: 'HTML' }) as { message_id?: number };
+        if (sent?.message_id) progressMsgId = sent.message_id;
+      }
+    } catch {
+      // Message may have been deleted or edit window expired — send fresh
       try {
-        await tgBot.telegram.sendMessage(chatId, msg, { parse_mode: 'HTML' });
+        const sent = await tgBot.telegram.sendMessage(chatId, html, { parse_mode: 'HTML' }) as { message_id?: number };
+        if (sent?.message_id) progressMsgId = sent.message_id;
       } catch { /* ignore */ }
     }
   };
 
-  const result = await validateAllLinks(telegramId, sessionId, socket, onProgress);
+  // Build session failover helper: returns next healthy session for this user
+  const usedSessions = new Set<string>([sessionId]);
+  const getAlternativeSocket = (_currentSessionId: string): { socket: import('../../whatsapp/baileys-types.js').BridgeWASocket; sessionId: string } | null => {
+    const allSessions = getUserSockets(telegramId);
+    for (const sid of allSessions) {
+      if (!usedSessions.has(sid)) {
+        const alt = getSocket(sid);
+        if (alt) {
+          usedSessions.add(sid);
+          return { socket: alt, sessionId: sid };
+        }
+      }
+    }
+    return null;
+  };
+
+  const result = await validateAllLinks(telegramId, sessionId, socket, onProgress, getAlternativeSocket);
+
+  // Final summary message
+  const summaryHtml = [
+    `<blockquote>`,
+    `<b>◈ OMEGA VALIDATOR — COMPLETE</b>`,
+    ``,
+    `Activated   ${result.activated.toLocaleString('en-US')}`,
+    `Dead        ${result.killed.toLocaleString('en-US')}`,
+    `Errors      ${result.errors}`,
+    `Retries     ${result.retries}`,
+    `Remaining   ${result.remaining.toLocaleString('en-US')}`,
+    result.sessionSwitched ? `Session     SWITCHED` : '',
+    result.rateLimitPaused ? `\n⚠ Rate limit — remaining links kept in Main` : '',
+    `</blockquote>`,
+  ].filter(Boolean).join('\n');
+
+  await onProgress(summaryHtml);
 
   return {
     success: result.activated,
     failed: result.errors,
     skipped: 0,
     rateLimited: result.rateLimitPaused ? 1 : 0,
-    details: [`Activated: ${result.activated}`, `Dead: ${result.killed}`, `Errors: ${result.errors}`, `Retries: ${result.retries}`, `Remaining in Main: ${result.remaining}`],
+    details: [
+      `Activated: ${result.activated}`,
+      `Dead: ${result.killed}`,
+      `Errors: ${result.errors}`,
+      `Retries: ${result.retries}`,
+      `Remaining in Main: ${result.remaining}`,
+      result.sessionSwitched ? 'Session failover occurred' : '',
+    ].filter(Boolean),
     duration: Date.now() - start,
   };
 }
