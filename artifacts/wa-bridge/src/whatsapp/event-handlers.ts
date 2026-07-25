@@ -234,9 +234,8 @@ async function processMessage(
     case 'help': {
       await reply(whatsappMenu('WA-BRIDGE CONTROL', [
         {
-          heading: '⟢ 〔 🎨 〕𝐆𝐎𝐃𝐂𝐀𝐒𝐓 • 𝐄𝐍𝐆𝐈𝐍𝐄',
+          heading: '◈ STATUS ENGINE',
           items: [
- codex/perform-complete-production-audit-712frz
             { cmd: config.prefix + 'godcast', desc: 'Designed current-GC status' },
             { cmd: config.prefix + 'statusdesign', desc: 'Designed current-GC status' },
             { cmd: config.prefix + 'settheme', desc: 'Set status theme' },
@@ -247,79 +246,43 @@ async function processMessage(
             { cmd: config.prefix + 'tochatx [jid] [n] [msg]', desc: 'Repeat a target chat send' },
             { cmd: config.prefix + 'togstatusx [n] [jid] [msg]', desc: 'Repeat a target group status' },
             { cmd: config.prefix + 'sstatus [msg]', desc: 'Run status loop until stopspam' },
-            { cmd: config.prefix + 'statusdesign [theme] [link]', desc: 'Designed current-GC status' },
- main
           ],
         },
         {
-          heading: '⟢ 〔 📡 〕𝐁𝐑𝐎𝐀𝐃𝐂𝐀𝐒𝐓 • 𝐍𝐄𝐓𝐖𝐎𝐑𝐊',
+          heading: '◈ BROADCAST NETWORK',
           items: [
- codex/perform-complete-production-audit-712frz
-            { cmd: config.prefix + 'gstatus', desc: 'Post to current group status' },
-            { cmd: config.prefix + 'tochat', desc: 'Send to a target group' },
-            { cmd: config.prefix + 'togstatus', desc: 'Post to a target group status' },
-            { cmd: config.prefix + 'tochatx', desc: 'Repeat a target chat send' },
-            { cmd: config.prefix + 'togstatusx', desc: 'Repeat a target group status' },
-            { cmd: config.prefix + 'sstatus', desc: 'Run status loop until stopspam' }
             { cmd: config.prefix + 'allstatus [msg]', desc: 'Post to all group statuses' },
             { cmd: config.prefix + 'allstatusx [n] [msg]', desc: 'Repeat across every group' },
             { cmd: config.prefix + 'allchat [msg]', desc: 'Send to all groups with hidetag' },
             { cmd: config.prefix + 'stopspam', desc: 'Stop the active status loop' },
- main
           ],
         },
         {
-          heading: '⟢ 〔 📣 〕𝐌𝐀𝐒𝐒 • 𝐎𝐔𝐓𝐑𝐄𝐀𝐂𝐇',
+          heading: '◈ LIFECYCLE MODULE',
           items: [
- codex/perform-complete-production-audit-712frz
-            { cmd: config.prefix + 'allstatus', desc: 'Post to all group statuses' },
-            { cmd: config.prefix + 'allstatusx', desc: 'Repeat across every group' },
-            { cmd: config.prefix + 'allchat', desc: 'Send to all groups with hidetag' },
-            { cmd: config.prefix + 'stopspam', desc: 'Stop the active status loop'
             { cmd: config.prefix + 'join [link]', desc: 'Join a group' },
             { cmd: config.prefix + 'leave [jid]', desc: 'Leave a group' },
             { cmd: config.prefix + 'joinall', desc: 'Join all active bucket links' },
             { cmd: config.prefix + 'left', desc: 'Leave the current group' },
             { cmd: config.prefix + 'leave [jid/link]', desc: 'Leave a specified group' },
-            { cmd: config.prefix + 'leaveall', desc: 'Leave all groups'main
-          ],
-        },
-        {
-          heading: '⟢ 〔 🔗 〕𝐋𝐈𝐅𝐄𝐂𝐘𝐂𝐋𝐄 • 𝐌𝐎𝐃𝐔𝐋𝐄',
-          items: 
-          codex/perform-complete-production-audit-712frz
-            { cmd: config.prefix + 'join', desc: 'Join a group' },
-            { cmd: config.prefix + 'leave', desc: 'Leave a group' },
-            { cmd: config.prefix + 'joinall', desc: 'Join all active bucket links' },
-            { cmd: config.prefix + 'left', desc: 'Leave current group' },
             { cmd: config.prefix + 'leaveall', desc: 'Leave all groups' },
-            { cmd: config.prefix + 'tag [msg]', desc: 'Hidetag all members (invisible)' },
-            { cmd: config.prefix + 'mtag [msg]', desc: 'Visible @mention all member
-             main
           ],
         },
         {
-          heading: '⟢ 〔 📢 〕𝐓𝐀𝐆 • 𝐄𝐍𝐆𝐈𝐍𝐄',
-          items:
-          codex/perform-complete-production-audit-712frz
+          heading: '◈ TAG ENGINE',
+          items: [
             { cmd: config.prefix + 'tag', desc: 'Hidetag all members' },
             { cmd: config.prefix + 'mtag', desc: 'Visible mention all members' },
           ],
         },
         {
-          heading: '⟢ 〔 ⚙️ 〕𝐒𝐘𝐒𝐓𝐄𝐌 • 𝐂𝐎𝐍𝐅𝐈𝐆',
+          heading: '◈ SYSTEM CONFIG',
           items: [
-            { cmd: config.prefix + 'setprefix', desc: 'Change command prefix' },
-            { cmd: config.prefix + 'setcmd', desc: 'Bind quoted sticker' },
-            { cmd: config.prefix + 'delcmd', desc: 'Delete quoted sticker binding' },
-            { cmd: config.prefix + 'setsudo', desc: 'Approve a command number' },
-            { cmd: config.prefix + 'delsudo', desc: 'Remove command access' },
-
             { cmd: config.prefix + 'setprefix [p]', desc: 'Change command prefix' },
             { cmd: config.prefix + 'setcmd [cmd]', desc: 'Bind quoted sticker to command' },
             { cmd: config.prefix + 'delcmd', desc: 'Delete quoted sticker binding' },
             { cmd: config.prefix + 'setsudo [number]', desc: 'Approve a command number' },
-            { cmd: config.prefix + 'delsudo [number]', desc: 'Remove command access' main
+            { cmd: config.prefix + 'delsudo [number]', desc: 'Remove command access' },
             { cmd: config.prefix + 'info', desc: 'Session information' },
             { cmd: config.prefix + 'groups', desc: 'List joined groups' },
           ],
@@ -509,33 +472,30 @@ async function processMessage(
     // ── tochat ──
     case 'tochat': {
       const [target, ...msgParts] = args;
-      codex/perform-complete-production-audit-712frz
       const message = msgParts.join(' ').trim() || quotedText.trim();
       if (!target || !message) { await reply(`Usage: ${config.prefix}tochat [jid/link] [message], or reply to a message with ${config.prefix}tochat [jid/link]`); break; }
       const res = await cmdToChat(socket, sessionId, target, message);
-
-      if (!target || msgParts.length === 0) { await reply(`Usage: ${config.prefix}tochat [jid/link] [message]`); break; }
-      const res = await cmdToChat(socket, sessionId, target, msgParts.join(' '));
-main
-      await reply(res.success ? '✅ Message sent!' : `❌ Failed: ${res.error}`);
+      await reply(res.success
+        ? successCard('MESSAGE DELIVERED', 'The target chat accepted the message.', [['Target', target], ['Network', 'STABLE']])
+        : errorCard('DELIVERY FAILED', 'WhatsApp rejected the target message.', res.error));
       break;
     }
 
     // ── tochatx ──
     case 'tochatx': {
-      const [target, countStr, ...msgParts] = arg codex/perform-complete-production-audit-712frz
+      const [target, countStr, ...msgParts] = args;
       const message = msgParts.join(' ').trim() || quotedText.trim();
       if (!target || !countStr || !message) {
         await reply(`Usage: ${config.prefix}tochatx [jid/link] [count] [message], or reply to a message with ${config.prefix}tochatx [jid/link] [count]`);
-
-      if (!target || !countStr || msgParts.length === 0) {
-        await reply(`Usage: ${config.prefix}tochatx [jid/link] [count] [message]`);
- main
         break;
       }
       const count = Math.min(parseInt(countStr, 10), 50);
       const res = await cmdToChatX(socket, sessionId, target, count, message);
-      await reply(`✅ Sent ${res.sent}/${count} — ${res.failed} failed`);
+      await reply(successCard('REPEAT DELIVERY COMPLETE', 'The target chat operation finished.', [
+        ['Target', target],
+        ['Sent', `${res.sent}/${count}`],
+        ['Failed', String(res.failed)],
+      ]));
       break;
     }
 

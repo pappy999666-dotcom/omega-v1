@@ -16,6 +16,10 @@ export interface LinkMeta {
   description?: string;
   imageUrl?: string;
   siteName?: string;
+  thumbnail?: Uint8Array;
+  canonicalUrl?: string;
+  favicon?: string;
+  linkPreviewMetadata?: unknown;
 }
 
 /**
@@ -81,27 +85,47 @@ export async function fetchLinkMeta(url: string): Promise<LinkMeta | null> {
  */
 export async function hydratedMessage(
   text: string,
-  existingPreview?: { url?: string; title?: string; description?: string; thumbnail?: Uint8Array; canonicalUrl?: string; favicon?: string; linkPreviewMetadata?: unknown },
+  existingPreview?: Partial<LinkMeta>,
   options: { suppressPreview?: boolean } = {}
 ): Promise<AnyMessageContent> {
   const url = existingPreview?.url ?? extractFirstUrl(text);
   if (options.suppressPreview) return { text, linkPreview: null };
   if (!url) return { text };
 
-  // Baileys expects the link-preview-js field names, notably `matched-text`.
-  // If no complete preview was supplied, leave linkPreview undefined so the
-  // socket's native getUrlInfo pipeline builds thumbnails and HQ media fields.
-  if (!existingPreview?.url) return { text };
+  // Status and group-status messages do not reliably pass through Baileys'
+  // native getUrlInfo pipeline. Hydrate raw text here instead of silently
+  // falling back to a plain text message.
+  const preview = existingPreview ?? await fetchLinkMeta(url);
+  if (!preview) return { text };
+
+  let thumbnail = preview.thumbnail;
+  if (!thumbnail && preview.imageUrl) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      const response = await fetch(preview.imageUrl, {
+        signal: controller.signal,
+        headers: { 'user-agent': 'Mozilla/5.0 (compatible; WA-Bridge/1.0)' },
+      }).finally(() => clearTimeout(timeout));
+      if (response.ok) thumbnail = new Uint8Array(await response.arrayBuffer());
+    } catch (err) {
+      logger.debug('[Preview] Failed to download thumbnail', {
+        url,
+        imageUrl: preview.imageUrl,
+        err: String(err),
+      });
+    }
+  }
 
   return {
     text,
     linkPreview: {
-      'matched-text': existingPreview.url,
-      'canonical-url': existingPreview.canonicalUrl ?? existingPreview.url,
-      title: existingPreview.title ?? '',
-      description: existingPreview.description ?? '',
-      jpegThumbnail: existingPreview.thumbnail,
-      linkPreviewMetadata: existingPreview.linkPreviewMetadata,
+      'matched-text': preview.url ?? url,
+      'canonical-url': preview.canonicalUrl ?? preview.url ?? url,
+      title: preview.title ?? '',
+      description: preview.description ?? '',
+      jpegThumbnail: thumbnail,
+      linkPreviewMetadata: preview.linkPreviewMetadata,
     },
   } as AnyMessageContent;
 }

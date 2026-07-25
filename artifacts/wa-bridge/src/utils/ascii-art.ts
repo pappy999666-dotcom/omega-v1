@@ -88,27 +88,27 @@ export function whatsappMenu(
   sections: { heading: string; items: { cmd: string; desc: string }[] }[]
 ): string {
   const cleanCommand = (cmd: string): string => cmd.trim().split(/\s+/u)[0] ?? cmd.trim();
+  const safeDivider = '────────────────────';
   const lines: string[] = [
-    '⠀⠀⠀⠀⠀⠀⠀⠀⟦ ◈ 𝐎𝐌𝐄𝐆𝐀 • 𝐂𝐎𝐑𝐄 ◈ ⟧',
-    '        ᴡᴀ ʙʀɪᴅɢᴇ • ᴄᴏɴᴛʀᴏʟ ᴘᴀɴᴇʟ',
-    '      ═══════════════════════════════',
-    '      ◉ SYSTEM ▰ ONLINE',
-    '      ◉ SESSION ▰ VERIFIED',
-    '      ◉ ENGINE ▰ READY',
+    '⟦ ◈ *OMEGA • CORE* ◈ ⟧',
+    '_WA-BRIDGE / CONTROL INTERFACE_',
+    '',
+    'SYSTEM      ◉ ONLINE',
+    'SESSION     ◉ VERIFIED',
+    'ENGINE      ◉ READY',
   ];
 
   for (const section of sections) {
-    lines.push('', '╭─────────────────────────────────', '', section.heading, '┈┈┈┈┈┈┈┈┈┈');
-    for (const item of section.items) lines.push(`◈ ${cleanCommand(item.cmd)}`);
-    lines.push('', '╰─────────────────────────────────');
+    lines.push('', safeDivider, section.heading, safeDivider);
+    for (const item of section.items) {
+      lines.push(`◈ *${cleanCommand(item.cmd)}*`, `  └ ${item.desc}`);
+    }
   }
 
   lines.push(
     '',
-    '═════════════〔 ⬢ 〕═════════════',
-    '      ◉ Awaiting Operator Input...',
-    '      ◉ Type a command to continue.',
-    '══════════════════════════════════'
+    safeDivider,
+    '⟦ Awaiting Operator Command... ⟧'
   );
 
   return lines.join('\n').trim();

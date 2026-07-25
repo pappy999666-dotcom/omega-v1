@@ -37,7 +37,7 @@ export async function sendGroupStatus(
     const bridge = socket as unknown as BridgeSocket;
     const generated = options.mediaBuffer
       ? mediaContent(options.mediaBuffer, options.mediaType ?? 'image', options.caption ?? text)
-      : await hydratedMessage(text, undefined, { suppressPreview: true }) as unknown as MessageContent;
+      : await hydratedMessage(text) as unknown as MessageContent;
 
     const content: MessageContent = options.likeThis
       ? { ...generated, groupStatus: true, likeThis: true }
