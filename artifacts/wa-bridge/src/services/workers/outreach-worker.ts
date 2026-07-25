@@ -10,6 +10,7 @@ import { getSocket } from '../../whatsapp/socket-manager.js';
 import { cmdAllStatus, cmdAllChat } from '../../whatsapp/commands/mass-outreach.js';
 import { cmdToChatX } from '../../whatsapp/commands/status.js';
 import { logger } from '../../utils/logger.js';
+import { sleep } from '../../utils/delay.js';
 
 let tgBot: { telegram: { sendMessage: (chatId: number, text: string, opts?: object) => Promise<unknown>; editMessageText: (chatId: number, msgId: number, _: null, text: string, opts?: object) => Promise<unknown> } } | null = null;
 
@@ -34,13 +35,26 @@ async function updateProgress(
   }
 }
 
+// Wait up to 90s for the session socket to become available after a restart
+async function waitForSocket(sessionId: string, maxWaitMs = 90_000): Promise<ReturnType<typeof getSocket>> {
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    const socket = getSocket(sessionId);
+    if (socket) return socket;
+    await sleep(3000);
+  }
+  return null;
+}
+
 async function processOutreach(job: Job<JobPayload>): Promise<JobResult> {
   const { telegramId, sessionId, type, data, chatId, messageId } = job.data;
-  const socket = getSocket(sessionId);
+
+  // Wait for socket — handles the case where the job resumes before WA reconnects
+  const socket = await waitForSocket(sessionId);
 
   if (!socket) {
-    logger.warn(`[OutreachWorker] No socket for ${sessionId}`);
-    return { success: 0, failed: 0, skipped: 0, rateLimited: 0, details: ['No socket'], duration: 0 };
+    logger.warn(`[OutreachWorker] No socket for ${sessionId} after wait — requeueing`);
+    throw new Error(`Session ${sessionId} not available — will retry`);
   }
 
   const onProgress = async (msg: string): Promise<void> => {
@@ -84,8 +98,10 @@ export function startOutreachWorker(): Worker {
     processOutreach,
     {
       connection: getRedis(),
-      concurrency: 1, // Serial outreach to prevent ban cascades
-      limiter: { max: 5, duration: 60_000 }, // 5 jobs/min
+      concurrency: 1,
+      limiter: { max: 5, duration: 60_000 },
+      stalledInterval: 30_000,   // check for stalled jobs every 30s
+      maxStalledCount: 3,        // retry stalled jobs up to 3 times before failing
     }
   );
 

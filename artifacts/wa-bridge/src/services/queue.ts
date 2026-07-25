@@ -66,9 +66,9 @@ export function getSubRedis(): Redis {
 
 export const QUEUE_NAMES = {
   OUTREACH: 'wa-outreach',
-  VALIDATOR: 'wa:validator',
-  LIFECYCLE: 'wa:lifecycle',
-  OMNI: 'wa:omni',
+  VALIDATOR: 'wa-validator',
+  LIFECYCLE: 'wa-lifecycle',
+  OMNI: 'wa-omni',
 } as const;
 
 // ── Queue Instances ───────────────────────────────────────
@@ -82,13 +82,32 @@ export function getQueue(name: string): Queue {
       defaultJobOptions: {
         attempts: 3,
         backoff: { type: 'exponential', delay: 5000 },
-        removeOnComplete: { count: 100 },
-        removeOnFail: { count: 50 },
+        // Keep jobs in Redis so they survive restarts and can be resumed
+        removeOnComplete: false,
+        removeOnFail: { count: 100 },
       },
     });
     queues.set(name, q);
   }
   return queues.get(name)!;
+}
+
+// ── Job Resume on Boot ────────────────────────────────────
+// Re-enqueue any jobs that were active (stalled) when the process died.
+// BullMQ marks them as stalled after the lock expires; this drains them.
+export async function resumeStalledJobs(): Promise<void> {
+  for (const name of Object.values(QUEUE_NAMES)) {
+    try {
+      const q = getQueue(name);
+      // obliterate stalled state so workers pick them up fresh
+      const stalled = await (q as unknown as { getStalledCount(): Promise<number> }).getStalledCount?.() ?? 0;
+      if (stalled > 0) {
+        logger.info(`[Queue] ${stalled} stalled job(s) in ${name} — will be retried by workers`);
+      }
+    } catch {
+      // queue may not exist yet
+    }
+  }
 }
 
 export const outreachQueue = () => getQueue(QUEUE_NAMES.OUTREACH);

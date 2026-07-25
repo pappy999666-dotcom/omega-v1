@@ -23,6 +23,7 @@ import {
 } from '../ui/keyboards.js';
 import { header, H, kv, bucketCard } from '../../utils/formatter.js';
 import { logger } from '../../utils/logger.js';
+import { runDeployment } from '../../services/deployment.js';
 
 // ── Admin Panel ───────────────────────────────────────────
 
@@ -198,7 +199,7 @@ export async function executeOmniCommand(
   command: string,
   text: string
 ): Promise<void> {
-  const jobId = await enqueueJob('wa:omni', {
+  const jobId = await enqueueJob('wa-omni', {
     telegramId: ctx.telegramId,
     sessionId: 'omni',
     type: 'omni_bridge',
@@ -267,4 +268,126 @@ function humanUptime(): string {
   const h = Math.floor(ms / 3_600_000);
   const m = Math.floor((ms % 3_600_000) / 60_000);
   return `${h}h ${m}m`;
+}
+
+// ── Update Bot ────────────────────────────────────────────
+
+// Track active deployments to prevent concurrent runs
+const activeDeployments = new Set<string>();
+
+export async function handleUpdateBot(ctx: Context & { telegramId: string }): Promise<void> {
+  if (activeDeployments.has(ctx.telegramId)) {
+    await ctx.answerCbQuery('A deployment is already in progress', { show_alert: true }).catch(() => {});
+    return;
+  }
+
+  activeDeployments.add(ctx.telegramId);
+
+  // Send the initial console message
+  const consoleLines = [
+    `${header('Live Deployment Console', '\ud83d\ude80')}`,
+    '',
+    '\u23f3 Starting deployment pipeline...',
+  ];
+
+  let msgId: number;
+  try {
+    const sent = await ctx.telegram.sendMessage(
+      parseInt(ctx.telegramId, 10),
+      consoleLines.join('\n'),
+      { parse_mode: 'HTML' }
+    );
+    msgId = sent.message_id;
+  } catch (err) {
+    activeDeployments.delete(ctx.telegramId);
+    logger.error('[Deploy] Could not send console message', { err: String(err) });
+    return;
+  }
+
+  // Close the callback query
+  await ctx.answerCbQuery('Deployment started').catch(() => {});
+
+  // Edit the original admin panel message to show deployment is running
+  await ctx.editMessageText(
+    `${header('Deployment Running', '\ud83d\udd04')}\n\nA live deployment console has been opened in this chat.`,
+    { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') }
+  ).catch(() => {});
+
+  const onProgress = async (lines: string[]): Promise<void> => {
+    const text = [
+      `${header('Live Deployment Console', '\ud83d\ude80')}`,
+      '',
+      ...lines,
+    ].join('\n');
+    await ctx.telegram.editMessageText(
+      parseInt(ctx.telegramId, 10),
+      msgId,
+      undefined,
+      text.slice(0, 4096),
+      { parse_mode: 'HTML' }
+    ).catch(() => {});
+  };
+
+  try {
+    const result = await runDeployment(onProgress);
+
+    if (result.success) {
+      const summary = [
+        `${header('Deployment Complete', '\u2705')}`,
+        '',
+        kv('Previous commit:', H.code(result.prevCommit ?? 'unknown')),
+        kv('Current commit:', H.code(result.currCommit ?? 'unknown')),
+        kv('Files changed:', String(result.filesChanged ?? 0)),
+        kv('Build time:', `${((result.buildDurationMs ?? 0) / 1000).toFixed(1)}s`),
+        kv('Total time:', `${((result.totalDurationMs ?? 0) / 1000).toFixed(1)}s`),
+        kv('Status:', '\ud83d\udfe2 Online'),
+      ].join('\n');
+
+      await ctx.telegram.editMessageText(
+        parseInt(ctx.telegramId, 10),
+        msgId,
+        undefined,
+        summary,
+        { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') }
+      ).catch(() => {});
+    } else {
+      const failMsg = [
+        `${header('Deployment Failed', '\u274c')}`,
+        '',
+        kv('Failed step:', H.bold(result.failedStep ?? 'Unknown')),
+        '',
+        H.blockquote(H.pre((result.error ?? 'No details').slice(0, 500), 'log'), true),
+        '',
+        H.italic('The previous version is still running.'),
+      ].join('\n');
+
+      await ctx.telegram.editMessageText(
+        parseInt(ctx.telegramId, 10),
+        msgId,
+        undefined,
+        failMsg,
+        { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') }
+      ).catch(() => {});
+    }
+  } finally {
+    activeDeployments.delete(ctx.telegramId);
+  }
+}
+
+// ── Restart Bot ────────────────────────────────────────────
+
+export async function handleRestartBot(ctx: Context & { telegramId: string }): Promise<void> {
+  await ctx.answerCbQuery('Restarting…').catch(() => {});
+  await ctx.editMessageText(
+    `${header('Restarting…', '🔁')}\n\nPM2 is restarting the bot. You will receive a startup message in a few seconds.`,
+    { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') }
+  ).catch(() => {});
+  // Delay slightly so Telegram gets the response before the process dies
+  setTimeout(() => {
+    import('child_process').then(({ exec }) => {
+      exec('pm2 restart wa-bridge --update-env', (err) => {
+        if (err) logger.error('[Admin] Restart failed', { err: String(err) });
+      });
+    }).catch(() => {});
+  }, 800);
 }

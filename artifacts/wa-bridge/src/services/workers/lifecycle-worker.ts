@@ -10,6 +10,7 @@ import { getSocket } from '../../whatsapp/socket-manager.js';
 import { cmdJoinAll, cmdLeaveAll } from '../../whatsapp/commands/lifecycle.js';
 import { loadBucket } from '../workspace.js';
 import { logger } from '../../utils/logger.js';
+import { sleep } from '../../utils/delay.js';
 
 let tgBot: { telegram: { sendMessage: (chatId: number, text: string, opts?: object) => Promise<unknown> } } | null = null;
 
@@ -17,12 +18,22 @@ export function setLifecycleBotRef(bot: typeof tgBot): void {
   tgBot = bot;
 }
 
+async function waitForSocket(sessionId: string, maxWaitMs = 90_000): Promise<ReturnType<typeof getSocket>> {
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    const socket = getSocket(sessionId);
+    if (socket) return socket;
+    await sleep(3000);
+  }
+  return null;
+}
+
 async function processLifecycle(job: Job<JobPayload>): Promise<JobResult> {
   const { telegramId, sessionId, type, chatId } = job.data;
-  const socket = getSocket(sessionId);
 
+  const socket = await waitForSocket(sessionId);
   if (!socket) {
-    return { success: 0, failed: 0, skipped: 0, rateLimited: 0, details: ['No socket'], duration: 0 };
+    throw new Error(`Session ${sessionId} not available — will retry`);
   }
 
   const onProgress = async (msg: string): Promise<void> => {
@@ -39,11 +50,9 @@ async function processLifecycle(job: Job<JobPayload>): Promise<JobResult> {
       const links = loadBucket(telegramId, 'active').map((e) => e.link);
       return cmdJoinAll(socket, sessionId, telegramId, links, { onProgress });
     }
-
     case 'leaveall': {
       return cmdLeaveAll(socket, sessionId, telegramId, { onProgress });
     }
-
     default:
       return { success: 0, failed: 0, skipped: 0, rateLimited: 0, details: [`Unknown: ${type}`], duration: 0 };
   }
@@ -57,6 +66,8 @@ export function startLifecycleWorker(): Worker {
       connection: getRedis(),
       concurrency: 1,
       limiter: { max: 3, duration: 60_000 },
+      stalledInterval: 30_000,
+      maxStalledCount: 3,
     }
   );
 

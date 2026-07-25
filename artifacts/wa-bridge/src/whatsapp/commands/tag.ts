@@ -64,11 +64,10 @@ export async function cmdTag(
         content = { image: opts.mediaBuffer, caption: text, mentions: participants };
       }
     } else {
-      // Invisible hidetag: include mentions array but no @name in text
       content = { text, mentions: participants };
     }
 
-    await socket.sendMessage(groupJid, content);
+    await Promise.all([socket.sendMessage(groupJid, content)]);
     logger.info(`[Tag] Hidetag sent to ${groupJid} — ${participants.length} pinged`);
 
     return { success: true, pinged: participants.length };
@@ -138,7 +137,7 @@ export async function cmdMTag(
   }
 }
 
-// ── Tag Summary (for WA reply) ────────────────────────────
+// ── Tag Summary (for .mtag WA reply) ─────────────────────
 
 export function tagSummary(pinged: number, mode: 'tag' | 'mtag'): string {
   const label = mode === 'tag' ? 'Hidetag' : 'Visible Mention';

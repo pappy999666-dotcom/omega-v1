@@ -785,11 +785,8 @@ async function processMessage(
     // ── tag ──
     case 'tag': {
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
-      const text = commandText('📢');
-      const res = await cmdTag(socket, sessionId, groupJid, text);
-      await reply(res.success
-        ? tagSummary(res.pinged, 'tag')
-        : errorCard('TAG FAILED', res.error ?? 'Could not fetch group participants.'));
+      const text = commandText('\u200b');
+      await cmdTag(socket, sessionId, groupJid, text);
       break;
     }
 

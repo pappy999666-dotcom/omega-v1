@@ -393,7 +393,11 @@ export async function startAutoFilter(
   }
 }
 
-// ── Export ────────────────────────────────────────────────
+// ── Export ────────────────────────────────────────────
+
+function escHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 
 export function exportBucket(
   telegramId: string,
@@ -418,16 +422,116 @@ export function exportBucket(
       .join('\n');
     fs.writeFileSync(filepath, header + rows);
   } else {
-    const rows = entries
-      .map(
-        (e) =>
-          `<tr><td><a href="${e.link}">${e.link}</a></td><td>${e.title ?? ''}</td><td>${e.memberCount ?? ''}</td><td>${e.status}</td></tr>`
-      )
-      .join('\n');
-    const html = `<!DOCTYPE html><html><head><title>${bucket} Bucket</title>
-<style>body{font-family:sans-serif;} table{border-collapse:collapse;width:100%} td,th{border:1px solid #ccc;padding:6px}</style>
-</head><body><h1>${bucket.toUpperCase()} BUCKET — ${entries.length} links</h1>
-<table><tr><th>Link</th><th>Title</th><th>Members</th><th>Status</th></tr>${rows}</table></body></html>`;
+    const CSS = [
+      ':root{--bg:#050a0e;--surface:#0a1520;--surface2:#0d1e2e;--border:#0f3a5a;--accent:#00ffe7;--accent2:#00b4ff;--red:#ff2d55;--green:#00ff9d;--yellow:#ffe600;--text:#c8e6f5;--muted:#4a7a9b;--font:\'Courier New\',monospace}',
+      '*{box-sizing:border-box;margin:0;padding:0}',
+      'body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:100vh;overflow-x:hidden}',
+      'body::before{content:\'\';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,255,231,.015) 2px,rgba(0,255,231,.015) 4px);pointer-events:none;z-index:9999}',
+      '.header{padding:32px 24px 20px;border-bottom:1px solid var(--border);position:relative;overflow:hidden}',
+      '.header::after{content:\'\';position:absolute;bottom:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--accent),transparent)}',
+      '.logo{font-size:11px;color:var(--muted);letter-spacing:4px;text-transform:uppercase;margin-bottom:8px}',
+      '.title{font-size:28px;font-weight:700;color:var(--accent);text-shadow:0 0 20px rgba(0,255,231,.4);letter-spacing:2px}',
+      '.subtitle{font-size:12px;color:var(--muted);margin-top:6px;letter-spacing:1px}',
+      '.stats{display:flex;gap:24px;padding:16px 24px;border-bottom:1px solid var(--border);flex-wrap:wrap}',
+      '.stat{display:flex;flex-direction:column;gap:2px}',
+      '.stat-label{font-size:10px;color:var(--muted);letter-spacing:2px;text-transform:uppercase}',
+      '.stat-value{font-size:20px;font-weight:700;color:var(--accent);text-shadow:0 0 10px rgba(0,255,231,.3)}',
+      '.toolbar{padding:14px 24px;border-bottom:1px solid var(--border);display:flex;gap:12px;align-items:center;flex-wrap:wrap}',
+      '.search{background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px 14px;border-radius:4px;outline:none;width:320px;transition:border .2s}',
+      '.search:focus{border-color:var(--accent);box-shadow:0 0 8px rgba(0,255,231,.2)}',
+      '.search::placeholder{color:var(--muted)}',
+      '.count-badge{font-size:11px;color:var(--muted);letter-spacing:1px;margin-left:auto}',
+      '.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;padding:20px 24px}',
+      '.card{background:var(--surface);border:1px solid var(--border);border-radius:6px;display:flex;overflow:hidden;transition:border-color .2s,box-shadow .2s;position:relative}',
+      '.card:hover{border-color:var(--accent2);box-shadow:0 0 16px rgba(0,180,255,.15)}',
+      '.card::before{content:attr(data-index);position:absolute;top:6px;right:8px;font-size:9px;color:var(--border);letter-spacing:1px}',
+      '.thumb{width:72px;min-width:72px;background:var(--surface2);display:flex;align-items:center;justify-content:center;overflow:hidden;border-right:1px solid var(--border)}',
+      '.thumb img{width:72px;height:72px;object-fit:cover;display:block}',
+      '.no-thumb{font-size:11px;font-weight:700;color:var(--muted);letter-spacing:2px}',
+      '.card-body{padding:10px 12px;flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}',
+      '.card-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+      '.index{font-size:10px;color:var(--muted);letter-spacing:1px}',
+      '.badge{font-size:10px;background:rgba(0,180,255,.1);border:1px solid rgba(0,180,255,.3);color:var(--accent2);padding:1px 6px;border-radius:3px;letter-spacing:.5px}',
+      '.status-badge{font-size:9px;padding:2px 6px;border-radius:3px;letter-spacing:1px;font-weight:700}',
+      '.status-active{background:rgba(0,255,157,.1);border:1px solid rgba(0,255,157,.3);color:var(--green)}',
+      '.status-dead{background:rgba(255,45,85,.1);border:1px solid rgba(255,45,85,.3);color:var(--red)}',
+      '.status-pending{background:rgba(255,230,0,.1);border:1px solid rgba(255,230,0,.3);color:var(--yellow)}',
+      '.group-title{font-size:13px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+      '.link{font-size:11px;color:var(--accent2);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;transition:color .2s}',
+      '.link:hover{color:var(--accent);text-decoration:underline}',
+      '.jid{font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+      '.footer{padding:20px 24px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);letter-spacing:1px;text-align:center}',
+      '.card.hidden{display:none}',
+      '::-webkit-scrollbar{width:6px;height:6px}',
+      '::-webkit-scrollbar-track{background:var(--bg)}',
+      '::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}',
+      '::-webkit-scrollbar-thumb:hover{background:var(--accent2)}',
+    ].join('\n');
+
+    const tsExport = new Date().toLocaleString('en-US', { hour12: false });
+    const activeCount = entries.filter((e) => e.status === 'active').length;
+    const deadCount = entries.filter((e) => e.status === 'dead').length;
+    const pendingCount = entries.filter((e) => e.status === 'unvalidated').length;
+
+    const cardRows = entries.map((e, i) => {
+      const thumb = e.thumbnailUrl
+        ? `<div class="thumb"><img src="${e.thumbnailUrl}" alt="" loading="lazy" onerror="this.parentElement.style.display=\'none\'"/></div>`
+        : '<div class="thumb no-thumb"><span>WA</span></div>';
+      const titleHtml = e.title ? `<div class="group-title">${escHtml(e.title)}</div>` : '';
+      const membersHtml = e.memberCount ? `<span class="badge">${e.memberCount} members</span>` : '';
+      const jidHtml = e.jid ? `<div class="jid">${escHtml(e.jid)}</div>` : '';
+      const statusClass = e.status === 'active' ? 'status-active' : e.status === 'dead' ? 'status-dead' : 'status-pending';
+      return [
+        `<div class="card" data-index="${i + 1}">`,
+        thumb,
+        `<div class="card-body">`,
+        `<div class="card-top">`,
+        `<span class="index">#${String(i + 1).padStart(3, '0')}</span>`,
+        `<span class="status-badge ${statusClass}">${e.status.toUpperCase()}</span>`,
+        membersHtml,
+        `</div>`,
+        titleHtml,
+        `<a class="link" href="${e.link}" target="_blank" rel="noopener">${escHtml(e.link)}</a>`,
+        jidHtml,
+        `</div></div>`,
+      ].join('');
+    }).join('\n');
+
+    const html = '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8"/>\n'
+      + '<meta name="viewport" content="width=device-width,initial-scale=1"/>\n'
+      + `<title>OMEGA // ${bucket.toUpperCase()} BUCKET</title>\n`
+      + `<style>\n${CSS}\n</style>\n`
+      + '</head>\n<body>\n'
+      + '<div class="header">'
+      + '<div class="logo">OMEGA SYSTEM // EXPORT MODULE</div>'
+      + `<div class="title">&#9632; ${bucket.toUpperCase()} BUCKET</div>`
+      + `<div class="subtitle">GENERATED ${tsExport} &nbsp;|&nbsp; ${entries.length} RECORDS</div>`
+      + '</div>\n'
+      + '<div class="stats">'
+      + `<div class="stat"><span class="stat-label">Total</span><span class="stat-value">${entries.length}</span></div>`
+      + `<div class="stat"><span class="stat-label">Active</span><span class="stat-value" style="color:var(--green)">${activeCount}</span></div>`
+      + `<div class="stat"><span class="stat-label">Dead</span><span class="stat-value" style="color:var(--red)">${deadCount}</span></div>`
+      + `<div class="stat"><span class="stat-label">Pending</span><span class="stat-value" style="color:var(--yellow)">${pendingCount}</span></div>`
+      + '</div>\n'
+      + '<div class="toolbar">'
+      + '<input class="search" id="search" type="text" placeholder="&#9655; SEARCH GROUPS..." autocomplete="off"/>'
+      + `<span class="count-badge" id="count">${entries.length} / ${entries.length}</span>`
+      + '</div>\n'
+      + `<div class="grid" id="grid">\n${cardRows}\n</div>\n`
+      + `<div class="footer">OMEGA WA-BRIDGE &nbsp;&#9632;&nbsp; ${new Date().getFullYear()} &nbsp;&#9632;&nbsp; ${entries.length} LINKS EXPORTED</div>\n`
+      + '<script>\n'
+      + '(function(){'
+      + 'var s=document.getElementById("search");'
+      + 'var cards=document.querySelectorAll(".card");'
+      + 'var cnt=document.getElementById("count");'
+      + 's.addEventListener("input",function(){'
+      + 'var q=s.value.toLowerCase();var v=0;'
+      + 'cards.forEach(function(c){var m=c.textContent.toLowerCase().indexOf(q)!==-1;c.classList.toggle("hidden",!m);if(m)v++;});'
+      + 'cnt.textContent=v+" / "+cards.length;});'
+      + '})()'
+      + '\n</script>\n'
+      + '</body>\n</html>';
+
     fs.writeFileSync(filepath, html);
   }
 

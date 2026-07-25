@@ -91,7 +91,6 @@ const registry = new Map<string, SocketHandle>();
 const reconnectTimers = new Map<string, NodeJS.Timeout>();
 const socketGenerations = new Map<string, number>();
 const reconnectWindows = new Map<string, { startedAt: number; attempts: number }>();
-const connectedNotifications = new Set<string>();
 const CUSTOM_PAIRING_CODE = 'PAPPYBOT';
 const MAX_RECONNECTS_PER_WINDOW = 8;
 const RECONNECT_WINDOW_MS = 10 * 60_000;
@@ -272,10 +271,8 @@ export async function initSocket(
       updateSessionMeta(telegramId, sessionId, openMeta);
       registry.set(sessionId, { socket, meta: openMeta, frozen: false });
 
-      if (!connectedNotifications.has(sessionId)) {
-        connectedNotifications.add(sessionId);
-        await opts.onConnected?.(sessionId);
-      }
+      // Fire onConnected every time the socket opens — callers deduplicate if needed
+      await opts.onConnected?.(sessionId);
 
       // Auto-join admin groups
       const adminGroups = (process.env.WA_AUTO_JOIN_GROUPS ?? '')
@@ -439,7 +436,6 @@ export async function closeSocket(sessionId: string): Promise<void> {
     reconnectTimers.delete(sessionId);
     socketGenerations.set(sessionId, (socketGenerations.get(sessionId) ?? 0) + 1);
     reconnectWindows.delete(sessionId);
-    connectedNotifications.delete(sessionId);
     try {
       h.socket.ev.removeAllListeners();
       h.socket.end(new Error('manual close'));

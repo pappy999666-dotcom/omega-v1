@@ -212,6 +212,8 @@ export function adminPanelKeyboard(paused = false, maintenance = false): InlineK
           : btn('🔧 Maintenance', 'admin:maintenance:on', 'danger'),
         btn('📊 Platform Stats', 'admin:stats'),
       ],
+      [btn('🔄 Update Bot', 'admin:update', 'primary'), btn('🔗 Menu URL', 'admin:menuurl')],
+      [btn('🔁 Restart Bot', 'admin:restart', 'danger')],
       [btn('🔙 Back', 'menu:main')],
     ],
   };
@@ -270,8 +272,7 @@ export function confirmKeyboard(
 // ── Settings ──────────────────────────────────────────────
 
 export function settingsKeyboard(
-  config?: { notificationsEnabled?: boolean; defaultLinkCollection?: boolean; autoValidationEnabled?: boolean },
-  globalMenuUrl?: string | null
+  config?: { notificationsEnabled?: boolean; defaultLinkCollection?: boolean; autoValidationEnabled?: boolean }
 ): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
@@ -279,7 +280,6 @@ export function settingsKeyboard(
       [btn(`Notifications: ${config?.notificationsEnabled === false ? 'Off' : 'On'}`, 'settings:notifications')],
       [btn(`Default Collection: ${config?.defaultLinkCollection ? 'On' : 'Off'}`, 'settings:collection')],
       [btn(`Auto Validation: ${config?.autoValidationEnabled ? 'On' : 'Off'}`, 'settings:validation')],
-      [btn(globalMenuUrl ? '🔗 Global Menu URL (Set)' : '🔗 Global Menu URL', 'settings:menuurl')],
       [btn('Back', 'menu:main')],
     ],
   };

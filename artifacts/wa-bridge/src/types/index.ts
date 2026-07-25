@@ -76,6 +76,7 @@ export interface BucketEntry {
   jid?: string;
   title?: string;
   memberCount?: number;
+  thumbnailUrl?: string;
   addedAt: number;
   validatedAt?: number;
   status: 'unvalidated' | 'active' | 'dead';

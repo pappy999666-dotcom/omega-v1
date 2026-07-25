@@ -51,6 +51,8 @@ import {
   handleGlobalPause,
   handleMaintenanceToggle,
   handlePlatformStats,
+  handleUpdateBot,
+  handleRestartBot,
 } from './handlers/admin.js';
 import {
   mainMenuKeyboard,
@@ -63,6 +65,7 @@ import {
   sleepKeyboard,
   supportKeyboard,
   settingsKeyboard,
+  adminPanelKeyboard,
 } from './ui/keyboards.js';
 import { mainMenu, header, H, escape, card, noticeCard, safe } from '../utils/formatter.js';
 import { getSocket, getUserSockets, isFrozen } from '../whatsapp/socket-manager.js';
@@ -430,12 +433,14 @@ export function createBot(): Telegraf<BotContext> {
 
   if (ctx.session?.awaitingGlobalMenuUrl) {
     ctx.session.awaitingGlobalMenuUrl = false;
+    // Owner-only — silently ignore if not owner
+    if (!ctx.isOwner) return;
     const rawUrl = text.trim();
     if (rawUrl.toLowerCase() === 'clear' || rawUrl.toLowerCase() === 'none') {
       clearGlobalMenuUrl();
       await ctx.reply(
         card('Global Menu URL Cleared', '🔗', [], 'The global menu URL has been removed.'),
-        { parse_mode: 'HTML', reply_markup: settingsKeyboard(loadConfig(ctx.telegramId), null) }
+        { parse_mode: 'HTML', reply_markup: adminPanelKeyboard(false, false) }
       );
     } else {
       try {
@@ -443,7 +448,7 @@ export function createBot(): Telegraf<BotContext> {
         setGlobalMenuUrl(rawUrl);
         await ctx.reply(
           card('Global Menu URL Saved', '🔗', [['URL', rawUrl]], 'This URL will now be appended to every WhatsApp response automatically.'),
-          { parse_mode: 'HTML', reply_markup: settingsKeyboard(loadConfig(ctx.telegramId), rawUrl) }
+          { parse_mode: 'HTML', reply_markup: adminPanelKeyboard(false, false) }
         );
       } catch {
         await ctx.reply(
@@ -839,6 +844,38 @@ async function routeCallback(
     if (sub === 'pause') { await handleGlobalPause(ctx, params[1] !== 'off'); return; }
     if (sub === 'maintenance') { await handleMaintenanceToggle(ctx, params[1] !== 'off'); return; }
     if (sub === 'stats') { await handlePlatformStats(ctx); return; }
+    if (sub === 'update') { await handleUpdateBot(ctx); return; }
+    if (sub === 'restart') { await handleRestartBot(ctx); return; }
+    if (sub === 'menuurl') {
+      if (!ctx.isOwner) return;
+      const currentUrl = getGlobalMenuUrl();
+      if (params[1] === 'clear') {
+        clearGlobalMenuUrl();
+        await ctx.editMessageText(
+          card('Global Menu URL Cleared', '🔗', [], 'WhatsApp responses will no longer include a menu URL.'),
+          { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') }
+        );
+        return;
+      }
+      ctx.session.awaitingGlobalMenuUrl = true;
+      await ctx.editMessageText(
+        card(
+          'Global Menu URL',
+          '🔗',
+          [['Current URL', currentUrl ?? 'Not set']],
+          currentUrl
+            ? 'Send a new URL to replace it, or send "clear" to remove it.'
+            : 'Send an HTTP/HTTPS URL. It will be appended to every WhatsApp response with a link preview.'
+        ),
+        {
+          parse_mode: 'HTML',
+          reply_markup: currentUrl
+            ? { inline_keyboard: [[{ text: '🗑 Clear URL', callback_data: 'admin:menuurl:clear' }], [{ text: '🔙 Back', callback_data: 'admin:panel' }]] }
+            : { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'admin:panel' }]] },
+        }
+      );
+      return;
+    }
     return;
   }
 
@@ -880,7 +917,7 @@ async function routeCallback(
       const config = targetSessionId ? loadSessionConfig(ctx.telegramId, targetSessionId) : loadConfig(ctx.telegramId);
       await ctx.editMessageText(card('Settings', '⚙️', [['Prefix', config.prefix], ['Prefix scope', targetSessionId ?? 'Select one active session']], 'Choose what you want to configure.'), {
         parse_mode: 'HTML',
-        reply_markup: settingsKeyboard(config, getGlobalMenuUrl()),
+        reply_markup: settingsKeyboard(config),
       });
       return;
     }
@@ -897,35 +934,6 @@ async function routeCallback(
       await ctx.editMessageText(
         card('Change Prefix', '🔤', [['Session', targetSessionId], ['Current', loadSessionConfig(ctx.telegramId, targetSessionId).prefix]], 'Send a new prefix such as ! or /. Send null to enable always-listen mode.'),
         { parse_mode: 'HTML', reply_markup: backKeyboard('settings:menu') }
-      );
-      return;
-    }
-    if (sub === 'menuurl') {
-      const currentUrl = getGlobalMenuUrl();
-      if (params[1] === 'clear') {
-        clearGlobalMenuUrl();
-        await ctx.editMessageText(
-          card('Global Menu URL Cleared', '🔗', [], 'The URL was removed. Responses will no longer include it.'),
-          { parse_mode: 'HTML', reply_markup: settingsKeyboard(loadConfig(ctx.telegramId), null) }
-        );
-        return;
-      }
-      ctx.session.awaitingGlobalMenuUrl = true;
-      await ctx.editMessageText(
-        card(
-          'Global Menu URL',
-          '🔗',
-          [['Current URL', currentUrl ?? 'Not set']],
-          currentUrl
-            ? 'Send a new URL to replace it, or send "clear" to remove it.'
-            : 'Send an HTTP/HTTPS URL. Every WhatsApp response will automatically include it with a link preview.'
-        ),
-        {
-          parse_mode: 'HTML',
-          reply_markup: currentUrl
-            ? { inline_keyboard: [[{ text: '🗑 Clear URL', callback_data: 'settings:menuurl:clear' }], [{ text: '🔙 Back', callback_data: 'settings:menu' }]] }
-            : { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'settings:menu' }]] },
-        }
       );
       return;
     }
@@ -957,7 +965,7 @@ Reply directly to a WhatsApp sticker with ${H.code(`${macroConfig.prefix || ''}s
       if (sub === 'validation') updateConfig(ctx.telegramId, { autoValidationEnabled: !config.autoValidationEnabled });
       const updated = loadConfig(ctx.telegramId);
       await ctx.editMessageText(card('Settings', '⚙️', [['Prefix', updated.prefix]], 'Setting updated.'), {
-        parse_mode: 'HTML', reply_markup: settingsKeyboard(updated, getGlobalMenuUrl()),
+        parse_mode: 'HTML', reply_markup: settingsKeyboard(updated),
       });
       return;
     }

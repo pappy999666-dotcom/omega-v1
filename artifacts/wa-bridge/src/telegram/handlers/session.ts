@@ -182,6 +182,19 @@ export async function handleNewSession(
             reply_markup: sessionMenuKeyboard(sessionId),
           }
         );
+        // DM the owner
+        try {
+          await ctx.telegram.sendMessage(
+            parseInt(ctx.telegramId, 10),
+            card('WhatsApp Session Connected', '🟢', [
+              ['Number', meta.phone],
+              ['Session', sid],
+              ['Method', 'QR Code'],
+              ['Status', '✅ Online'],
+            ], 'Your WhatsApp session is live and ready for commands.'),
+            { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sid) }
+          );
+        } catch { /* already in the same chat */ }
       },
     });
   } catch (err) {
@@ -260,13 +273,34 @@ export async function handlePairingCode(
         ).catch(() => {});
       },
       onConnected: async () => {
+        const connectedCard = card('Session Connected', '🟢', [
+          ['Phone', normalizedPhone],
+          ['Session', sessionId],
+          ['Method', 'Pairing Code'],
+          ['Status', '✅ Online'],
+        ], 'Your WhatsApp session is live and ready for commands.');
         await ctx.telegram.editMessageText(
           ctx.chat!.id,
           progress.message_id,
           undefined,
-          `${header('Session Connected!', '🟢')}\n\nPhone: ${H.code(normalizedPhone)}`,
+          connectedCard,
           { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId) }
-        ).catch(() => {});
+        ).catch(() => {
+          ctx.telegram.sendMessage(ctx.chat!.id, connectedCard, { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId) }).catch(() => {});
+        });
+        // DM the owner
+        try {
+          await ctx.telegram.sendMessage(
+            parseInt(ctx.telegramId, 10),
+            card('WhatsApp Session Connected', '🟢', [
+              ['Number', normalizedPhone],
+              ['Session', sessionId],
+              ['Method', 'Pairing Code'],
+              ['Status', '✅ Online'],
+            ], 'Your WhatsApp session is live and ready for commands.'),
+            { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId) }
+          );
+        } catch { /* same chat or blocked — ignore */ }
       },
     });
   } catch (error) {
@@ -356,13 +390,26 @@ export async function handleReinitSession(
   try {
     await reinitSocket(meta, {
       onConnected: async () => {
+        const reinitCard = card('Session Reconnected', '🟢', [
+          ['Session', sessionId],
+          ['Phone', meta.phone],
+          ['Status', '✅ Online'],
+        ], 'Session successfully reinitialized.');
         await ctx.telegram.editMessageText(
           ctx.chat!.id,
           msg.message_id,
           undefined,
-          `${header('Reinitialized', '🟢')}\n\n${H.code(sessionId)}`,
+          reinitCard,
           { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId) }
         );
+        // DM the owner
+        try {
+          await ctx.telegram.sendMessage(
+            parseInt(ctx.telegramId, 10),
+            reinitCard,
+            { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId) }
+          );
+        } catch { /* ignore */ }
       },
     });
   } catch (err) {
