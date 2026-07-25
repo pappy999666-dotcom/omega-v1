@@ -1,0 +1,1 @@
+- [Omega status cards](omega-status-cards.md) — keep URL-centered cards procedural and compact, with title-only supporting text.
