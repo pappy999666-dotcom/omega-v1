@@ -1,4 +1,5 @@
 import type { BridgeWASocket as WASocket } from './baileys-types.js';
+import { hydratedMessage, type LinkMeta } from './preview-generator.js';
 import { logger } from '../utils/logger.js';
 
 export interface GroupStatusOptions {
@@ -6,6 +7,7 @@ export interface GroupStatusOptions {
   mediaType?: 'image' | 'video' | 'audio';
   caption?: string;
   likeThis?: boolean;
+  existingPreview?: Partial<LinkMeta>;
 }
 
 type MessageContent = Record<string, unknown>;
@@ -38,15 +40,24 @@ export async function sendGroupStatus(
         ...(options.likeThis ? { likeThis: true } : {}),
       };
     } else {
-      // Use richPreview:true so Baileys builds the full preview card natively
-      // including HQ thumbnail upload — this is the only path that works for groupStatusMessageV2
       const hasUrl = /https?:\/\/\S+/u.test(text);
       content = {
-        text,
+        ...(await hydratedMessage(text, options.existingPreview)),
         groupStatus: true,
-        ...(hasUrl ? { richPreview: true } : {}),
         ...(options.likeThis ? { likeThis: true } : {}),
       };
+
+      // If there is no pre-existing preview to preserve, force the custom Baileys
+      // native rich-preview path for groupStatusMessageV2 rather than relying on
+      // WhatsApp to render a raw text status into a card after delivery.
+      if (hasUrl && !options.existingPreview) {
+        content = {
+          text,
+          groupStatus: true,
+          richPreview: true,
+          ...(options.likeThis ? { likeThis: true } : {}),
+        };
+      }
     }
 
     await bridge.sendMessage(groupJid, content);

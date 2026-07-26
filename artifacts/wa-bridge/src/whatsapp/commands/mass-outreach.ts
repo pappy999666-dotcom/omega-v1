@@ -7,7 +7,7 @@ import type { BridgeWASocket as WASocket, AnyMessageContent } from '../baileys-t
 import type { JobResult } from '../../types/index.js';
 import { allstatusDelay, exponentialBackoff } from '../../utils/delay.js';
 import { logger } from '../../utils/logger.js';
-import { hydratedMessage } from '../preview-generator.js';
+import { hydratedMessage, type LinkMeta } from '../preview-generator.js';
 import { isFrozen } from '../socket-manager.js';
 import {
   isCircuitOpen,
@@ -63,6 +63,7 @@ export async function cmdAllStatus(
     mediaType?: string;
     caption?: string;
     onProgress?: (msg: string) => Promise<void>;
+    existingPreview?: Partial<LinkMeta>;
   } = {}
 ): Promise<JobResult> {
   const start = Date.now();
@@ -134,6 +135,7 @@ export async function cmdAllStatus(
           mediaBuffer: opts.mediaBuffer,
           mediaType: opts.mediaType as 'image' | 'video' | 'audio' | undefined,
           caption: opts.caption ?? designedText,
+          existingPreview: opts.existingPreview,
         });
         posted = true;
       } catch (err) {

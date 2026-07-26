@@ -105,6 +105,28 @@ export async function fetchLinkMeta(url: string): Promise<LinkMeta | null> {
   }
 }
 
+
+export interface BaileysLinkPreview {
+  'matched-text': string;
+  canonicalUrl?: string;
+  title?: string;
+  description?: string;
+  jpegThumbnail?: Buffer;
+  linkPreviewMetadata?: unknown;
+}
+
+export function toBaileysLinkPreview(preview: Partial<LinkMeta>, fallbackUrl: string): BaileysLinkPreview {
+  const matchedText = preview.url ?? preview.canonicalUrl ?? fallbackUrl;
+  return {
+    'matched-text': matchedText,
+    canonicalUrl: preview.canonicalUrl ?? matchedText,
+    title: preview.title ?? '',
+    description: preview.description ?? '',
+    jpegThumbnail: preview.thumbnail ? Buffer.from(preview.thumbnail) : undefined,
+    linkPreviewMetadata: preview.linkPreviewMetadata,
+  };
+}
+
 /**
  * Build a message content object with proper link preview hydration.
  *
@@ -150,14 +172,6 @@ export async function hydratedMessage(
 
   return {
     text,
-    linkPreview: {
-      matchedText: preview.url ?? url,
-      canonicalUrl: preview.canonicalUrl ?? preview.url ?? url,
-      title: preview.title ?? '',
-      description: preview.description ?? '',
-      // Baileys proto needs Buffer, not Uint8Array
-      jpegThumbnail: thumbnail ? Buffer.from(thumbnail) : undefined,
-      linkPreviewMetadata: preview.linkPreviewMetadata,
-    },
+    linkPreview: toBaileysLinkPreview({ ...preview, thumbnail }, url),
   } as AnyMessageContent;
 }
