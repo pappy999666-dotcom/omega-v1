@@ -19,6 +19,7 @@ import {
   startAutoFilter,
   exportBucket,
   extractAllInviteLinks,
+  validateLinksHttp,
 } from '../../services/tri-bucket.js';
 import { enqueueJob } from '../../services/queue.js';
 import {
@@ -120,6 +121,38 @@ export async function handleAddLinks(
 }
 
 // ── Start / Stop Auto-Filter ──────────────────────────────
+
+export async function handleStartFilterHttp(ctx: Context & { telegramId: string }): Promise<void> {
+  const main = loadBucket(ctx.telegramId, 'main').filter(e => e.status === 'unvalidated');
+  if (main.length === 0) {
+    await ctx.answerCbQuery('Main bucket is empty').catch(() => {});
+    return;
+  }
+  await ctx.answerCbQuery('HTTP validation started').catch(() => {});
+  const msg = await ctx.reply(
+    `<blockquote><b>◈ OMEGA HTTP VALIDATOR</b>\n\nNo session needed.\nChecking ${main.length} links via HTTP…\n\nStatus     ● STARTING</blockquote>`,
+    { parse_mode: 'HTML' }
+  );
+  const chatId = ctx.chat!.id;
+  const msgId = msg.message_id;
+  let last = '';
+  const onProgress = async (line: string) => {
+    const text = `<blockquote><b>◈ OMEGA HTTP VALIDATOR</b>\n\n${line}</blockquote>`;
+    if (text === last) return;
+    last = text;
+    await ctx.telegram.editMessageText(chatId, msgId, undefined, text, { parse_mode: 'HTML' }).catch(() => {});
+  };
+  validateLinksHttp(ctx.telegramId, onProgress).then(async r => {
+    await ctx.telegram.editMessageText(chatId, msgId, undefined,
+      card('HTTP Validation Complete', '✅', [
+        ['Active', String(r.activated)],
+        ['Dead', String(r.killed)],
+        ['Errors', String(r.errors)],
+      ], 'Links validated without a WhatsApp session.'),
+      { parse_mode: 'HTML', reply_markup: bucketMenuKeyboard(false) }
+    ).catch(() => {});
+  }).catch(logger.error.bind(logger));
+}
 
 export async function handleStartFilter(ctx: Context & { telegramId: string }): Promise<void> {
   if (isAutoFilterRunning(ctx.telegramId)) {

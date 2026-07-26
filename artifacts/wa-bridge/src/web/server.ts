@@ -5,15 +5,17 @@
 import express, { type Request, type Response, type NextFunction } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import multer from 'multer';
 import { createWebUser, verifyWebUser, createSession, resolveSession, deleteSession } from './auth.js';
 import { addToMainBucket, loadBucket, loadSessionMeta, loadWorkspace, purgeSession, saveBucket, saveSessionMeta, updateConfig, updateSessionMeta } from '../services/workspace.js';
 import { exportBucket } from '../services/tri-bucket.js';
 import { freezeSession, getSocket, getUserSockets, initSocket, normalizePairingPhone, unfreezeSession } from '../whatsapp/socket-manager.js';
 import { registerSessionOwner } from '../whatsapp/event-handlers.js';
 import { cmdAllChat, cmdAllStatus, stopOutreach } from '../whatsapp/commands/mass-outreach.js';
-import { startAutoFilter, stopAutoFilter } from '../services/tri-bucket.js';
+import { startAutoFilter, stopAutoFilter, validateLinksHttp } from '../services/tri-bucket.js';
 import { importLinksToMainBucket } from '../services/importer.js';
 import { statusDesignEngine, type StatusTheme } from '../services/StatusDesignEngine.js';
+import { fetchLinkMeta } from '../whatsapp/preview-manager.js';
 import type { SessionMeta } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 
@@ -72,6 +74,32 @@ export function createWebApp(): express.Express {
   const app = express();
   app.use(express.json({ limit: '15mb' }));
   app.use(express.urlencoded({ extended: true, limit: '15mb' }));
+
+  // ── Anti-scraping / bot protection ──────────────────────
+  const reqCounts = new Map<string, { count: number; resetAt: number }>();
+  app.use((req, res, next) => {
+    // Block obvious scrapers by UA
+    const ua = req.headers['user-agent'] ?? '';
+    if (/curl|wget|python|scrapy|bot|spider|crawl|httpclient|okhttp|java\/|go-http/i.test(ua) && !req.path.startsWith('/api/auth')) {
+      res.status(403).json({ error: 'Forbidden' }); return;
+    }
+    // Rate limit: 120 req/min per IP on API routes
+    if (req.path.startsWith('/api/')) {
+      const ip = String(req.headers['x-forwarded-for'] ?? req.socket.remoteAddress ?? 'unknown');
+      const now = Date.now();
+      const entry = reqCounts.get(ip) ?? { count: 0, resetAt: now + 60_000 };
+      if (now > entry.resetAt) { entry.count = 0; entry.resetAt = now + 60_000; }
+      entry.count++;
+      reqCounts.set(ip, entry);
+      if (entry.count > 120) { res.status(429).json({ error: 'Too many requests' }); return; }
+    }
+    // Security headers
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    next();
+  });
 
   app.post('/api/auth/register', (req, res) => {
     try {
@@ -170,6 +198,18 @@ export function createWebApp(): express.Express {
   app.delete('/api/buckets/:bucket', requireAuth, (req, res) => { const userId = (req as AuthedRequest).userId; saveBucket(userId, routeParam(req.params.bucket) as 'main' | 'active' | 'dead', []); emit(userId, 'Bucket purged'); res.json({ ok: true }); });
   app.get('/api/buckets/:bucket/export/:format', requireAuth, (req, res) => { const userId = (req as AuthedRequest).userId; res.download(exportBucket(userId, routeParam(req.params.bucket) as 'main' | 'active' | 'dead', routeParam(req.params.format) as 'txt' | 'csv' | 'html')); });
 
+  // Sessionless HTTP validator
+  app.post('/api/validator/http', requireAuth, async (req, res) => {
+    const userId = (req as AuthedRequest).userId;
+    try {
+      emit(userId, 'HTTP validation started (no session needed)');
+      void validateLinksHttp(userId, async (msg) => emit(userId, msg)).then(r => {
+        emit(userId, `HTTP validation done: ${r.activated} active, ${r.killed} dead, ${r.errors} errors`);
+      });
+      res.json({ ok: true });
+    } catch (err) { res.status(400).json({ error: err instanceof Error ? err.message : String(err) }); }
+  });
+
   app.post('/api/validator/start', requireAuth, async (req, res) => {
     const userId = (req as AuthedRequest).userId; const sessionId = String(req.body.sessionId ?? '');
     try { assertSessionOwner(userId, sessionId); const socket = getSocket(sessionId); if (!socket) throw new Error('Selected validation session is offline'); void startAutoFilter(userId, sessionId, socket, async (msg) => emit(userId, msg)); res.json({ ok: true }); }
@@ -188,13 +228,136 @@ export function createWebApp(): express.Express {
   });
   app.post('/api/outreach/stop', requireAuth, (req, res) => { stopOutreach(String(req.body.sessionId)); emit((req as AuthedRequest).userId, 'Outreach stop requested'); res.json({ ok: true }); });
 
+  // Link preview API
+  app.post('/api/preview', requireAuth, async (req, res) => {
+    const url = String(req.body.url ?? '');
+    if (!url.startsWith('http')) { res.status(400).json({ error: 'Invalid URL' }); return; }
+    try {
+      const meta = await fetchLinkMeta(url);
+      res.json({
+        url: meta.url,
+        title: meta.title ?? null,
+        description: meta.description ?? null,
+        imageUrl: meta.imageUrl ?? null,
+        siteName: meta.siteName ?? null,
+        canonicalUrl: meta.canonicalUrl ?? null,
+      });
+    } catch (err) { res.status(500).json({ error: err instanceof Error ? err.message : String(err) }); }
+  });
+
+  // Auto-promote settings
+  app.post('/api/sessions/:id/autopromote', requireAuth, (req, res) => {
+    const userId = (req as AuthedRequest).userId;
+    const sessionId = routeParam(req.params.id);
+    const meta = loadSessionMeta(userId, sessionId);
+    if (!meta) { res.status(404).json({ error: 'Session not found' }); return; }
+    const updated = updateSessionMeta(userId, sessionId, {
+      autoPromote: {
+        enabled: Boolean(req.body.enabled),
+        message: String(req.body.message ?? ''),
+        postOnJoin: req.body.postOnJoin !== false,
+        intervalMinutes: Number(req.body.intervalMinutes ?? 0),
+        lastPostedAt: meta.autoPromote?.lastPostedAt,
+      },
+    });
+    emit(userId, 'Auto Promote settings saved');
+    res.json(updated?.autoPromote);
+  });
+
+  // Link collection toggle
+  app.post('/api/sessions/:id/linkcollection', requireAuth, (req, res) => {
+    const userId = (req as AuthedRequest).userId;
+    const sessionId = routeParam(req.params.id);
+    const updated = updateSessionMeta(userId, sessionId, { linkCollectionEnabled: Boolean(req.body.enabled) });
+    emit(userId, `Link collection ${req.body.enabled ? 'enabled' : 'disabled'}`);
+    res.json({ linkCollectionEnabled: updated?.linkCollectionEnabled });
+  });
+
+  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+  // Set profile photo — HD no crop via Baileys hd:true
+  app.post('/api/sessions/:id/pfp', requireAuth, upload.single('image'), async (req, res) => {
+    const userId = (req as AuthedRequest).userId;
+    const sessionId = routeParam(req.params.id);
+    try {
+      assertSessionOwner(userId, sessionId);
+      const socket = getSocket(sessionId);
+      if (!socket) throw new Error('Session not connected');
+      const file = (req as Request & { file?: Express.Multer.File }).file;
+      if (!file) throw new Error('No image provided');
+      const ownJid = (socket as { user?: { id?: string } }).user?.id;
+      if (!ownJid) throw new Error('WhatsApp JID unavailable');
+      await (socket as unknown as {
+        updateProfilePicture(jid: string, content: Buffer, opts?: { hd?: boolean }): Promise<void>;
+      }).updateProfilePicture(ownJid, file.buffer, { hd: true });
+      emit(userId, `Profile photo updated for ${sessionId} (HD, no crop)`);
+      res.json({ ok: true });
+    } catch (err) { res.status(400).json({ error: err instanceof Error ? err.message : String(err) }); }
+  });
+
+  // Set display name
+  app.post('/api/sessions/:id/setname', requireAuth, async (req, res) => {
+    const userId = (req as AuthedRequest).userId;
+    const sessionId = routeParam(req.params.id);
+    try {
+      assertSessionOwner(userId, sessionId);
+      const socket = getSocket(sessionId);
+      if (!socket) throw new Error('Session not connected');
+      const name = String(req.body.name ?? '').trim();
+      if (!name) throw new Error('Name cannot be empty');
+      await (socket as unknown as { updateProfileName(name: string): Promise<void> }).updateProfileName(name);
+      emit(userId, `Display name updated to: ${name}`);
+      res.json({ ok: true });
+    } catch (err) { res.status(400).json({ error: err instanceof Error ? err.message : String(err) }); }
+  });
+
+  // Bridge — execute a command on a session
+  app.post('/api/sessions/:id/bridge', requireAuth, async (req, res) => {
+    const userId = (req as AuthedRequest).userId;
+    const sessionId = routeParam(req.params.id);
+    try {
+      assertSessionOwner(userId, sessionId);
+      const socket = getSocket(sessionId);
+      if (!socket) throw new Error('Session not connected');
+      const command = String(req.body.command ?? '').trim();
+      if (!command) throw new Error('Command cannot be empty');
+      // Send command to own JID as a self-message (bridge pattern)
+      const ownJid = (socket as { user?: { id?: string } }).user?.id;
+      if (!ownJid) throw new Error('WhatsApp JID unavailable');
+      await socket.sendMessage(ownJid, { text: command });
+      emit(userId, `Bridge command sent: ${command}`);
+      res.json({ ok: true, result: `Command sent to session ${sessionId}` });
+    } catch (err) { res.status(400).json({ error: err instanceof Error ? err.message : String(err) }); }
+  });
+
+  // Re-init session
+  app.post('/api/sessions/:id/reinit', requireAuth, async (req, res) => {
+    const userId = (req as AuthedRequest).userId;
+    const sessionId = routeParam(req.params.id);
+    const meta = loadSessionMeta(userId, sessionId);
+    if (!meta) { res.status(404).json({ error: 'Session not found' }); return; }
+    emit(userId, `Re-initializing ${sessionId}…`);
+    const { reinitSocket } = await import('../whatsapp/socket-manager.js');
+    reinitSocket(meta, {
+      onConnected: async () => emit(userId, `${meta.label || meta.phone} reconnected`),
+    }).catch(err => emit(userId, `Reinit error: ${String(err)}`));
+    res.json({ ok: true });
+  });
+
   app.post('/api/statusdesign/preview', requireAuth, (req, res) => {
     const text = statusDesignEngine.render({ theme: String(req.body.theme ?? 'clean') as StatusTheme, url: String(req.body.url ?? 'https://example.com'), title: String(req.body.title ?? ''), message: String(req.body.message ?? '') }).text;
     res.json({ text });
   });
   app.post('/api/settings', requireAuth, (req, res) => { const userId = (req as AuthedRequest).userId; const config = updateConfig(userId, req.body); emit(userId, 'Settings saved'); res.json(config); });
 
-  app.use(express.static(publicDir));
+  app.use(express.static(publicDir, {
+    setHeaders(res, filePath) {
+      if (filePath.endsWith('.js') || filePath.endsWith('.css')) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+      }
+    },
+  }));
   app.get('/{*path}', (_, res) => res.sendFile(path.join(publicDir, 'index.html')));
   return app;
 }

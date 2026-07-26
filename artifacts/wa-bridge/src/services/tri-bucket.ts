@@ -538,6 +538,102 @@ export function exportBucket(
   return filepath;
 }
 
+// ── Sessionless HTTP Validator ──────────────────────────────
+
+/**
+ * Validate a WhatsApp group link without a WhatsApp session.
+ * Uses HTTP HEAD/GET to check if the invite page returns a valid group.
+ * No socket needed — works purely via HTTP.
+ */
+export async function validateLinkHttp(link: string): Promise<ValidationResult> {
+  const code = extractInviteCode(link);
+  if (!code) return { link, isValid: false, reason: 'Invalid link format' };
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    let html = '';
+    try {
+      const res = await fetch(`https://chat.whatsapp.com/${code}`, {
+        signal: controller.signal,
+        headers: {
+          'user-agent': 'Mozilla/5.0 (compatible; WhatsApp/2.23)',
+          'accept': 'text/html',
+        },
+        redirect: 'follow',
+      });
+      if (res.status === 404 || res.status === 410) return { link, isValid: false, reason: 'Link not found' };
+      html = await res.text();
+    } finally {
+      clearTimeout(timer);
+    }
+
+    // WhatsApp returns specific meta tags for valid groups
+    if (html.includes('"groupName"') || html.includes('og:title') && !html.includes('Invalid Link') && !html.includes('This invite link is invalid')) {
+      // Extract group name from og:title
+      const titleMatch = html.match(/<meta property="og:title" content="([^"]+)"/);
+      const descMatch = html.match(/<meta property="og:description" content="([^"]+)"/);
+      const title = titleMatch?.[1];
+      const desc = descMatch?.[1];
+      // Extract member count from description like "123 members"
+      const memberMatch = desc?.match(/(\d+)\s+member/);
+      return {
+        link,
+        isValid: true,
+        title: title ?? undefined,
+        memberCount: memberMatch ? parseInt(memberMatch[1]!, 10) : undefined,
+      };
+    }
+
+    if (html.includes('Invalid Link') || html.includes('This invite link is invalid') || html.includes('This link is no longer valid')) {
+      return { link, isValid: false, reason: 'Link revoked or expired' };
+    }
+
+    // Ambiguous — treat as valid (could be rate limited or JS-rendered)
+    return { link, isValid: true, reason: 'HTTP check passed' };
+  } catch (err) {
+    const msg = String(err);
+    if (msg.includes('abort') || msg.includes('timeout')) {
+      return { link, isValid: false, reason: 'Request timed out', transient: true };
+    }
+    return { link, isValid: false, reason: msg, transient: true };
+  }
+}
+
+/**
+ * Batch HTTP validate links from main bucket — no session needed.
+ */
+export async function validateLinksHttp(
+  telegramId: string,
+  onProgress?: (msg: string) => Promise<void>
+): Promise<{ activated: number; killed: number; errors: number }> {
+  const main = loadBucket(telegramId, 'main').filter(e => e.status === 'unvalidated');
+  const result = { activated: 0, killed: 0, errors: 0 };
+  const toActivate: BucketEntry[] = [];
+  const toDead: BucketEntry[] = [];
+
+  for (let i = 0; i < main.length; i++) {
+    const entry = main[i]!;
+    await onProgress?.(`Checking ${i + 1}/${main.length}: ${entry.link}`);
+    const vr = await validateLinkHttp(entry.link);
+    if (vr.isValid) {
+      toActivate.push({ ...entry, title: vr.title, memberCount: vr.memberCount, validatedAt: Date.now(), status: 'active' });
+      result.activated++;
+    } else if (!vr.transient) {
+      toDead.push({ ...entry, deadReason: vr.reason, validatedAt: Date.now(), status: 'dead' });
+      result.killed++;
+    } else {
+      result.errors++;
+    }
+    // Small delay to avoid rate limiting
+    await new Promise(r => setTimeout(r, 300 + Math.random() * 200));
+  }
+
+  if (toActivate.length > 0) moveToActiveBucket(telegramId, toActivate);
+  if (toDead.length > 0) moveToDeadBucket(telegramId, toDead);
+  return result;
+}
+
 // ── Master Bucket (Admin) ─────────────────────────────────
 
 export function getMasterActiveBucket(userIds: string[]): BucketEntry[] {

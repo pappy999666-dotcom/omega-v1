@@ -32,6 +32,7 @@ import {
   handleBucketView,
   handleAddLinks,
   handleStartFilter,
+  handleStartFilterHttp,
   handleStopFilter,
   handleExportBucket,
   handlePurgeDead,
@@ -101,6 +102,7 @@ interface BotContext extends Context {
     awaitingGlobalBridge?: boolean;
     awaitingSupport?: boolean;
     awaitingProfilePhotoSessionId?: string;
+    awaitingSetNameSessionId?: string;
     awaitingForceJoin?: boolean;
     awaitingBroadcast?: boolean;
     awaitingGlobalMenuUrl?: boolean;
@@ -275,7 +277,35 @@ export function createBot(): Telegraf<BotContext> {
 
   bot.on('text', async (ctx) => {
     const text = ctx.message.text;
-    if (text.startsWith('/')) return; // Let command handlers catch it
+    if (text.startsWith('/')) return;
+
+    // Set WhatsApp display name
+    if (ctx.session?.awaitingSetNameSessionId) {
+      const sessionId = ctx.session.awaitingSetNameSessionId;
+      delete ctx.session.awaitingSetNameSessionId;
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) {
+        await ctx.reply(noticeCard('Set Name Failed', 'Session not connected.', 'warning'), { parse_mode: 'HTML' });
+        return;
+      }
+      try {
+        // Baileys: updateProfileName(name) — no length limit enforced here
+        await (socket as unknown as {
+          updateProfileName(name: string): Promise<void>;
+        }).updateProfileName(text.trim());
+        await ctx.reply(
+          noticeCard('Name Updated', `WhatsApp display name set to: ${text.trim()}`, 'success'),
+          { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }
+        );
+      } catch (error) {
+        logger.error('[Bot] setname failed', { sessionId, error: String(error) });
+        await ctx.reply(
+          noticeCard('Set Name Failed', String(error), 'error'),
+          { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }
+        );
+      }
+      return;
+    }
 
     if (ctx.session?.awaitingForceJoin) {
       ctx.session.awaitingForceJoin = false;
@@ -433,29 +463,29 @@ export function createBot(): Telegraf<BotContext> {
 
   if (ctx.session?.awaitingGlobalMenuUrl) {
     ctx.session.awaitingGlobalMenuUrl = false;
-    // Owner-only — silently ignore if not owner
     if (!ctx.isOwner) return;
-    const rawUrl = text.trim();
-    if (rawUrl.toLowerCase() === 'clear' || rawUrl.toLowerCase() === 'none') {
+    const raw = text.trim();
+    if (raw.toLowerCase() === 'clear' || raw.toLowerCase() === 'none') {
       clearGlobalMenuUrl();
       await ctx.reply(
-        card('Global Menu URL Cleared', '🔗', [], 'The global menu URL has been removed.'),
+        card('Global Menu URL Cleared', '\U0001f517', [], 'The global menu URL has been removed.'),
         { parse_mode: 'HTML', reply_markup: adminPanelKeyboard(false, false) }
       );
     } else {
-      try {
-        new URL(rawUrl);
-        setGlobalMenuUrl(rawUrl);
+      const isUrl = /^https?:\/\//i.test(raw);
+      const isJid = raw.includes('@g.us') || raw.includes('@newsletter') || raw.includes('@s.whatsapp.net');
+      if (!isUrl && !isJid) {
         await ctx.reply(
-          card('Global Menu URL Saved', '🔗', [['URL', rawUrl]], 'This URL will now be appended to every WhatsApp response automatically.'),
-          { parse_mode: 'HTML', reply_markup: adminPanelKeyboard(false, false) }
-        );
-      } catch {
-        await ctx.reply(
-          noticeCard('Invalid URL', 'Please send a valid HTTP/HTTPS URL, or "clear" to remove.', 'error'),
+          noticeCard('Invalid Input', 'Send a WhatsApp JID, a WhatsApp link, or "clear" to remove.', 'error'),
           { parse_mode: 'HTML' }
         );
+        return;
       }
+      setGlobalMenuUrl(raw);
+      await ctx.reply(
+        card('Global Menu URL Saved', '\U0001f517', [['Value', raw]], 'Will appear as a link preview on every WhatsApp reply — no raw URL shown.'),
+        { parse_mode: 'HTML', reply_markup: adminPanelKeyboard(false, false) }
+      );
     }
     return;
   }
@@ -509,27 +539,33 @@ export function createBot(): Telegraf<BotContext> {
     delete ctx.session.awaitingProfilePhotoSessionId;
     const socket = getSocket(sessionId);
     if (!socket || isFrozen(sessionId)) {
-      await ctx.reply(noticeCard('Profile Photo Failed', 'The selected WhatsApp session is not connected.', 'warning'), { parse_mode: 'HTML' });
+      await ctx.reply(noticeCard('Profile Photo Failed', 'Session not connected.', 'warning'), { parse_mode: 'HTML' });
       return;
     }
     try {
+      // Use highest-res photo Telegram provides (last in array = largest)
       const photo = ctx.message.photo.at(-1);
-      if (!photo) throw new Error('Telegram did not provide a usable photo');
+      if (!photo) throw new Error('No photo provided');
       const fileUrl = await ctx.telegram.getFileLink(photo.file_id);
-      const response = await fetch(fileUrl);
-      if (!response.ok) throw new Error(`Telegram download failed with ${response.status}`);
-      const image = Buffer.from(await response.arrayBuffer());
+      const response = await fetch(fileUrl.toString());
+      if (!response.ok) throw new Error(`Download failed: ${response.status}`);
+      const imageBuffer = Buffer.from(await response.arrayBuffer());
       const ownJid = (socket as { user?: { id?: string } }).user?.id;
-      if (!ownJid) throw new Error('The WhatsApp account JID is unavailable');
-      await (socket as unknown as { updateProfilePicture(jid: string, image: Buffer): Promise<void> }).updateProfilePicture(ownJid, image);
-      await ctx.reply(noticeCard('Profile Photo Updated', 'The WhatsApp profile photo was changed successfully.', 'success'), {
-        parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`),
-      });
+      if (!ownJid) throw new Error('WhatsApp JID unavailable');
+      // Pass buffer with hd:true — crysnovax Baileys preserves aspect ratio, caps at 1920px, no square crop
+      await (socket as unknown as {
+        updateProfilePicture(jid: string, content: Buffer, dimensions?: { hd?: boolean; width?: number; height?: number }): Promise<void>;
+      }).updateProfilePicture(ownJid, imageBuffer, { hd: true });
+      await ctx.reply(
+        noticeCard('Profile Photo Updated', 'Full HD, no crop applied.', 'success'),
+        { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }
+      );
     } catch (error) {
-      logger.error('[Bot] Profile photo update failed', { sessionId, error: String(error) });
-      await ctx.reply(noticeCard('Profile Photo Failed', 'WhatsApp could not update the profile photo.', 'error', String(error)), {
-        parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`),
-      });
+      logger.error('[Bot] setpfp failed', { sessionId, error: String(error) });
+      await ctx.reply(
+        noticeCard('Profile Photo Failed', String(error), 'error'),
+        { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }
+      );
     }
   });
 
@@ -748,7 +784,19 @@ async function routeCallback(
       }
       return;
     }
-    if (sub === 'bridge') { await handleBridgeSession(ctx, sessionId); return; }
+    if (sub === 'setname') {
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) {
+        await ctx.answerCbQuery('Session not connected', { show_alert: true }).catch(() => {});
+        return;
+      }
+      ctx.session.awaitingSetNameSessionId = sessionId;
+      await ctx.editMessageText(
+        card('Set WhatsApp Display Name', '✏️', [['Session', sessionId]], 'Send the new name now. No character limit — WhatsApp accepts any length.'),
+        { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }
+      ).catch(() => {});
+      return;
+    }
     if (sub === 'collect') {
       const enabled = params[2] === 'on' ? true : params[2] === 'off' ? false : undefined;
       await handleLinkCollection(ctx, sessionId, enabled);
@@ -786,6 +834,7 @@ async function routeCallback(
     if (sub === 'view') { await handleBucketView(ctx, params[1] as 'main' | 'active' | 'dead', 0); return; }
     if (sub === 'filter') {
       if (params[1] === 'start') await handleStartFilter(ctx);
+      else if (params[1] === 'http') await handleStartFilterHttp(ctx);
       else await handleStopFilter(ctx);
       return;
     }

@@ -112,7 +112,7 @@ export function sessionMenuKeyboard(sessionId: string): InlineKeyboardMarkup {
       [btn('❄️ Freeze', `session:${sessionId}:freeze`, 'danger'), btn('🔥 Unfreeze', `session:${sessionId}:unfreeze`, 'success')],
       [btn('🔄 Re-Init', `session:${sessionId}:reinit`, 'primary'), btn('🗑 Purge', `session:${sessionId}:purge`, 'danger')],
       [btn('🔗 Link Collection', `session:${sessionId}:collect`, 'primary'), btn('🚪 Join Manager', `session:${sessionId}:joinmgr`, 'primary')],
-      [btn('🖼 Set Profile Photo', `session:${sessionId}:pfp:set`, 'primary'), btn('Remove Photo', `session:${sessionId}:pfp:remove`, 'danger')],
+      [btn('🖼 Set PFP', `session:${sessionId}:pfp:set`, 'primary'), btn('🗑 Remove PFP', `session:${sessionId}:pfp:remove`, 'danger'), btn('✏️ Set Name', `session:${sessionId}:setname`, 'primary')],
       [btn('🌉 Bridge', `session:${sessionId}:bridge`, 'primary'), btn('🔙 Back', 'sessions:list')],
     ],
   };
@@ -167,7 +167,7 @@ export function bucketMenuKeyboard(filterRunning: boolean): InlineKeyboardMarkup
   return {
     inline_keyboard: [
       [btn('📥 Main', 'bucket:view:main'), btn('✅ Active', 'bucket:view:active'), btn('💀 Dead', 'bucket:view:dead')],
-      [filterRunning ? btn('⏹ Stop Filter', 'bucket:filter:stop', 'danger') : btn('▶️ Start Filter', 'bucket:filter:start', 'success')],
+      [filterRunning ? btn('⏹ Stop Filter', 'bucket:filter:stop', 'danger') : btn('▶️ Start Filter', 'bucket:filter:start', 'success'), btn('🌐 HTTP Validate', 'bucket:filter:http', 'primary')],
       [btn('📤 Export TXT', 'bucket:export:txt', 'primary'), btn('📊 Export CSV', 'bucket:export:csv', 'primary'), btn('🌐 Export HTML', 'bucket:export:html', 'primary')],
       [btn('🗑 Purge Dead', 'bucket:purge:dead', 'danger'), btn('🔀 Merge', 'bucket:merge', 'primary')],
       [btn('🔙 Back', 'menu:main')],
