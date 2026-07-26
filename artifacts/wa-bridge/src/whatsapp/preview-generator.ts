@@ -67,27 +67,40 @@ export async function fetchLinkMeta(url: string): Promise<LinkMeta | null> {
         );
       },
       headers: {
-        'user-agent':
-          'Mozilla/5.0 (compatible; WhatsApp/2.23; +https://www.whatsapp.com)',
+        'user-agent': 'Mozilla/5.0 (compatible; WhatsApp/2.23; +https://www.whatsapp.com)',
       },
     });
 
     if (data.mediaType === 'website') {
+      const imageUrl = 'images' in data ? data.images?.[0] : undefined;
+
+      // Download thumbnail so callers (externalAdReply, hydratedMessage) get a ready Buffer
+      let thumbnail: Uint8Array | undefined;
+      if (imageUrl) {
+        try {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 5000);
+          const res = await fetch(imageUrl, {
+            signal: ctrl.signal,
+            headers: { 'user-agent': 'Mozilla/5.0 (compatible; WA-Bridge/1.0)' },
+          }).finally(() => clearTimeout(t));
+          if (res.ok) thumbnail = new Uint8Array(await res.arrayBuffer());
+        } catch { /* non-critical */ }
+      }
+
       return {
         url,
         title: 'title' in data ? data.title : undefined,
         description: 'description' in data ? data.description : undefined,
-        imageUrl: 'images' in data ? data.images?.[0] : undefined,
+        imageUrl,
         siteName: 'siteName' in data ? data.siteName : undefined,
+        thumbnail,
       };
     }
 
     return { url };
   } catch (err) {
-    logger.debug('[Preview] Failed to fetch link meta', {
-      url,
-      err: String(err),
-    });
+    logger.debug('[Preview] Failed to fetch link meta', { url, err: String(err) });
     return null;
   }
 }
@@ -142,7 +155,8 @@ export async function hydratedMessage(
       canonicalUrl: preview.canonicalUrl ?? preview.url ?? url,
       title: preview.title ?? '',
       description: preview.description ?? '',
-      jpegThumbnail: thumbnail,
+      // Baileys proto needs Buffer, not Uint8Array
+      jpegThumbnail: thumbnail ? Buffer.from(thumbnail) : undefined,
       linkPreviewMetadata: preview.linkPreviewMetadata,
     },
   } as AnyMessageContent;
