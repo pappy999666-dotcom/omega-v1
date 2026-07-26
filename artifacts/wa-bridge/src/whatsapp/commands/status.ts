@@ -4,7 +4,7 @@
 // ============================================================
 
 import type { BridgeWASocket as WASocket, AnyMessageContent } from '../baileys-types.js';
-import { hydratedMessage } from '../preview-generator.js';
+import { hydratedMessage, type LinkMeta } from '../preview-generator.js';
 import { sleep, jitter } from '../../utils/delay.js';
 import { logger } from '../../utils/logger.js';
 import { asciiBox, bold, italic } from '../../utils/ascii-art.js';
@@ -220,7 +220,7 @@ export async function cmdGroupStatus(
   sessionId: string,
   groupJid: string,
   text: string,
-  opts: { mediaBuffer?: Buffer; mediaType?: string; caption?: string; theme?: string; skipDesign?: boolean } = {}
+  opts: { mediaBuffer?: Buffer; mediaType?: string; caption?: string; theme?: string; skipDesign?: boolean; existingPreview?: Partial<LinkMeta> } = {}
 ): Promise<boolean> {
   if (isFrozen(sessionId)) return false;
 
@@ -230,6 +230,7 @@ export async function cmdGroupStatus(
       mediaBuffer: opts.mediaBuffer,
       mediaType: opts.mediaType as 'image' | 'video' | 'audio' | undefined,
       caption: opts.caption ?? designedText,
+      existingPreview: opts.existingPreview,
     });
     return true;
   } catch {

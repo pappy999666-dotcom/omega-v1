@@ -182,6 +182,7 @@ async function processMessage(
     ?? msg.message?.videoMessage?.contextInfo
   )?.quotedMessage;
   const quotedText = extractMessageText(quotedMessage);
+  const quotedPreview = extractIncomingPreview(quotedMessage);
 
   // Extract sticker for macro matching
   const stickerMsg = msg.message?.stickerMessage;
@@ -586,6 +587,7 @@ async function processMessage(
       if (!text) { await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}gstatus [message], or reply to a message.`)); break; }
       const sent = await cmdGroupStatus(socket, sessionId, groupJid, text, {
         theme: config.statusDesignTheme,
+        existingPreview: quotedPreview,
       });
       await reply(sent
         ? successCard('STATUS POSTED', 'The group status was published successfully.')
@@ -685,6 +687,7 @@ async function processMessage(
       for (let index = 0; index < repeat; index += 1) {
         if (await cmdGroupStatus(socket, sessionId, targetJid, message, {
           theme: config.statusDesignTheme,
+          existingPreview: quotedPreview,
         })) sent += 1;
       }
       await reply(successCard('GROUP STATUS COMPLETE', 'The target status operation finished.', [
@@ -713,6 +716,7 @@ async function processMessage(
         for (let index = 0; index < repeat; index += 1) {
           await cmdAllStatus(socket, sessionId, telegramId, text, {
             onProgress: updateProgress,
+            existingPreview: quotedPreview,
           });
         }
       })().catch(async (error) => {
@@ -810,7 +814,7 @@ async function processMessage(
     case 'tag': {
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
       const text = commandText('📢');
-      const res = await cmdTag(socket, sessionId, groupJid, text);
+      const res = await cmdTag(socket, sessionId, groupJid, text, { existingPreview: quotedPreview });
       await reply(res.success
         ? tagSummary(res.pinged, 'tag')
         : errorCard('TAG FAILED', res.error ?? 'Could not fetch group participants.'));
@@ -821,7 +825,7 @@ async function processMessage(
     case 'mtag': {
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
       const text = commandText('📢');
-      const res = await cmdMTag(socket, sessionId, groupJid, text);
+      const res = await cmdMTag(socket, sessionId, groupJid, text, { existingPreview: quotedPreview });
       await reply(res.success
         ? successCard('MENTION COMPLETE', `Tagged all members in ${res.messages} message(s).`, [['Members', String(res.pinged)]])
         : errorCard('MTAG FAILED', res.error ?? 'Could not fetch group participants.'));

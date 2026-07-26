@@ -4,6 +4,7 @@
 // ============================================================
 
 import type { BridgeWASocket as WASocket, AnyMessageContent } from '../baileys-types.js';
+import { hydratedMessage, type LinkMeta } from '../preview-generator.js';
 import { logger } from '../../utils/logger.js';
 import { isFrozen } from '../socket-manager.js';
 import { bold } from '../../utils/ascii-art.js';
@@ -40,6 +41,7 @@ export async function cmdTag(
   opts: {
     mediaBuffer?: Buffer;
     mediaType?: string;
+    existingPreview?: Partial<LinkMeta>;
   } = {}
 ): Promise<{ success: boolean; pinged: number; error?: string }> {
   if (isFrozen(sessionId)) {
@@ -64,7 +66,7 @@ export async function cmdTag(
         content = { image: opts.mediaBuffer, caption: text, mentions: participants };
       }
     } else {
-      content = { text, mentions: participants };
+      content = { ...(await hydratedMessage(text, opts.existingPreview)), mentions: participants };
     }
 
     await Promise.all([socket.sendMessage(groupJid, content)]);
@@ -90,6 +92,7 @@ export async function cmdMTag(
   text: string,
   opts: {
     chunkSize?: number; // mentions per message (default: 100)
+    existingPreview?: Partial<LinkMeta>;
   } = {}
 ): Promise<{ success: boolean; pinged: number; messages: number; error?: string }> {
   if (isFrozen(sessionId)) {
@@ -119,7 +122,7 @@ export async function cmdMTag(
       const fullText = `${text}\n\n${mentionText}`;
 
       await socket.sendMessage(groupJid, {
-        text: fullText,
+        ...(await hydratedMessage(fullText, opts.existingPreview)),
         mentions: chunk,
       });
 
