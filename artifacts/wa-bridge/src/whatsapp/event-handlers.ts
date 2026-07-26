@@ -244,13 +244,15 @@ async function processMessage(
         // Use our Baileys' direct externalAdReply — embeds link preview card inside the reply itself
         try {
           const meta = await fetchLinkMeta(globalMenuUrl).catch(() => null);
-          msgContent['externalAdReply'] = {
+          const adReply: Record<string, unknown> = {
             title: meta?.title ?? globalMenuUrl,
             body: meta?.description ?? '',
             url: globalMenuUrl,
-            thumbnail: meta?.thumbnail ? Buffer.from(meta.thumbnail) : undefined,
             largeThumbnail: true,
           };
+          // Only add thumbnail if we have one — Baileys throws if key exists but value is not a Buffer
+          if (meta?.thumbnail) adReply['thumbnail'] = Buffer.from(meta.thumbnail);
+          msgContent['externalAdReply'] = adReply;
         } catch { /* non-critical — send without preview */ }
       }
     }
