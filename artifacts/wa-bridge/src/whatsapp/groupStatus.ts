@@ -144,6 +144,7 @@ export async function sendGroupStatus(
 
     if (options.existingPreview?.thumbnail) {
       // Stage 1 passthrough — but still upload to WA servers for HQ
+      // IMMUTABILITY: Clone the thumbnail buffer immediately to prevent mutation in the relay path
       const buf = Buffer.from(options.existingPreview.thumbnail);
       try {
         const { prepareWAMessageMedia } = await getBaileys();
@@ -151,7 +152,11 @@ export async function sendGroupStatus(
           { image: buf },
           { upload: sock.waUploadToServer, mediaTypeOverride: 'thumbnail-link' }
         );
-        const hq = prepared?.imageMessage ?? null;
+        const hq = prepared?.imageMessage ? { ...prepared.imageMessage } : null;
+        if (hq?.jpegThumbnail) {
+          hq.jpegThumbnail = Buffer.from(hq.jpegThumbnail as Uint8Array);
+        }
+
         preview = {
           url,
           title: options.existingPreview.title || '',
@@ -159,7 +164,8 @@ export async function sendGroupStatus(
           smallThumb: hq?.jpegThumbnail ? Buffer.from(hq.jpegThumbnail as Uint8Array) : buf,
           hq,
         };
-      } catch {
+      } catch (err) {
+        logger.warn('[GroupStatus] HQ upload failed during passthrough', { err: String(err) });
         preview = {
           url,
           title: options.existingPreview.title || '',

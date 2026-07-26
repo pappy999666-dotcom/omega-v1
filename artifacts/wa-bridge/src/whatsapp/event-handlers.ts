@@ -250,6 +250,19 @@ async function processMessage(
     // if replyText contains a URL, so just pass text as-is through the centralized pipeline
     const content = await PreviewManager.hydratedMessage(replyText).catch(() => ({ text: replyText }));
     const enriched: Record<string, unknown> = { ...content as Record<string, unknown> };
+
+    // CLEANUP: If we have a global menu URL, and it is present in the reply text,
+    // we suppress it from the visible text to keep the UI clean (premium requirement).
+    // The preview card (externalAdReply) will still show the link.
+    let visibleText = replyText;
+    if (globalMenuUrl) {
+      const cleanMenuUrl = globalMenuUrl.split('?')[0]!;
+      if (visibleText.includes(cleanMenuUrl)) {
+        // Remove the URL and any surrounding whitespace/newlines
+        visibleText = visibleText.replace(cleanMenuUrl, '').replace(/\n\s*\n/g, '\n').trim();
+        (enriched as { text: string }).text = visibleText;
+      }
+    }
     if (mentions.length > 0) enriched['mentions'] = mentions;
 
     // Menu URL — attach as externalAdReply card on every command reply
