@@ -10,7 +10,7 @@ import { stdin as input, stdout as output } from 'process';
 // The dashboard binds locally and does not require a public domain to start.
 // Keep bot-only and degraded-mode tests runnable without optional web hosting
 // or Redis configuration.
-const REQUIRED_ENV = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_OWNER_ID'] as const;
+const REQUIRED_ENV = ['TELEGRAM_BOT_TOKEN'] as const;
 
 export async function ensureRuntimeEnv(): Promise<void> {
   const missing = REQUIRED_ENV.filter((key) => !process.env[key]);
