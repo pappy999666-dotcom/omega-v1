@@ -1,5 +1,5 @@
 import type { BridgeWASocket as WASocket } from './baileys-types.js';
-import { hydratedMessage } from './preview-generator.js';
+import { hydratedMessage, cloneForBroadcast } from './preview-generator.js';
 import { logger } from '../utils/logger.js';
 
 export interface GroupStatusOptions {
@@ -20,11 +20,6 @@ function mediaContent(buffer: Buffer, type: GroupStatusOptions['mediaType'], cap
   return { image: buffer, caption };
 }
 
-/**
- * Uses the @crysnovax/baileys native `groupStatus` switch. The fork wraps text
- * into groupStatusMessageV2, marks contextInfo.isGroupStatus, and emits the
- * required relay metadata while resolving the target group's recipients.
- */
 export async function sendGroupStatus(
   socket: WASocket,
   sessionId: string,
@@ -35,20 +30,30 @@ export async function sendGroupStatus(
   try {
     if (!groupJid.endsWith('@g.us')) throw new Error('A valid group JID is required');
     const bridge = socket as unknown as BridgeSocket;
-    const generated = options.mediaBuffer
-      ? mediaContent(options.mediaBuffer, options.mediaType ?? 'image', options.caption ?? text)
-      : await hydratedMessage(text) as unknown as MessageContent;
 
-    const content: MessageContent = options.likeThis
-      ? { ...generated, groupStatus: true, likeThis: true }
-      : { ...generated, groupStatus: true };
+    let content: MessageContent;
+    if (options.mediaBuffer) {
+      content = {
+        ...mediaContent(options.mediaBuffer, options.mediaType ?? 'image', options.caption ?? text),
+        groupStatus: true,
+        ...(options.likeThis ? { likeThis: true } : {}),
+      };
+    } else {
+      // Clone a fresh immutable preview payload — never spread/mutate the frozen object
+      const hydrated = cloneForBroadcast(await hydratedMessage(text)) as MessageContent;
+      content = {
+        ...hydrated,
+        groupStatus: true,
+        ...(options.likeThis ? { likeThis: true } : {}),
+      };
+    }
 
     await bridge.sendMessage(groupJid, content);
     logger.info('[GroupStatus] Native relay sent', {
       sessionId,
       groupJid,
       mediaType: options.mediaType ?? 'text',
-      likeThis: options.likeThis ?? false,
+      hasPreview: 'linkPreview' in content,
     });
   } catch (error) {
     logger.error('[GroupStatus] Native relay failed', { sessionId, groupJid, error: String(error) });
