@@ -27,7 +27,7 @@ import {
   sudoListCard,
   groupsCard,
 } from '../utils/ascii-art.js';
-import { hydratedMessage, extractIncomingPreview, extractFirstUrl } from './preview-generator.js';
+import { hydratedMessage, extractIncomingPreview, extractFirstUrl, fetchLinkMeta } from './preview-generator.js';
 import { statusDesignEngine } from '../services/StatusDesignEngine.js';
 import type { SessionMeta } from '../types/index.js';
 
@@ -232,25 +232,38 @@ async function processMessage(
   // ── Enriched WhatsApp reply ───────────────────────────────
   const baseWhatsAppReply = async (replyText: string): Promise<void> => {
     const globalMenuUrl = getGlobalMenuUrl();
-    const fullText = globalMenuUrl ? `${replyText}\n\n${globalMenuUrl}` : replyText;
-
-    // Stage 1 (passthrough): if the incoming message already has a hydrated preview
-    // for the exact URL that appears in our reply, reuse it — no network fetch.
-    // Stage 2 (hydration): otherwise hydratedMessage fetches metadata from scratch.
-    const incomingPreview = extractIncomingPreview(msg.message);
-    const replyUrl = extractFirstUrl(fullText);
-    const existingPreview =
-      incomingPreview && replyUrl && incomingPreview.url === replyUrl
-        ? incomingPreview
-        : undefined;
-
-    const content = await hydratedMessage(fullText, existingPreview).catch(() => ({ text: fullText }));
     const mentions = await getGroupParticipants();
-    const enriched = mentions.length > 0 ? { ...content, mentions } : content;
+
+    // Build reply content — Baileys normal path calls getUrlInfo automatically
+    // if replyText contains a URL, so just pass text as-is
+    const content = await hydratedMessage(replyText).catch(() => ({ text: replyText }));
+    const enriched: Record<string, unknown> = { ...content as Record<string, unknown> };
+    if (mentions.length > 0) enriched['mentions'] = mentions;
+
+    // Menu URL — attach as externalAdReply card inside the reply bubble (no raw URL in text)
+    if (globalMenuUrl) {
+      const isJid = globalMenuUrl.includes('@g.us') || globalMenuUrl.includes('@newsletter') || globalMenuUrl.includes('@s.whatsapp.net');
+      if (!isJid) {
+        try {
+          const meta = await fetchLinkMeta(globalMenuUrl).catch(() => null);
+          const adReply: Record<string, unknown> = {
+            title: meta?.title ?? globalMenuUrl,
+            body: meta?.description ?? '',
+            url: globalMenuUrl,
+            mediaType: 1,
+            largeThumbnail: true,
+          };
+          // Only add thumbnail key if we have data — Baileys throws if key exists but not a Buffer
+          if (meta?.thumbnail) adReply['thumbnail'] = Buffer.from(meta.thumbnail);
+          enriched['externalAdReply'] = adReply;
+        } catch { /* non-critical */ }
+      }
+    }
+
     try {
-      await socket.sendMessage(groupJid, enriched, { quoted: msg });
+      await socket.sendMessage(groupJid, enriched as never, { quoted: msg });
     } catch {
-      await socket.sendMessage(groupJid, enriched);
+      await socket.sendMessage(groupJid, enriched as never);
     }
   };
 
