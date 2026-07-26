@@ -27,7 +27,7 @@ import {
   sudoListCard,
   groupsCard,
 } from '../utils/ascii-art.js';
-import { hydratedMessage } from './preview-generator.js';
+import { hydratedMessage, extractIncomingPreview, extractFirstUrl } from './preview-generator.js';
 import { statusDesignEngine } from '../services/StatusDesignEngine.js';
 import type { SessionMeta } from '../types/index.js';
 
@@ -176,12 +176,10 @@ async function processMessage(
 
   // Extract text from various message types
   const text = extractMessageText(msg.message);
-  const stickerContextInfo = (msg.message?.stickerMessage as Record<string, unknown> | undefined)?.['contextInfo'] as { quotedMessage?: Record<string, unknown> } | undefined;
   const quotedMessage = (
     msg.message?.extendedTextMessage?.contextInfo
     ?? msg.message?.imageMessage?.contextInfo
     ?? msg.message?.videoMessage?.contextInfo
-    ?? stickerContextInfo
   )?.quotedMessage;
   const quotedText = extractMessageText(quotedMessage);
 
@@ -234,26 +232,28 @@ async function processMessage(
   // ── Enriched WhatsApp reply ───────────────────────────────
   const baseWhatsAppReply = async (replyText: string): Promise<void> => {
     const globalMenuUrl = getGlobalMenuUrl();
+    const fullText = globalMenuUrl ? `${replyText}\n\n${globalMenuUrl}` : replyText;
+
+    // Stage 1 (passthrough): if the incoming message already has a hydrated preview
+    // for the exact URL that appears in our reply, reuse it — no network fetch.
+    // Stage 2 (hydration): otherwise hydratedMessage fetches metadata from scratch.
+    const incomingPreview = extractIncomingPreview(msg.message);
+    const replyUrl = extractFirstUrl(fullText);
+    const existingPreview =
+      incomingPreview && replyUrl && incomingPreview.url === replyUrl
+        ? incomingPreview
+        : undefined;
+
+    const content = await hydratedMessage(fullText, existingPreview).catch(() => ({ text: fullText }));
     const mentions = await getGroupParticipants();
-    const msgContent: Record<string, unknown> = { text: replyText };
-    if (mentions.length > 0) msgContent['mentions'] = mentions;
-
-    if (globalMenuUrl) {
-      const isJid = globalMenuUrl.includes('@g.us') || globalMenuUrl.includes('@newsletter') || globalMenuUrl.includes('@s.whatsapp.net');
-      if (!isJid) {
-        // richPreview:true tells Baileys to build the full preview card natively
-        // including HQ thumbnail upload via its own buildLinkPreview pipeline
-        msgContent['richPreview'] = true;
-        msgContent['text'] = `${replyText}\n\n${globalMenuUrl}`;
-      }
-    }
-
+    const enriched = mentions.length > 0 ? { ...content, mentions } : content;
     try {
-      await socket.sendMessage(groupJid, msgContent as never, { quoted: msg });
+      await socket.sendMessage(groupJid, enriched, { quoted: msg });
     } catch {
-      await socket.sendMessage(groupJid, msgContent as never);
+      await socket.sendMessage(groupJid, enriched);
     }
   };
+
   const reply = replyOverride ?? baseWhatsAppReply;
   const createProgressReply = async (initialText: string): Promise<(nextText: string) => Promise<void>> => {
     if (replyOverride) {
@@ -447,10 +447,10 @@ async function processMessage(
       }
 
       const boundCmd = args.join(' ').trim();
-      // Allow bare command name with no args e.g. .setcmd tag
-      const parsedBinding = boundCmd
-        ? parseCommand(`${config.prefix}${boundCmd}`, { ...config, nullPrefix: false })
-        : null;
+      const parsedBinding = boundCmd ? parseCommand(`${config.prefix}${boundCmd}`, {
+        ...config,
+        nullPrefix: false,
+      }) : null;
 
       if (!parsedBinding) {
         await reply(warningCard('VALID COMMAND REQUIRED', `Reply to a sticker with ${config.prefix}setcmd <registered command>.`));
@@ -796,24 +796,11 @@ async function processMessage(
     // ── tag ──
     case 'tag': {
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
-
-      // Multi-tag: ".tag .tag .tag 🥀" fires one tag per .tag occurrence
-      // Each segment's text is everything between that .tag and the next .tag
-      const rawInput = parsed.raw ?? text ?? '';
-      const escapedPrefix = config.prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const splitRe = new RegExp(`(?=${escapedPrefix}tag(?:\\s|$))`, 'i');
-      const segments = rawInput.split(splitRe).filter(Boolean);
-
-      if (segments.length > 1) {
-        // Multiple .tag occurrences — fire each one
-        for (const seg of segments) {
-          const segText = seg.replace(new RegExp(`^${escapedPrefix}tag\\s*`, 'i'), '').trim() || '\u200b';
-          await cmdTag(socket, sessionId, groupJid, segText);
-        }
-      } else {
-        const tagText = commandText('\u200b');
-        await cmdTag(socket, sessionId, groupJid, tagText);
-      }
+      const text = commandText('📢');
+      const res = await cmdTag(socket, sessionId, groupJid, text);
+      await reply(res.success
+        ? tagSummary(res.pinged, 'tag')
+        : errorCard('TAG FAILED', res.error ?? 'Could not fetch group participants.'));
       break;
     }
 

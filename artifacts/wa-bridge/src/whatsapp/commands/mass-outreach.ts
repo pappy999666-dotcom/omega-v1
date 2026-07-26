@@ -243,16 +243,12 @@ export async function cmdAllChat(
       const participants = await getGroupParticipants(socket, group.id);
       const mentions = participants.map((p) => p.id);
 
-      const content: AnyMessageContent = opts.mediaBuffer
-        ? {
-            image: opts.mediaBuffer,
-            caption: text,
-            mentions,
-          }
-        : {
-            text,
-            mentions,
-          };
+      // Hydrate link previews for text messages (Stage 2: generate if no preview exists)
+      const baseContent: AnyMessageContent = opts.mediaBuffer
+        ? { image: opts.mediaBuffer, caption: text }
+        : await hydratedMessage(text).catch(() => ({ text } as AnyMessageContent));
+
+      const content: AnyMessageContent = { ...baseContent, mentions };
 
       await socket.sendMessage(group.id, content);
       result.success++;
