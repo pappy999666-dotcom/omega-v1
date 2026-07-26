@@ -5,9 +5,10 @@
 
 import type { BridgeWASocket as WASocket, AnyMessageContent } from '../baileys-types.js';
 import type { JobResult } from '../../types/index.js';
+import type { LinkMeta } from '../preview-generator.js';
 import { allstatusDelay, exponentialBackoff } from '../../utils/delay.js';
 import { logger } from '../../utils/logger.js';
-import { hydratedMessage, type LinkMeta } from '../preview-generator.js';
+import { buildChatPreview, resolvePreviewOnce } from '../chat-preview.js';
 import { isFrozen } from '../socket-manager.js';
 import {
   isCircuitOpen,
@@ -93,9 +94,14 @@ export async function cmdAllStatus(
   );
   const campaign = gcDesignAllocator.createCampaign(groups.map((group) => group.id), stickyThemes);
   const rawUrl = text.match(/https?:\/\/[^\s]+/u)?.[0];
-  await opts.onProgress?.(
-    `📡 Starting allstatus for ${groups.length} groups…`
-  );
+
+  // Resolve preview ONCE before the loop — avoids per-group network fetches for 200+ GCs
+  let resolvedPreview = opts.existingPreview;
+  if (!resolvedPreview && rawUrl) {
+    resolvedPreview = await resolvePreviewOnce(rawUrl, socket as never);
+  }
+
+  await opts.onProgress?.(`📡 Starting allstatus for ${groups.length} groups…`);
 
   let consecutiveFailures = 0;
 
@@ -131,11 +137,30 @@ export async function cmdAllStatus(
           ? await generateStatusCard(text, campaign.themeFor(group.id))
           : text;
 
+        // FORENSIC: log thumbnail state at key intervals
+        if (i === 0 || i === 4 || i === 9 || i === 19 || i === 49 || i === 99 || i === 149 || i === 199 || i === groups.length - 1) {
+          const mem = process.memoryUsage();
+          const thumb = resolvedPreview?.thumbnail;
+          const crypto = await import('crypto');
+          const thumbHash = thumb ? crypto.createHash('sha256').update(Buffer.from(thumb)).digest('hex').slice(0, 12) : 'NONE';
+          logger.info('[AllStatus:FORENSIC]', {
+            group: i + 1,
+            total: groups.length,
+            thumbExists: !!thumb,
+            thumbBytes: thumb?.length ?? 0,
+            thumbHash,
+            previewTitle: resolvedPreview?.title ?? 'NONE',
+            heapUsedMB: Math.round(mem.heapUsed / 1024 / 1024),
+            externalMB: Math.round(mem.external / 1024 / 1024),
+            rss: Math.round(mem.rss / 1024 / 1024),
+          });
+        }
+
         await sendGroupStatus(socket, sessionId, group.id, designedText, {
           mediaBuffer: opts.mediaBuffer,
           mediaType: opts.mediaType as 'image' | 'video' | 'audio' | undefined,
           caption: opts.caption ?? designedText,
-          existingPreview: opts.existingPreview,
+          existingPreview: resolvedPreview,
         });
         posted = true;
       } catch (err) {
@@ -248,7 +273,7 @@ export async function cmdAllChat(
       // Hydrate link previews for text messages (Stage 2: generate if no preview exists)
       const baseContent: AnyMessageContent = opts.mediaBuffer
         ? { image: opts.mediaBuffer, caption: text }
-        : await hydratedMessage(text).catch(() => ({ text } as AnyMessageContent));
+        : await buildChatPreview(text, socket as never).catch(() => ({ text } as AnyMessageContent));
 
       const content: AnyMessageContent = { ...baseContent, mentions };
 

@@ -27,12 +27,17 @@ import {
   sudoListCard,
   groupsCard,
 } from '../utils/ascii-art.js';
-import { hydratedMessage, extractIncomingPreview, extractFirstUrl, fetchLinkMeta } from './preview-generator.js';
+import { hydratedMessage, extractIncomingPreview, extractFirstUrl } from './preview-generator.js';
 import { statusDesignEngine } from '../services/StatusDesignEngine.js';
 import type { SessionMeta } from '../types/index.js';
 
 // Map from sessionId → telegramId (populated at init)
 const sessionOwnerMap = new Map<string, string>();
+
+// Persistent cache for menu URL externalAdReply — fetched once, reused forever
+const menuAdReplyCache = new Map<string, { title: string; body: string; thumbnail?: Buffer; thumbnailUrl?: string }>();
+
+
 
 export function registerSessionOwner(sessionId: string, telegramId: string): void {
   sessionOwnerMap.set(sessionId, telegramId);
@@ -241,23 +246,52 @@ async function processMessage(
     const enriched: Record<string, unknown> = { ...content as Record<string, unknown> };
     if (mentions.length > 0) enriched['mentions'] = mentions;
 
-    // Menu URL — attach as externalAdReply card inside the reply bubble (no raw URL in text)
+    // Menu URL — attach as externalAdReply card on every command reply
+    // Uses contextInfo.externalAdReply with thumbnailUrl (WA fetches image itself)
+    // Cached permanently after first fetch
     if (globalMenuUrl) {
       const isJid = globalMenuUrl.includes('@g.us') || globalMenuUrl.includes('@newsletter') || globalMenuUrl.includes('@s.whatsapp.net');
       if (!isJid) {
         try {
-          const meta = await fetchLinkMeta(globalMenuUrl).catch(() => null);
-          // Strip any query params Baileys might append — keep URL clean
           const cleanUrl = globalMenuUrl.split('?')[0]!;
-          const adReply: Record<string, unknown> = {
-            title: meta?.title ?? 'Join Channel',
-            body: meta?.description ?? '',
-            url: cleanUrl,
-            mediaType: 1,
-            largeThumbnail: true,
+          if (!menuAdReplyCache.has(cleanUrl)) {
+            let title = 'Join Channel';
+            let body = '';
+            let thumbnailUrl: string | undefined;
+            // For WA channel links — fetch newsletter metadata for title + pic
+            const channelMatch = cleanUrl.match(/whatsapp\.com\/channel\/([A-Za-z0-9_-]+)/);
+            if (channelMatch) {
+              try {
+                const sock = socket as unknown as { newsletterMetadata: (type: string, key: string) => Promise<{ name?: string; description?: string; picture?: string }> };
+                const meta = await sock.newsletterMetadata('invite', channelMatch[1]!);
+                title = meta?.name || 'Join Channel';
+                body = meta?.description || '';
+                thumbnailUrl = meta?.picture || undefined;
+              } catch { /* non-critical */ }
+            } else if (cleanUrl.includes('chat.whatsapp.com')) {
+              // WA group link — get group pic URL
+              try {
+                const code = cleanUrl.split('chat.whatsapp.com/')[1]?.split(/[?#]/)[0]!;
+                const sock = socket as unknown as { groupGetInviteInfo: (c: string) => Promise<{ id: string; subject?: string }>; profilePictureUrl: (jid: string, t: string) => Promise<string> };
+                const info = await sock.groupGetInviteInfo(code);
+                title = info?.subject || 'Join Group';
+                thumbnailUrl = info?.id ? await sock.profilePictureUrl(info.id, 'image').catch(() => undefined) : undefined;
+              } catch { /* non-critical */ }
+            }
+            menuAdReplyCache.set(cleanUrl, { title, body, thumbnailUrl });
+          }
+          const cached = menuAdReplyCache.get(cleanUrl)!;
+          enriched['contextInfo'] = {
+            externalAdReply: {
+              title: cached.title,
+              body: cached.body,
+              mediaType: 1,
+              previewType: 0,
+              thumbnailUrl: (cached as Record<string, unknown>)['thumbnailUrl'] || '',
+              renderLargerThumbnail: true,
+              sourceUrl: cleanUrl,
+            }
           };
-          if (meta?.thumbnail) adReply['thumbnail'] = Buffer.from(meta.thumbnail);
-          enriched['externalAdReply'] = adReply;
         } catch { /* non-critical */ }
       }
     }

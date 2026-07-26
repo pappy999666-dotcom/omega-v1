@@ -1,6 +1,27 @@
 import type { BridgeWASocket as WASocket } from './baileys-types.js';
-import { hydratedMessage, type LinkMeta } from './preview-generator.js';
+import { extractFirstUrl, type LinkMeta } from './preview-generator.js';
 import { logger } from '../utils/logger.js';
+
+// Import from exact Baileys internal paths — not exported from main index
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const baileysPaths = {
+  buildLinkPreview: null as any,
+  prepareWAMessageMedia: null as any,
+  generateMessageIDV2: null as any,
+};
+async function getBaileys() {
+  if (!baileysPaths.buildLinkPreview) {
+    const [media, msgs, gen] = await Promise.all([
+      import('@crysnovax/baileys/lib/Utils/messages-media.js' as never) as Promise<Record<string, unknown>>,
+      import('@crysnovax/baileys/lib/Utils/messages.js' as never) as Promise<Record<string, unknown>>,
+      import('@crysnovax/baileys/lib/Utils/generics.js' as never) as Promise<Record<string, unknown>>,
+    ]);
+    baileysPaths.buildLinkPreview = media['buildLinkPreview'];
+    baileysPaths.prepareWAMessageMedia = msgs['prepareWAMessageMedia'];
+    baileysPaths.generateMessageIDV2 = gen['generateMessageIDV2'];
+  }
+  return baileysPaths;
+}
 
 export interface GroupStatusOptions {
   mediaBuffer?: Buffer;
@@ -10,15 +31,86 @@ export interface GroupStatusOptions {
   existingPreview?: Partial<LinkMeta>;
 }
 
-type MessageContent = Record<string, unknown>;
-type BridgeSocket = {
-  sendMessage(jid: string, content: MessageContent, options?: Record<string, unknown>): Promise<unknown>;
+type Sock = {
+  user: { id: string };
+  relayMessage: (jid: string, message: Record<string, unknown>, opts: Record<string, unknown>) => Promise<unknown>;
+  sendMessage: (jid: string, content: Record<string, unknown>, opts?: Record<string, unknown>) => Promise<{ key?: { id?: string } } | undefined>;
+  waUploadToServer: (stream: unknown, opts: unknown) => Promise<unknown>;
 };
 
-function mediaContent(buffer: Buffer, type: GroupStatusOptions['mediaType'], caption: string): MessageContent {
-  if (type === 'video') return { video: buffer, caption, gifPlayback: false };
-  if (type === 'audio') return { audio: buffer, mimetype: 'audio/mp4', ptt: false };
-  return { image: buffer, caption };
+// ── Build preview using Baileys-native pipeline ───────────────
+// Follows crysnovax/CODY reference implementation exactly:
+// buildLinkPreview → prepareWAMessageMedia with waUploadToServer → HQ directPath + mediaKey
+async function buildStatusPreview(
+  url: string,
+  sock: Sock
+): Promise<{
+  url: string;
+  title: string;
+  description: string;
+  smallThumb: Buffer | null;
+  hq: Record<string, unknown> | null;
+} | null> {
+  try {
+    const { buildLinkPreview, prepareWAMessageMedia } = await getBaileys();
+    const result = await buildLinkPreview(url, sock, { customTitle: '', customDesc: '' });
+    if (!result) return null;
+
+    let hq: Record<string, unknown> | null = null;
+    let smallThumb: Buffer | null = null;
+
+    if (result.imageBuffer) {
+      try {
+        const prepared = await prepareWAMessageMedia(
+          { image: result.imageBuffer },
+          { upload: sock.waUploadToServer, mediaTypeOverride: 'thumbnail-link' }
+        );
+        hq = prepared?.imageMessage ?? null;
+        smallThumb = hq?.jpegThumbnail ? Buffer.from(hq.jpegThumbnail as Uint8Array) : null;
+      } catch (err) {
+        logger.warn('[GroupStatus] HQ thumb upload failed', { err: String(err) });
+      }
+    }
+
+    return {
+      url,
+      title: result.title || '',
+      description: result.description || '',
+      smallThumb,
+      hq,
+    };
+  } catch (err) {
+    logger.warn('[GroupStatus] buildStatusPreview failed', { url, err: String(err) });
+    return null;
+  }
+}
+
+// ── Build groupStatusMessageV2 with full HQ preview ───────────
+function buildGroupStatusMessage(
+  text: string,
+  preview: { url: string; title: string; description: string; smallThumb: Buffer | null; hq: Record<string, unknown> | null } | null
+): Record<string, unknown> {
+  const extMsg: Record<string, unknown> = { text };
+
+  if (preview) {
+    extMsg['matchedText'] = preview.url;
+    extMsg['canonicalUrl'] = preview.url;
+    extMsg['title'] = preview.title;
+    extMsg['description'] = preview.description;
+    extMsg['previewType'] = 5;
+    if (preview.smallThumb) extMsg['jpegThumbnail'] = preview.smallThumb;
+    if (preview.hq) {
+      extMsg['thumbnailDirectPath'] = preview.hq['directPath'];
+      extMsg['mediaKey'] = preview.hq['mediaKey'];
+      extMsg['mediaKeyTimestamp'] = preview.hq['mediaKeyTimestamp'];
+      extMsg['thumbnailWidth'] = preview.hq['width'];
+      extMsg['thumbnailHeight'] = preview.hq['height'];
+      extMsg['thumbnailSha256'] = preview.hq['fileSha256'];
+      extMsg['thumbnailEncSha256'] = preview.hq['fileEncSha256'];
+    }
+  }
+
+  return { groupStatusMessageV2: { message: { extendedTextMessage: extMsg } } };
 }
 
 export async function sendGroupStatus(
@@ -30,38 +122,77 @@ export async function sendGroupStatus(
 ): Promise<void> {
   try {
     if (!groupJid.endsWith('@g.us')) throw new Error('A valid group JID is required');
-    const bridge = socket as unknown as BridgeSocket;
+    const sock = socket as unknown as Sock;
 
-    let content: MessageContent;
+    // ── Media path ────────────────────────────────────────────
     if (options.mediaBuffer) {
-      content = {
-        ...mediaContent(options.mediaBuffer, options.mediaType ?? 'image', options.caption ?? text),
+      await sock.sendMessage(groupJid, {
+        ...(options.mediaType === 'video'
+          ? { video: options.mediaBuffer, caption: options.caption ?? text, gifPlayback: false }
+          : options.mediaType === 'audio'
+          ? { audio: options.mediaBuffer, mimetype: 'audio/mp4', ptt: false }
+          : { image: options.mediaBuffer, caption: options.caption ?? text }),
         groupStatus: true,
         ...(options.likeThis ? { likeThis: true } : {}),
-      };
-    } else {
-      const hasUrl = /https?:\/\/\S+/u.test(text);
-      content = {
-        ...(await hydratedMessage(text, options.existingPreview)),
-        groupStatus: true,
-        ...(options.likeThis ? { likeThis: true } : {}),
-      };
-
-      // If there is no pre-existing preview to preserve, force the custom Baileys
-      // native rich-preview path for groupStatusMessageV2 rather than relying on
-      // WhatsApp to render a raw text status into a card after delivery.
-      if (hasUrl && !options.existingPreview) {
-        content = {
-          text,
-          groupStatus: true,
-          richPreview: true,
-          ...(options.likeThis ? { likeThis: true } : {}),
-        };
-      }
+      });
+      logger.info('[GroupStatus] Media sent', { sessionId, groupJid });
+      return;
     }
 
-    await bridge.sendMessage(groupJid, content);
-    logger.info('[GroupStatus] Sent', { sessionId, groupJid, hasPreview: /https?:\/\//u.test(text) });
+    // ── Text path ─────────────────────────────────────────────
+    const url = options.existingPreview?.url ?? extractFirstUrl(text);
+
+    if (!url) {
+      // No URL — plain text status
+      const msg = buildGroupStatusMessage(text, null);
+      const { generateMessageIDV2 } = await getBaileys();
+      const msgId = generateMessageIDV2(sock.user.id);
+      await sock.relayMessage(groupJid, msg, { messageId: msgId });
+      logger.info('[GroupStatus] Plain text sent', { sessionId, groupJid });
+      return;
+    }
+
+    // Build preview once — if existingPreview has thumbnail already use it,
+    // otherwise fetch fresh via buildLinkPreview + waUploadToServer
+    let preview: { url: string; title: string; description: string; smallThumb: Buffer | null; hq: Record<string, unknown> | null } | null = null;
+
+    if (options.existingPreview?.thumbnail) {
+      // Stage 1 passthrough — but still upload to WA servers for HQ
+      const buf = Buffer.from(options.existingPreview.thumbnail);
+      try {
+        const { prepareWAMessageMedia } = await getBaileys();
+        const prepared = await prepareWAMessageMedia(
+          { image: buf },
+          { upload: sock.waUploadToServer, mediaTypeOverride: 'thumbnail-link' }
+        );
+        const hq = prepared?.imageMessage ?? null;
+        preview = {
+          url,
+          title: options.existingPreview.title || '',
+          description: options.existingPreview.description || '',
+          smallThumb: hq?.jpegThumbnail ? Buffer.from(hq.jpegThumbnail as Uint8Array) : buf,
+          hq,
+        };
+      } catch {
+        preview = {
+          url,
+          title: options.existingPreview.title || '',
+          description: options.existingPreview.description || '',
+          smallThumb: buf,
+          hq: null,
+        };
+      }
+    } else {
+      // Stage 2 — fresh fetch via Baileys-native buildLinkPreview
+      preview = await buildStatusPreview(url, sock);
+    }
+
+    const msg = buildGroupStatusMessage(text, preview);
+    const { generateMessageIDV2 } = await getBaileys();
+    const msgId = generateMessageIDV2(sock.user.id);
+    await sock.relayMessage(groupJid, msg, { messageId: msgId });
+
+    logger.info('[GroupStatus] Sent', { sessionId, groupJid, hasPreview: !!preview, hasHQ: !!preview?.hq });
   } catch (error) {
     logger.error('[GroupStatus] Failed', { sessionId, groupJid, error: String(error) });
     throw error;

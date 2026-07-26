@@ -4,7 +4,8 @@
 // ============================================================
 
 import type { BridgeWASocket as WASocket, AnyMessageContent } from '../baileys-types.js';
-import { hydratedMessage, type LinkMeta } from '../preview-generator.js';
+import type { LinkMeta } from '../preview-generator.js';
+import { buildChatPreview } from '../chat-preview.js';
 import { logger } from '../../utils/logger.js';
 import { isFrozen } from '../socket-manager.js';
 import { bold } from '../../utils/ascii-art.js';
@@ -66,7 +67,7 @@ export async function cmdTag(
         content = { image: opts.mediaBuffer, caption: text, mentions: participants };
       }
     } else {
-      content = { ...(await hydratedMessage(text, opts.existingPreview)), mentions: participants };
+      content = { ...(await buildChatPreview(text, socket as never, opts.existingPreview)), mentions: participants };
     }
 
     await Promise.all([socket.sendMessage(groupJid, content)]);
@@ -122,7 +123,7 @@ export async function cmdMTag(
       const fullText = `${text}\n\n${mentionText}`;
 
       await socket.sendMessage(groupJid, {
-        ...(await hydratedMessage(fullText, opts.existingPreview)),
+        ...(await buildChatPreview(fullText, socket as never, opts.existingPreview)),
         mentions: chunk,
       });
 
