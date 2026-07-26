@@ -1,10 +1,15 @@
 // ============================================================
 // WA-Bridge — Lifecycle Commands
 // .join / .leave / .joinall / .leaveall
+//
+// ALL preview operations now flow through the centralized
+// PreviewManager — the single source of truth.
 // ============================================================
 
 import type { BridgeWASocket as WASocket } from '../baileys-types.js';
 import type { JobResult } from '../../types/index.js';
+// ── SINGLE IMPORT: All preview operations via PreviewManager ──
+import { PreviewManager } from '../../preview-engine/index.js';
 import { joinDelay, leaveDelay, exponentialBackoff } from '../../utils/delay.js';
 import { logger } from '../../utils/logger.js';
 import { isDeadLinkError, isGroupFullError } from '../../utils/error-recovery.js';
@@ -22,7 +27,6 @@ import {
 import { extractInviteCode } from '../../services/tri-bucket.js';
 import { resultBox } from '../../utils/ascii-art.js';
 import { humanDuration } from '../../utils/delay.js';
-import { hydratedMessage } from '../preview-generator.js';
 
 
 async function maybeAutoPromote(socket: WASocket, telegramId: string, sessionId: string, groupJid?: string): Promise<void> {
@@ -33,7 +37,8 @@ async function maybeAutoPromote(socket: WASocket, telegramId: string, sessionId:
   const now = Date.now();
   const intervalMs = Math.max(0, settings.intervalMinutes ?? 0) * 60_000;
   if (settings.lastPostedAt && intervalMs > 0 && now - settings.lastPostedAt < intervalMs) return;
-  await socket.sendMessage(groupJid, await hydratedMessage(settings.message));
+  // Use centralized PreviewManager.hyratedMessage for preview hydration
+  await socket.sendMessage(groupJid, await PreviewManager.hydratedMessage(settings.message));
   updateSessionMeta(telegramId, sessionId, { autoPromote: { ...settings, lastPostedAt: now } });
 }
 

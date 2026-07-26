@@ -1,5 +1,16 @@
+// ============================================================
+// WA-Bridge — Group Status Sending
+// Posts to group status with full HQ preview.
+//
+// Uses the centralized PreviewManager for metadata resolution
+// and Baileys-native pipeline for HQ thumbnail upload.
+// ============================================================
+
 import type { BridgeWASocket as WASocket } from './baileys-types.js';
-import { extractFirstUrl, type LinkMeta } from './preview-generator.js';
+// ── SINGLE IMPORT: All preview operations via PreviewManager ──
+import { PreviewManager, UrlDetector } from '../preview-engine/index.js';
+import type { PartialLinkMeta } from '../preview-engine/types.js';
+import { PreviewHydrator } from '../preview-engine/PreviewHydrator.js';
 import { logger } from '../utils/logger.js';
 
 // Import from exact Baileys internal paths — not exported from main index
@@ -28,7 +39,7 @@ export interface GroupStatusOptions {
   mediaType?: 'image' | 'video' | 'audio';
   caption?: string;
   likeThis?: boolean;
-  existingPreview?: Partial<LinkMeta>;
+  existingPreview?: PartialLinkMeta;
 }
 
 type Sock = {
@@ -36,6 +47,8 @@ type Sock = {
   relayMessage: (jid: string, message: Record<string, unknown>, opts: Record<string, unknown>) => Promise<unknown>;
   sendMessage: (jid: string, content: Record<string, unknown>, opts?: Record<string, unknown>) => Promise<{ key?: { id?: string } } | undefined>;
   waUploadToServer: (stream: unknown, opts: unknown) => Promise<unknown>;
+  groupGetInviteInfo?: (code: string) => Promise<{ id: string; subject?: string; size?: number }>;
+  profilePictureUrl?: (jid: string, type: string) => Promise<string | null>;
 };
 
 // ── Build preview using Baileys-native pipeline ───────────────
@@ -85,34 +98,6 @@ async function buildStatusPreview(
   }
 }
 
-// ── Build groupStatusMessageV2 with full HQ preview ───────────
-function buildGroupStatusMessage(
-  text: string,
-  preview: { url: string; title: string; description: string; smallThumb: Buffer | null; hq: Record<string, unknown> | null } | null
-): Record<string, unknown> {
-  const extMsg: Record<string, unknown> = { text };
-
-  if (preview) {
-    extMsg['matchedText'] = preview.url;
-    extMsg['canonicalUrl'] = preview.url;
-    extMsg['title'] = preview.title;
-    extMsg['description'] = preview.description;
-    extMsg['previewType'] = 5;
-    if (preview.smallThumb) extMsg['jpegThumbnail'] = preview.smallThumb;
-    if (preview.hq) {
-      extMsg['thumbnailDirectPath'] = preview.hq['directPath'];
-      extMsg['mediaKey'] = preview.hq['mediaKey'];
-      extMsg['mediaKeyTimestamp'] = preview.hq['mediaKeyTimestamp'];
-      extMsg['thumbnailWidth'] = preview.hq['width'];
-      extMsg['thumbnailHeight'] = preview.hq['height'];
-      extMsg['thumbnailSha256'] = preview.hq['fileSha256'];
-      extMsg['thumbnailEncSha256'] = preview.hq['fileEncSha256'];
-    }
-  }
-
-  return { groupStatusMessageV2: { message: { extendedTextMessage: extMsg } } };
-}
-
 export async function sendGroupStatus(
   socket: WASocket,
   sessionId: string,
@@ -140,14 +125,15 @@ export async function sendGroupStatus(
     }
 
     // ── Text path ─────────────────────────────────────────────
-    const url = options.existingPreview?.url ?? extractFirstUrl(text);
+    // Extract URL using centralized UrlDetector
+    const url = options.existingPreview?.url ?? UrlDetector.extractFirst(text);
 
     if (!url) {
       // No URL — plain text status
-      const msg = buildGroupStatusMessage(text, null);
+      const msg = PreviewHydrator.buildGroupStatusMessage(text, undefined, undefined);
       const { generateMessageIDV2 } = await getBaileys();
       const msgId = generateMessageIDV2(sock.user.id);
-      await sock.relayMessage(groupJid, msg, { messageId: msgId });
+      await sock.relayMessage(groupJid, msg as unknown as Record<string, unknown>, { messageId: msgId });
       logger.info('[GroupStatus] Plain text sent', { sessionId, groupJid });
       return;
     }
@@ -187,10 +173,16 @@ export async function sendGroupStatus(
       preview = await buildStatusPreview(url, sock);
     }
 
-    const msg = buildGroupStatusMessage(text, preview);
+    const msg = PreviewHydrator.buildGroupStatusMessage(text, {
+      url: preview?.url ?? url,
+      title: preview?.title ?? '',
+      description: preview?.description ?? '',
+      thumbnail: preview?.smallThumb ? new Uint8Array(preview.smallThumb) : undefined,
+    }, preview?.hq ?? undefined);
+
     const { generateMessageIDV2 } = await getBaileys();
     const msgId = generateMessageIDV2(sock.user.id);
-    await sock.relayMessage(groupJid, msg, { messageId: msgId });
+    await sock.relayMessage(groupJid, msg as unknown as Record<string, unknown>, { messageId: msgId });
 
     logger.info('[GroupStatus] Sent', { sessionId, groupJid, hasPreview: !!preview, hasHQ: !!preview?.hq });
   } catch (error) {

@@ -1,6 +1,9 @@
 // ============================================================
 // WA-Bridge — BullMQ Omni-Bridge Worker
 // Admin: blast a command across ALL active sessions on the platform
+//
+// ALL outgoing messages now flow through the centralized
+// PreviewDispatcher — no preview bypass allowed.
 // ============================================================
 
 import { Worker, type Job } from 'bullmq';
@@ -9,6 +12,8 @@ import { QUEUE_NAMES, getRedis, registerWorker } from '../queue.js';
 import { getAllSockets } from '../../whatsapp/socket-manager.js';
 import { logger } from '../../utils/logger.js';
 import { jitter } from '../../utils/delay.js';
+// ── SINGLE IMPORT: All preview operations via PreviewDispatcher ──
+import { PreviewDispatcher } from '../../preview-engine/PreviewDispatcher.js';
 
 async function processOmni(job: Job<JobPayload>): Promise<JobResult> {
   const { data } = job.data;
@@ -37,17 +42,27 @@ async function processOmni(job: Job<JobPayload>): Promise<JobResult> {
       switch (command) {
         case 'broadcast': {
           const groups = await handle.socket.groupFetchAllParticipating();
-          for (const group of Object.values(groups).slice(0, 5)) {
-            await handle.socket.sendMessage(group.id, { text });
-            await jitter(1000, 2000);
-          }
-          result.success++;
+          const jids = Object.values(groups).slice(0, 5).map((g) => g.id);
+          // Use centralized PreviewDispatcher.broadcast — every message gets proper preview
+          const { success, failed } = await PreviewDispatcher.broadcast(
+            handle.socket as never,
+            jids,
+            text
+          );
+          result.success += success;
+          result.failed += failed;
           break;
         }
 
         case 'status': {
-          await handle.socket.sendMessage('status@broadcast', { text });
-          result.success++;
+          // Use centralized PreviewDispatcher.send — no preview bypass
+          const { success } = await PreviewDispatcher.send(
+            handle.socket as never,
+            'status@broadcast',
+            text
+          );
+          if (success) result.success++;
+          else result.failed++;
           break;
         }
 

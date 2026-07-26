@@ -15,7 +15,7 @@ import { cmdAllChat, cmdAllStatus, stopOutreach } from '../whatsapp/commands/mas
 import { startAutoFilter, stopAutoFilter, validateLinksHttp } from '../services/tri-bucket.js';
 import { importLinksToMainBucket } from '../services/importer.js';
 import { statusDesignEngine, type StatusTheme } from '../services/StatusDesignEngine.js';
-import { fetchLinkMeta } from '../whatsapp/preview-manager.js';
+import { PreviewManager } from '../preview-engine/index.js';
 import type { SessionMeta } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 
@@ -233,7 +233,7 @@ export function createWebApp(): express.Express {
     const url = String(req.body.url ?? '');
     if (!url.startsWith('http')) { res.status(400).json({ error: 'Invalid URL' }); return; }
     try {
-      const meta = await fetchLinkMeta(url);
+      const meta = await PreviewManager.fetchLinkMeta(url);
       res.json({
         url: meta.url,
         title: meta.title ?? null,

@@ -1,23 +1,18 @@
 // ============================================================
-// WA-Bridge — Chat Preview Pipeline (SEPARATE from status)
-// Handles all chat send paths: tag, mtag, allchat, tochat, tochatx
+// WA-Bridge — Chat Preview Pipeline
+// Compatibility shim — delegates to centralized PreviewManager.
 //
-// KEY INSIGHT: Normal sendMessage() calls getUrlInfo() automatically
-// when generateHighQualityLinkPreview:true is set in socket config.
-// So for chat paths with NO existingPreview — just send { text } and
-// Baileys handles everything including HQ thumbnail upload to WA servers.
-//
-// Only when existingPreview is set (passthrough from quoted message)
-// do we need to intervene — and only for chat.whatsapp.com links
-// where the quoted preview has a small 192px thumbnail.
+// All chat send paths (tag, mtag, allchat, tochat, tochatx)
+// now flow through the centralized PreviewManager.
 // ============================================================
 
 import type { AnyMessageContent } from './baileys-types.js';
-import { resolveGroupPreview, hydratedMessage, extractFirstUrl, fetchLinkMeta, type LinkMeta } from './preview-generator.js';
+import { PreviewManager } from '../preview-engine/index.js';
+import type { PartialLinkMeta } from '../preview-engine/types.js';
 
 type SocketLike = {
   groupGetInviteInfo: (code: string) => Promise<{ id: string; subject?: string; size?: number }>;
-  profilePictureUrl: (jid: string, type: string) => Promise<string>;
+  profilePictureUrl: (jid: string, type: string) => Promise<string | null>;
 };
 
 /**
@@ -34,22 +29,9 @@ type SocketLike = {
 export async function buildChatPreview(
   text: string,
   socket: SocketLike,
-  existingPreview?: Partial<LinkMeta>
+  existingPreview?: PartialLinkMeta
 ): Promise<AnyMessageContent> {
-  // No existing preview — let Baileys handle getUrlInfo + HQ upload
-  if (!existingPreview) return { text };
-
-  const url = existingPreview.url ?? extractFirstUrl(text);
-  if (!url) return { text };
-
-  // WA group link with existing (small) preview — fetch fresh large group pic
-  if (url.includes('chat.whatsapp.com')) {
-    const groupPreview = await resolveGroupPreview(socket, url).catch(() => undefined);
-    return hydratedMessage(text, groupPreview ?? existingPreview);
-  }
-
-  // Other URL with existing preview — passthrough
-  return hydratedMessage(text, existingPreview);
+  return PreviewManager.buildChatPreview(text, socket as never, existingPreview);
 }
 
 /**
@@ -59,13 +41,6 @@ export async function buildChatPreview(
 export async function resolvePreviewOnce(
   url: string,
   socket: SocketLike
-): Promise<Partial<LinkMeta> | undefined> {
-  if (!url) return undefined;
-  if (url.includes('chat.whatsapp.com')) {
-    return resolveGroupPreview(socket, url).catch(() => undefined);
-  }
-  // Non-WA URLs: fetch og:meta + normalize thumbnail once
-  // So hydratedMessage reuses it 200 times without re-fetching or re-normalizing
-  const meta = await fetchLinkMeta(url).catch(() => null);
-  return meta ?? undefined;
+): Promise<PartialLinkMeta | undefined> {
+  return PreviewManager.resolvePreviewOnce(url, socket as never);
 }

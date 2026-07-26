@@ -1,0 +1,275 @@
+// ============================================================
+// Preview Engine — Preview Dispatcher
+// Universal send pipeline. Every outgoing message passes through
+// this single entry point. Handles chat sends, group status
+// sends, broadcasts, and relay messages.
+// ============================================================
+
+import type { AnyMessageContent } from '../whatsapp/baileys-types.js';
+import type { FailureClass, PartialLinkMeta, PreviewOptions, PreviewPayload, PreviewStage } from './types.js';
+import { UrlDetector } from './UrlDetector.js';
+import { PreviewResolver } from './PreviewResolver.js';
+import { PayloadBuilder } from './PayloadBuilder.js';
+import { PreviewValidator } from './PreviewValidator.js';
+import { PreviewLogger } from './PreviewLogger.js';
+import { previewCache } from './PreviewCache.js';
+import pLimit from 'p-limit';
+
+// ── Concurrency Control ─────────────────────────────────────
+// Limits concurrent preview resolutions to prevent memory pressure
+// during large broadcasts (1000+ groups).
+const CONCURRENT_RESOLVE_LIMIT = 10;
+const resolveLimit = pLimit(CONCURRENT_RESOLVE_LIMIT);
+
+// ── Socket Interface ────────────────────────────────────────
+
+interface DispatcherSocket {
+  sendMessage(
+    jid: string | string[],
+    content: AnyMessageContent,
+    options?: Record<string, unknown>
+  ): Promise<{ key?: unknown } | unknown>;
+  relayMessage(
+    jid: string,
+    message: Record<string, unknown>,
+    opts: Record<string, unknown>
+  ): Promise<unknown>;
+  groupGetInviteInfo(code: string): Promise<{ id: string; subject?: string; size?: number }>;
+  profilePictureUrl(jid: string, type: string): Promise<string | null>;
+  user?: { id: string };
+}
+
+// ── Dispatcher Options ──────────────────────────────────────
+
+export interface DispatchOptions {
+  /** Suppress all preview generation */
+  suppressPreview?: boolean;
+  /** Pre-resolved preview from quoted message */
+  existingPreview?: PartialLinkMeta;
+  /** Force a specific preview stage */
+  forceStage?: PreviewStage;
+  /** External ad reply card (for menu responses) */
+  externalAdReply?: Record<string, unknown>;
+  /** Additional content fields (mentions, etc.) */
+  extra?: Record<string, unknown>;
+  /** Whether this is a group status post */
+  isGroupStatus?: boolean;
+  /** Preview type for group status */
+  previewType?: number;
+  /** Quoted message reference */
+  quoted?: unknown;
+}
+
+// ── Preview Dispatcher ──────────────────────────────────────
+
+export class PreviewDispatcher {
+  private static generateMessageIDV2: ((userId: string) => string) | null = null;
+
+  /**
+   * Lazy-load Baileys generateMessageIDV2.
+   */
+  private static async getGenerateMessageIDV2(): Promise<(userId: string) => string> {
+    if (PreviewDispatcher.generateMessageIDV2) return PreviewDispatcher.generateMessageIDV2;
+    const gen = await import('@crysnovax/baileys/lib/Utils/generics.js' as never) as Record<string, unknown>;
+    PreviewDispatcher.generateMessageIDV2 = gen['generateMessageIDV2'] as (userId: string) => string;
+    return PreviewDispatcher.generateMessageIDV2!;
+  }
+
+  // ── Universal Send ────────────────────────────────────────
+
+  /**
+   * The single entry point for ALL outgoing messages that may contain a URL.
+   *
+   * Flow:
+   * 1. Detect URL in text
+   * 2. Resolve preview (cache → passthrough → fresh fetch)
+   * 3. Build immutable payload
+   * 4. Send via Baileys
+   * 5. Handle ACK / failure
+   *
+   * Self-healing: if any stage fails, falls back to plain text.
+   */
+  static async send(
+    socket: DispatcherSocket,
+    jid: string,
+    text: string,
+    options: DispatchOptions = {}
+  ): Promise<{ success: boolean; stage?: PreviewStage }> {
+    const traceId = PreviewLogger.createTraceId();
+    const start = Date.now();
+
+    // Step 1: Detect URL
+    const url = options.existingPreview?.url ?? UrlDetector.extractFirst(text);
+
+    if (!url || options.suppressPreview) {
+      // No URL or suppressed — send plain text
+      try {
+        const content: AnyMessageContent = Object.freeze({
+          text,
+          ...(options.extra ?? {}),
+        });
+        const fullContent = options.externalAdReply
+          ? { ...content, contextInfo: { externalAdReply: options.externalAdReply } }
+          : content;
+        await socket.sendMessage(jid, fullContent as AnyMessageContent, options.quoted ? { quoted: options.quoted } : undefined);
+        PreviewLogger.sent(jid, url ?? 'no-url');
+        return { success: true };
+      } catch (err) {
+        PreviewLogger.sendFailed(jid, url ?? 'no-url', String(err));
+        return { success: false };
+      }
+    }
+
+    // Step 2: Check if WhatsApp group link
+    const isGroupLink = PreviewValidator.isGroupInviteLink(url);
+
+    // Step 3: Resolve preview
+    let payload: PreviewPayload;
+    try {
+      payload = await resolveLimit(async () => {
+        const socketLike = isGroupLink
+          ? socket
+          : undefined;
+
+        let resolvedPreview: PartialLinkMeta | undefined;
+
+        // For group links: resolve via socket if no existingPreview
+        if (isGroupLink && !options.existingPreview?.thumbnail) {
+          resolvedPreview = await PreviewResolver.resolveGroup(url, socket);
+        }
+
+        // Resolve full preview
+        const result = await PreviewResolver.resolve(
+          url,
+          {
+            suppressPreview: options.suppressPreview,
+            existingPreview: options.existingPreview ?? resolvedPreview,
+            forceStage: options.forceStage,
+            socket: socketLike,
+          }
+        );
+
+        // Build payload
+        return PayloadBuilder.build(text, {
+          suppressPreview: options.suppressPreview,
+          meta: result.meta,
+          hqThumbnail: result.meta.hqThumbnail,
+          extra: options.extra,
+          isGroupStatus: options.isGroupStatus,
+          previewType: options.previewType,
+        });
+      });
+    } catch (err) {
+      // Self-healing: fallback to plain text
+      PreviewLogger.fallbackActivated('send', 'resolve', 'plain-text');
+      PreviewLogger.sendFailed(jid, url, String(err));
+      try {
+        await socket.sendMessage(jid, Object.freeze({ text }) as AnyMessageContent);
+        return { success: true, stage: 'Stage5_UrlOnly' };
+      } catch {
+        return { success: false };
+      }
+    }
+
+    // Step 4: Send
+    try {
+      PreviewLogger.sending(jid, url, payload.previewStage);
+
+      if (options.isGroupStatus) {
+        // Group status uses relayMessage
+        const genId = await PreviewDispatcher.getGenerateMessageIDV2();
+        const msgId = genId(socket.user?.id ?? '');
+        const msg = payload.content as unknown as Record<string, unknown>;
+        await socket.relayMessage(jid, msg, { messageId: msgId });
+      } else {
+        // Normal chat send
+        const finalContent = options.externalAdReply
+          ? PayloadBuilder.withExternalAdReply(payload, options.externalAdReply).content
+          : payload.content;
+        await socket.sendMessage(jid, finalContent, options.quoted ? { quoted: options.quoted } : undefined);
+      }
+
+      PreviewLogger.sent(jid, url);
+      return { success: true, stage: payload.previewStage };
+    } catch (err) {
+      PreviewLogger.sendFailed(jid, url, String(err));
+      // Self-healing: try without preview
+      try {
+        await socket.sendMessage(jid, Object.freeze({ text }) as AnyMessageContent);
+        return { success: true, stage: 'Stage5_UrlOnly' };
+      } catch {
+        return { success: false };
+      }
+    }
+  }
+
+  // ── Broadcast Send ────────────────────────────────────────
+
+  /**
+   * Send the same message to multiple JIDs with proper payload cloning.
+   * Each recipient gets a fresh immutable copy.
+   */
+  static async broadcast(
+    socket: DispatcherSocket,
+    jids: string[],
+    text: string,
+    options: DispatchOptions = {}
+  ): Promise<{ success: number; failed: number }> {
+    // Resolve preview ONCE for the entire broadcast
+    const url = options.existingPreview?.url ?? UrlDetector.extractFirst(text);
+    let resolvedMeta: PartialLinkMeta | undefined;
+
+    if (url && !options.suppressPreview) {
+      try {
+        const result = await PreviewResolver.resolve(url, {
+          existingPreview: options.existingPreview,
+        });
+        resolvedMeta = result.meta;
+      } catch {
+        // Fallback: no preview for broadcast
+        resolvedMeta = undefined;
+      }
+    }
+
+    const payload = PayloadBuilder.build(text, {
+      suppressPreview: options.suppressPreview,
+      meta: resolvedMeta,
+      isGroupStatus: options.isGroupStatus,
+      previewType: options.previewType,
+    });
+
+    let success = 0;
+    let failed = 0;
+
+    for (const jid of jids) {
+      try {
+        // Clone payload for each recipient (immutable)
+        const recipientPayload = PayloadBuilder.cloneForBroadcast(payload);
+
+        if (options.isGroupStatus) {
+          const genId = await PreviewDispatcher.getGenerateMessageIDV2();
+          const msgId = genId(socket.user?.id ?? '');
+          const msg = recipientPayload.content as unknown as Record<string, unknown>;
+          await socket.relayMessage(jid, msg, { messageId: msgId });
+        } else {
+          await socket.sendMessage(jid, recipientPayload.content);
+        }
+        success++;
+      } catch {
+        failed++;
+      }
+    }
+
+    return { success, failed };
+  }
+
+  // ── Cache Management ──────────────────────────────────────
+
+  static invalidateCache(url?: string): void {
+    previewCache.invalidate(url);
+  }
+
+  static getCacheStats() {
+    return previewCache.getStats();
+  }
+}

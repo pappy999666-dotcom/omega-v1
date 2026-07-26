@@ -19,7 +19,7 @@ catalogs:
       specifier: ^5.90.21
       version: 5.101.2
     '@types/node':
-      specifier: ^25.3.3
+      specifier: ^25.9.5
       version: 25.9.5
     '@types/react':
       specifier: ^19.2.0
@@ -456,9 +456,6 @@ importers:
       node-fetch:
         specifier: ^3.3.2
         version: 3.3.2
-      p-limit:
-        specifier: ^6.2.0
-        version: 6.2.0
       p-queue:
         specifier: ^8.1.0
         version: 8.1.1
@@ -517,6 +514,9 @@ importers:
       esbuild:
         specifier: 0.27.3
         version: 0.27.3
+      p-limit:
+        specifier: ^6.2.0
+        version: 6.2.0
       tsx:
         specifier: 'catalog:'
         version: 4.23.1

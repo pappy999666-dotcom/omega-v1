@@ -1,11 +1,15 @@
 // ============================================================
 // WA-Bridge — Tagging Engine
 // .tag (hidetag) / .mtag (visible @mention)
+//
+// ALL preview operations now flow through the centralized
+// PreviewManager — the single source of truth.
 // ============================================================
 
 import type { BridgeWASocket as WASocket, AnyMessageContent } from '../baileys-types.js';
-import type { LinkMeta } from '../preview-generator.js';
-import { buildChatPreview } from '../chat-preview.js';
+// ── SINGLE IMPORT: All preview operations via PreviewManager ──
+import { PreviewManager } from '../../preview-engine/index.js';
+import type { PartialLinkMeta } from '../../preview-engine/types.js';
 import { logger } from '../../utils/logger.js';
 import { isFrozen } from '../socket-manager.js';
 import { bold } from '../../utils/ascii-art.js';
@@ -42,7 +46,7 @@ export async function cmdTag(
   opts: {
     mediaBuffer?: Buffer;
     mediaType?: string;
-    existingPreview?: Partial<LinkMeta>;
+    existingPreview?: PartialLinkMeta;
   } = {}
 ): Promise<{ success: boolean; pinged: number; error?: string }> {
   if (isFrozen(sessionId)) {
@@ -67,7 +71,11 @@ export async function cmdTag(
         content = { image: opts.mediaBuffer, caption: text, mentions: participants };
       }
     } else {
-      content = { ...(await buildChatPreview(text, socket as never, opts.existingPreview)), mentions: participants };
+      // Use centralized PreviewManager.buildChatPreview for preview hydration
+      content = {
+        ...(await PreviewManager.buildChatPreview(text, socket as never, opts.existingPreview)),
+        mentions: participants,
+      };
     }
 
     await Promise.all([socket.sendMessage(groupJid, content)]);
@@ -93,7 +101,7 @@ export async function cmdMTag(
   text: string,
   opts: {
     chunkSize?: number; // mentions per message (default: 100)
-    existingPreview?: Partial<LinkMeta>;
+    existingPreview?: PartialLinkMeta;
   } = {}
 ): Promise<{ success: boolean; pinged: number; messages: number; error?: string }> {
   if (isFrozen(sessionId)) {
@@ -122,8 +130,9 @@ export async function cmdMTag(
       const mentionText = chunk.map((jid) => `@${jid.split('@')[0]}`).join(' ');
       const fullText = `${text}\n\n${mentionText}`;
 
+      // Use centralized PreviewManager.buildChatPreview for preview hydration
       await socket.sendMessage(groupJid, {
-        ...(await buildChatPreview(fullText, socket as never, opts.existingPreview)),
+        ...(await PreviewManager.buildChatPreview(fullText, socket as never, opts.existingPreview)),
         mentions: chunk,
       });
 

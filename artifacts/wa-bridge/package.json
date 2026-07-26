@@ -29,7 +29,6 @@
     "multer": "^2.2.0",
     "node-cache": "^5.1.2",
     "node-fetch": "^3.3.2",
-    "p-limit": "^6.2.0",
     "p-queue": "^8.1.0",
     "p-retry": "^6.2.1",
     "pino": "^9.7.0",
@@ -51,6 +50,7 @@
     "@types/node": "catalog:",
     "@types/qrcode": "^1.5.5",
     "esbuild": "0.27.3",
+    "p-limit": "^6.2.0",
     "tsx": "catalog:",
     "typescript": "^5.9.3"
   }

@@ -1,14 +1,18 @@
 // ============================================================
 // WA-Bridge — Mass Outreach Commands
 // .allstatus / .allchat — with exponential backoff & jitter
+//
+// ALL preview operations now flow through the centralized
+// PreviewManager — the single source of truth.
 // ============================================================
 
 import type { BridgeWASocket as WASocket, AnyMessageContent } from '../baileys-types.js';
 import type { JobResult } from '../../types/index.js';
-import type { LinkMeta } from '../preview-generator.js';
+// ── SINGLE IMPORT: All preview operations via PreviewManager ──
+import { PreviewManager } from '../../preview-engine/index.js';
+import type { PartialLinkMeta } from '../../preview-engine/types.js';
 import { allstatusDelay, exponentialBackoff } from '../../utils/delay.js';
 import { logger } from '../../utils/logger.js';
-import { buildChatPreview, resolvePreviewOnce } from '../chat-preview.js';
 import { isFrozen } from '../socket-manager.js';
 import {
   isCircuitOpen,
@@ -64,7 +68,7 @@ export async function cmdAllStatus(
     mediaType?: string;
     caption?: string;
     onProgress?: (msg: string) => Promise<void>;
-    existingPreview?: Partial<LinkMeta>;
+    existingPreview?: PartialLinkMeta;
   } = {}
 ): Promise<JobResult> {
   const start = Date.now();
@@ -96,9 +100,10 @@ export async function cmdAllStatus(
   const rawUrl = text.match(/https?:\/\/[^\s]+/u)?.[0];
 
   // Resolve preview ONCE before the loop — avoids per-group network fetches for 200+ GCs
+  // Uses PreviewManager.resolvePreviewOnce — the centralized preview resolver
   let resolvedPreview = opts.existingPreview;
   if (!resolvedPreview && rawUrl) {
-    resolvedPreview = await resolvePreviewOnce(rawUrl, socket as never);
+    resolvedPreview = await PreviewManager.resolvePreviewOnce(rawUrl, socket as never);
   }
 
   await opts.onProgress?.(`📡 Starting allstatus for ${groups.length} groups…`);
@@ -270,10 +275,10 @@ export async function cmdAllChat(
       const participants = await getGroupParticipants(socket, group.id);
       const mentions = participants.map((p) => p.id);
 
-      // Hydrate link previews for text messages (Stage 2: generate if no preview exists)
+      // Hydrate link previews for text messages — via centralized PreviewManager
       const baseContent: AnyMessageContent = opts.mediaBuffer
         ? { image: opts.mediaBuffer, caption: text }
-        : await buildChatPreview(text, socket as never).catch(() => ({ text } as AnyMessageContent));
+        : await PreviewManager.buildChatPreview(text, socket as never).catch(() => ({ text } as AnyMessageContent));
 
       const content: AnyMessageContent = { ...baseContent, mentions };
 

@@ -1,6 +1,8 @@
 // ============================================================
 // WA-Bridge — WhatsApp Event Handler
-// Processes incoming messages, dispatches commands
+// Processes incoming messages, dispatches commands.
+// ALL outgoing responses pass through the centralized
+// PreviewManager — the single source of truth for previews.
 // ============================================================
 
 import type { BridgeWASocket as WASocket, BaileysEventMap, IMessage, WebMessageInfo } from './baileys-types.js';
@@ -27,7 +29,8 @@ import {
   sudoListCard,
   groupsCard,
 } from '../utils/ascii-art.js';
-import { hydratedMessage, extractIncomingPreview, extractFirstUrl } from './preview-generator.js';
+// ── SINGLE IMPORT: All preview operations go through PreviewManager ──
+import { PreviewManager } from '../preview-engine/index.js';
 import { statusDesignEngine } from '../services/StatusDesignEngine.js';
 import type { SessionMeta } from '../types/index.js';
 
@@ -35,7 +38,7 @@ import type { SessionMeta } from '../types/index.js';
 const sessionOwnerMap = new Map<string, string>();
 
 // Persistent cache for menu URL externalAdReply — fetched once, reused forever
-const menuAdReplyCache = new Map<string, { title: string; body: string; thumbnail?: Buffer; thumbnailUrl?: string }>();
+const menuAdReplyCache = new Map<string, { title: string; body: string; thumbnailUrl?: string }>();
 
 
 
@@ -187,7 +190,8 @@ async function processMessage(
     ?? msg.message?.videoMessage?.contextInfo
   )?.quotedMessage;
   const quotedText = extractMessageText(quotedMessage);
-  const quotedPreview = extractIncomingPreview(quotedMessage);
+  // Stage 1: Extract existing preview from quoted message via PreviewManager
+  const quotedPreview = PreviewManager.extractIncomingPreview(quotedMessage);
 
   // Extract sticker for macro matching
   const stickerMsg = msg.message?.stickerMessage;
@@ -236,13 +240,15 @@ async function processMessage(
   };
 
   // ── Enriched WhatsApp reply ───────────────────────────────
+  // ALL outgoing replies pass through PreviewManager.hydratedMessage
+  // or PreviewManager.buildChatPreview — the single source of truth.
   const baseWhatsAppReply = async (replyText: string): Promise<void> => {
     const globalMenuUrl = getGlobalMenuUrl();
     const mentions = await getGroupParticipants();
 
-    // Build reply content — Baileys normal path calls getUrlInfo automatically
-    // if replyText contains a URL, so just pass text as-is
-    const content = await hydratedMessage(replyText).catch(() => ({ text: replyText }));
+    // Build reply content via PreviewManager — Baileys normal path calls getUrlInfo automatically
+    // if replyText contains a URL, so just pass text as-is through the centralized pipeline
+    const content = await PreviewManager.hydratedMessage(replyText).catch(() => ({ text: replyText }));
     const enriched: Record<string, unknown> = { ...content as Record<string, unknown> };
     if (mentions.length > 0) enriched['mentions'] = mentions;
 
@@ -282,15 +288,12 @@ async function processMessage(
           }
           const cached = menuAdReplyCache.get(cleanUrl)!;
           enriched['contextInfo'] = {
-            externalAdReply: {
+            externalAdReply: PreviewManager.buildExternalAdReply({
               title: cached.title,
               body: cached.body,
-              mediaType: 1,
-              previewType: 0,
-              thumbnailUrl: (cached as Record<string, unknown>)['thumbnailUrl'] || '',
-              renderLargerThumbnail: true,
+              thumbnailUrl: cached.thumbnailUrl,
               sourceUrl: cleanUrl,
-            }
+            }),
           };
         } catch { /* non-critical */ }
       }

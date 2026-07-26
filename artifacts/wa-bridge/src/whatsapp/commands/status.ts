@@ -1,11 +1,15 @@
 // ============================================================
 // WA-Bridge — Status & Target Broadcast Commands
 // .gstatus / .tochat / .tochatx / .sstatus
+//
+// ALL preview operations now flow through the centralized
+// PreviewManager — the single source of truth.
 // ============================================================
 
 import type { BridgeWASocket as WASocket, AnyMessageContent } from '../baileys-types.js';
-import { hydratedMessage, hydratedMessageWithSocket, type LinkMeta } from '../preview-generator.js';
-import { buildChatPreview } from '../chat-preview.js';
+// ── SINGLE IMPORT: All preview operations via PreviewManager ──
+import { PreviewManager } from '../../preview-engine/index.js';
+import type { PartialLinkMeta } from '../../preview-engine/types.js';
 import { sleep, jitter } from '../../utils/delay.js';
 import { logger } from '../../utils/logger.js';
 import { asciiBox, bold, italic } from '../../utils/ascii-art.js';
@@ -57,7 +61,10 @@ export async function cmdGStatus(
   const designedText = await generateStatusCard(text, opts.theme);
   const content: AnyMessageContent = opts.mediaBuffer
     ? buildMediaContent(opts.mediaBuffer, opts.mediaType ?? 'image', opts.caption ?? designedText)
-    : await hydratedMessageWithSocket(designedText, socket as never);
+    : await PreviewManager.hydratedMessageWithSocket(
+        designedText,
+        socket as never
+      );
 
   await socket.sendMessage('status@broadcast', content, {
     statusJidList: undefined, // Post to all contacts
@@ -86,7 +93,7 @@ export async function cmdToChat(
     const jid = await resolveTargetJid(socket, target);
     const content: AnyMessageContent = opts.mediaBuffer
       ? buildMediaContent(opts.mediaBuffer, opts.mediaType ?? 'image', text)
-      : await buildChatPreview(text, socket as never);
+      : await PreviewManager.buildChatPreview(text, socket as never);
 
     await socket.sendMessage(jid, content);
     logger.info(`[tochat] ${sessionId} → ${jid}`);
@@ -117,7 +124,7 @@ export async function cmdToChatX(
     for (let i = 0; i < count; i++) {
       if (isFrozen(sessionId)) break;
       try {
-        const content = await buildChatPreview(text, socket as never);
+        const content = await PreviewManager.buildChatPreview(text, socket as never);
         await socket.sendMessage(jid, content);
         sent++;
       } catch {
@@ -155,7 +162,10 @@ export async function cmdSStatus(
     while (activeSpamLoops.has(sessionId) && !isFrozen(sessionId)) {
       try {
         const designedText = await generateStatusCard(text, opts.theme);
-        const content = await hydratedMessageWithSocket(designedText, socket as never);
+        const content = await PreviewManager.hydratedMessageWithSocket(
+          designedText,
+          socket as never
+        );
         await socket.sendMessage('status@broadcast', content);
       } catch (err) {
         logger.warn(`[sstatus] Post error: ${err}`);
@@ -221,7 +231,7 @@ export async function cmdGroupStatus(
   sessionId: string,
   groupJid: string,
   text: string,
-  opts: { mediaBuffer?: Buffer; mediaType?: string; caption?: string; theme?: string; skipDesign?: boolean; existingPreview?: Partial<LinkMeta> } = {}
+  opts: { mediaBuffer?: Buffer; mediaType?: string; caption?: string; theme?: string; skipDesign?: boolean; existingPreview?: PartialLinkMeta } = {}
 ): Promise<boolean> {
   if (isFrozen(sessionId)) return false;
 
