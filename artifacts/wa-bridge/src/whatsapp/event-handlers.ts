@@ -247,14 +247,15 @@ async function processMessage(
       if (!isJid) {
         try {
           const meta = await fetchLinkMeta(globalMenuUrl).catch(() => null);
+          // Strip any query params Baileys might append — keep URL clean
+          const cleanUrl = globalMenuUrl.split('?')[0]!;
           const adReply: Record<string, unknown> = {
-            title: meta?.title ?? globalMenuUrl,
+            title: meta?.title ?? 'Join Channel',
             body: meta?.description ?? '',
-            url: globalMenuUrl,
+            url: cleanUrl,
             mediaType: 1,
             largeThumbnail: true,
           };
-          // Only add thumbnail key if we have data — Baileys throws if key exists but not a Buffer
           if (meta?.thumbnail) adReply['thumbnail'] = Buffer.from(meta.thumbnail);
           enriched['externalAdReply'] = adReply;
         } catch { /* non-critical */ }

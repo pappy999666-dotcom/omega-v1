@@ -447,7 +447,9 @@ export function getGlobalMenuUrl(): string | null {
 
 /** Set the platform-wide global menu URL. */
 export function setGlobalMenuUrl(url: string): void {
-  savePlatformConfig({ ...loadPlatformConfig(), globalMenuUrl: url });
+  // Strip query params so Baileys never appends ?update= to the stored URL
+  const clean = url.split('?')[0]!.trim();
+  savePlatformConfig({ ...loadPlatformConfig(), globalMenuUrl: clean });
   logger.info('[Platform] Global menu URL updated');
 }
 
