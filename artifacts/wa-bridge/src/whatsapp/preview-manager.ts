@@ -283,8 +283,9 @@ export async function fetchLinkMeta(url: string): Promise<LinkMeta> {
 }
 
 // ── hydratedMessage ───────────────────────────────────────
-// Returns a fresh immutable AnyMessageContent every call.
-// Safe for broadcasts — clone with cloneForBroadcast() per send.
+// For normal sendMessage calls, Baileys auto-fetches preview via getUrlInfo.
+// We just return { text } — Baileys does the rest.
+// richPreview:true is used separately for groupStatus and menu URL paths.
 
 export async function hydratedMessage(
   text: string,
@@ -293,34 +294,8 @@ export async function hydratedMessage(
   if (options.suppressPreview) {
     return Object.freeze({ text, linkPreview: null }) as AnyMessageContent;
   }
-
-  const url = options.existingMeta?.url ?? extractFirstUrl(text);
-  if (!url) return Object.freeze({ text }) as AnyMessageContent;
-
-  logger.debug('[Preview] Hydrating', { url });
-
-  let meta: LinkMeta;
-  try {
-    meta = await fetchLinkMeta(url);
-  } catch (err) {
-    logger.warn('[Preview] fetchLinkMeta threw', { url, err: String(err), failureClass: 'HydrationFailure' });
-    return Object.freeze({ text }) as AnyMessageContent;
-  }
-
-  // Always clone thumbnail — never share Uint8Array references across sends
-  const thumb = meta.thumbnail ? new Uint8Array(meta.thumbnail) : undefined;
-
-  const preview = Object.freeze({
-    'matched-text':  meta.url ?? url,
-    'canonical-url': meta.canonicalUrl ?? meta.url ?? url,
-    title:           meta.title ?? '',
-    description:     meta.description ?? '',
-    ...(thumb ? { jpegThumbnail: thumb } : {}),
-  });
-
-  logger.debug('[Preview] Hydration complete', { url, hasTitle: Boolean(meta.title), hasThumbnail: Boolean(thumb) });
-
-  return Object.freeze({ text, linkPreview: preview }) as AnyMessageContent;
+  // Just return the text — Baileys' getUrlInfo in sendMessage handles preview automatically
+  return Object.freeze({ text }) as AnyMessageContent;
 }
 
 // ── cloneForBroadcast ─────────────────────────────────────

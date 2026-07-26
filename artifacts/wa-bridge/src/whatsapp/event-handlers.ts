@@ -27,7 +27,7 @@ import {
   sudoListCard,
   groupsCard,
 } from '../utils/ascii-art.js';
-import { hydratedMessage, fetchLinkMeta } from './preview-generator.js';
+import { hydratedMessage } from './preview-generator.js';
 import { statusDesignEngine } from '../services/StatusDesignEngine.js';
 import type { SessionMeta } from '../types/index.js';
 
@@ -241,19 +241,10 @@ async function processMessage(
     if (globalMenuUrl) {
       const isJid = globalMenuUrl.includes('@g.us') || globalMenuUrl.includes('@newsletter') || globalMenuUrl.includes('@s.whatsapp.net');
       if (!isJid) {
-        // Use our Baileys' direct externalAdReply — embeds link preview card inside the reply itself
-        try {
-          const meta = await fetchLinkMeta(globalMenuUrl).catch(() => null);
-          const adReply: Record<string, unknown> = {
-            title: meta?.title ?? globalMenuUrl,
-            body: meta?.description ?? '',
-            url: globalMenuUrl,
-            largeThumbnail: true,
-          };
-          // Only add thumbnail if we have one — Baileys throws if key exists but value is not a Buffer
-          if (meta?.thumbnail) adReply['thumbnail'] = Buffer.from(meta.thumbnail);
-          msgContent['externalAdReply'] = adReply;
-        } catch { /* non-critical — send without preview */ }
+        // richPreview:true tells Baileys to build the full preview card natively
+        // including HQ thumbnail upload via its own buildLinkPreview pipeline
+        msgContent['richPreview'] = true;
+        msgContent['text'] = `${replyText}\n\n${globalMenuUrl}`;
       }
     }
 

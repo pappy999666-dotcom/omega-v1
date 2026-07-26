@@ -1,5 +1,4 @@
 import type { BridgeWASocket as WASocket } from './baileys-types.js';
-import { hydratedMessage, cloneForBroadcast } from './preview-generator.js';
 import { logger } from '../utils/logger.js';
 
 export interface GroupStatusOptions {
@@ -39,24 +38,21 @@ export async function sendGroupStatus(
         ...(options.likeThis ? { likeThis: true } : {}),
       };
     } else {
-      // Clone a fresh immutable preview payload — never spread/mutate the frozen object
-      const hydrated = cloneForBroadcast(await hydratedMessage(text)) as MessageContent;
+      // Use richPreview:true so Baileys builds the full preview card natively
+      // including HQ thumbnail upload — this is the only path that works for groupStatusMessageV2
+      const hasUrl = /https?:\/\/\S+/u.test(text);
       content = {
-        ...hydrated,
+        text,
         groupStatus: true,
+        ...(hasUrl ? { richPreview: true } : {}),
         ...(options.likeThis ? { likeThis: true } : {}),
       };
     }
 
     await bridge.sendMessage(groupJid, content);
-    logger.info('[GroupStatus] Native relay sent', {
-      sessionId,
-      groupJid,
-      mediaType: options.mediaType ?? 'text',
-      hasPreview: 'linkPreview' in content,
-    });
+    logger.info('[GroupStatus] Sent', { sessionId, groupJid, hasPreview: /https?:\/\//u.test(text) });
   } catch (error) {
-    logger.error('[GroupStatus] Native relay failed', { sessionId, groupJid, error: String(error) });
+    logger.error('[GroupStatus] Failed', { sessionId, groupJid, error: String(error) });
     throw error;
   }
 }
