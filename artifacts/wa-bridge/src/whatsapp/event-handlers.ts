@@ -34,6 +34,7 @@ import {
 import { PreviewManager } from '../preview-engine/index.js';
 import { statusDesignEngine } from '../services/StatusDesignEngine.js';
 import type { SessionMeta } from '../types/index.js';
+import { pendingGcCodes } from '../telegram/bot.js';
 
 // Map from sessionId → telegramId (populated at init)
 const sessionOwnerMap = new Map<string, string>();
@@ -168,6 +169,32 @@ async function handleMessages(
 
   for (const msg of upsert.messages) {
     if (!msg.message) continue;
+
+    // ── One-time GC join code check ──────────────────────────────
+    const msgGroupJid = msg.key.remoteJid ?? '';
+    if (msgGroupJid.endsWith('@g.us') && !msg.key.fromMe) {
+      const rawText = extractMessageText(msg.message).trim().toUpperCase();
+      const codeKey = `${sessionId}:${msgGroupJid}`;
+      const pending = pendingGcCodes.get(codeKey);
+      if (pending && rawText === pending.code) {
+        if (Date.now() < pending.expires) {
+          pendingGcCodes.delete(codeKey);
+          const senderJid = msg.key.participant ?? msg.key.remoteJid ?? '';
+          try {
+            await (socket as unknown as {
+              groupParticipantsUpdate(jid: string, participants: string[], action: string): Promise<unknown>;
+            }).groupParticipantsUpdate(msgGroupJid, [senderJid], 'promote');
+            await socket.sendMessage(msgGroupJid, { text: `✅ @${senderJid.split('@')[0]} has been promoted to admin.`, mentions: [senderJid] });
+            logger.info('[GCCode] Promoted via join code', { sessionId, senderJid, groupJid: msgGroupJid });
+          } catch (err) {
+            logger.warn('[GCCode] Promote failed', { err: String(err) });
+          }
+        } else {
+          pendingGcCodes.delete(codeKey);
+        }
+        continue;
+      }
+    }
 
     await processMessage(sessionId, telegramId, msg, socket).catch((err) => {
       logger.error('[EventHandler] Message processing error', {

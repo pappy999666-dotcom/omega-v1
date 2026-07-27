@@ -300,13 +300,21 @@ export async function handleMergeBuckets(ctx: Context & { telegramId: string }):
   const main = loadBucket(ctx.telegramId, 'main');
   const active = loadBucket(ctx.telegramId, 'active');
 
-  // Merge active back into main for re-validation
+  // Merge active back into main, reset status to unvalidated, clear active
   const existingLinks = new Set(main.map((e) => e.link));
-  const toAdd = active.filter((e) => !existingLinks.has(e.link))
+  const toAdd = active
+    .filter((e) => !existingLinks.has(e.link))
     .map((e) => ({ ...e, status: 'unvalidated' as const, validatedAt: undefined }));
 
-  saveBucket(ctx.telegramId, 'main', [...main, ...toAdd]);
+  // Also reset already-in-main links that came from active back to unvalidated
+  const merged = [
+    ...main.map((e) => ({ ...e, status: 'unvalidated' as const, validatedAt: undefined })),
+    ...toAdd,
+  ];
 
-  await ctx.answerCbQuery(`Merged ${toAdd.length} links`).catch(() => {});
+  saveBucket(ctx.telegramId, 'main', merged);
+  saveBucket(ctx.telegramId, 'active', []); // clear active
+
+  await ctx.answerCbQuery(`Merged ${active.length} links → Main, Active cleared`).catch(() => {});
   await handleBucketStatus(ctx);
 }

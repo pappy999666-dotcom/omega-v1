@@ -23,8 +23,9 @@ export const H = {
 };
 
 /** Escape HTML special characters */
-export function escape(s: string): string {
-  return s
+export function escape(s: string | null | undefined): string {
+  if (s == null) return '';
+  return String(s)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')

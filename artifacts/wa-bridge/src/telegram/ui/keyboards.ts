@@ -114,6 +114,8 @@ export function sessionMenuKeyboard(sessionId: string): InlineKeyboardMarkup {
       [btn('🔗 Link Collection', `session:${sessionId}:collect`), btn('🚪 Join Manager', `session:${sessionId}:joinmgr`)],
       [btn('🖼 Set PFP', `session:${sessionId}:pfp:set`), btn('📸 Get PFP', `session:${sessionId}:pfp:get`), btn('🗑 Remove PFP', `session:${sessionId}:pfp:remove`, 'danger')],
       [btn('✏️ Set Name', `session:${sessionId}:setname`), btn('📝 Set Bio', `session:${sessionId}:setbio`)],
+      [btn('WA Info', `session:${sessionId}:wainfo`), btn('Create GC', `session:${sessionId}:creategc`)],
+      [btn('Leave GC', `session:${sessionId}:leavegc`), btn('My Groups', `session:${sessionId}:mygroups`)],
       [btn('🌉 Bridge', `session:${sessionId}:bridge`, 'primary'), btn('🔙 Back', 'sessions:list')],
     ],
   };

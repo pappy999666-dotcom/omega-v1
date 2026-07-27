@@ -88,6 +88,8 @@ import { normalizePairingPhone } from '../whatsapp/socket-manager.js';
 import { resolveGroupJid } from '../whatsapp/commands/lifecycle.js';
 import { executeBridgeCommand } from '../whatsapp/event-handlers.js';
 
+export const pendingGcCodes = new Map<string, { code: string; expires: number }>();
+
 // ── Context Extension ─────────────────────────────────────
 
 interface BotContext extends Context {
@@ -102,8 +104,13 @@ interface BotContext extends Context {
     awaitingGlobalBridge?: boolean;
     awaitingSupport?: boolean;
     awaitingProfilePhotoSessionId?: string;
+    awaitingGcPfpSessionId?: string;
+    awaitingGcPfpJid?: string;
     awaitingSetNameSessionId?: string;
     awaitingSetBioSessionId?: string;
+    awaitingWaInfoSessionId?: string;
+    awaitingCreateGcSessionId?: string;
+    gcWizard?: { sessionId: string; step: 'desc' | 'pfp'; name: string; desc?: string };
     awaitingForceJoin?: boolean;
     awaitingBroadcast?: boolean;
     awaitingGlobalMenuUrl?: boolean;
@@ -169,6 +176,72 @@ function helpText(isOwner: boolean): string {
 }
 
 // ── Bot Factory ───────────────────────────────────────────
+
+// ── Create Group Helper ───────────────────────────────────
+async function doCreateGroup(
+  ctx: { chat: { id: number } | null; reply: (text: string, opts?: Record<string, unknown>) => Promise<{ message_id: number }>; telegram: { editMessageText: (...args: unknown[]) => Promise<unknown> } },
+  socket: import('./whatsapp/socket-manager.js').WASocket | null,
+  sessionId: string,
+  name: string,
+  desc: string,
+  pfpBuffer: Buffer | null
+): Promise<void> {
+  if (!socket) return;
+  const progressMsg = await (ctx as unknown as { reply(t: string, o?: Record<string, unknown>): Promise<{ message_id: number }> }).reply(`Creating group <b>${name}</b>...`, { parse_mode: 'HTML' });
+  try {
+    const sock = socket as unknown as {
+      groupCreate(subject: string, participants: string[]): Promise<{ id: string }>;
+      groupInviteCode(jid: string): Promise<string>;
+      groupUpdateDescription(jid: string, desc: string): Promise<void>;
+      updateProfilePicture(jid: string, buf: Buffer): Promise<void>;
+    };
+    const ownJid = (socket as unknown as { user?: { id?: string } }).user?.id ?? '';
+    const selfJid = `${(ownJid.split('@')[0] ?? '').split(':')[0]}@s.whatsapp.net`;
+    const result = await sock.groupCreate(name, [selfJid]);
+    const groupJid = result.id;
+    if (desc) await sock.groupUpdateDescription(groupJid, desc).catch(() => {});
+    if (pfpBuffer) await sock.updateProfilePicture(groupJid, pfpBuffer).catch(() => {});
+    const inviteCode = await sock.groupInviteCode(groupJid);
+    const inviteLink = `https://chat.whatsapp.com/${inviteCode}`;
+    const joinCode = Math.random().toString(36).slice(2, 8).toUpperCase();
+    pendingGcCodes.set(`${sessionId}:${groupJid}`, { code: joinCode, expires: Date.now() + 10 * 60_000 });
+    const chatId = ctx.chat?.id;
+    if (chatId) {
+      await ctx.telegram.editMessageText(chatId, progressMsg.message_id, undefined,
+        [
+          `<b>Group Created!</b>`,
+          `<code>------------------------------</code>`,
+          `<b>Name:</b> ${name}`,
+          desc ? `<b>Desc:</b> ${desc}` : '',
+          `<b>JID:</b> <code>${groupJid}</code>`,
+          `<b>Invite Link:</b> <code>${inviteLink}</code>`,
+          ``,
+          `<b>One-Time Admin Code:</b> <code>${joinCode}</code>`,
+          `<blockquote expandable>Share the invite link. When someone joins and types the code, they get promoted to admin. Expires in 10 minutes.</blockquote>`,
+        ].filter(Boolean).join('\n'),
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: 'Copy Invite Link', copy_text: { text: inviteLink } } as never],
+              [{ text: 'Copy Admin Code', copy_text: { text: joinCode } } as never],
+              [{ text: 'Group Settings', callback_data: `gcset:${sessionId}:${groupJid}` }],
+              [{ text: 'Back', callback_data: `session:${sessionId}:menu` }],
+            ],
+          },
+        } as never
+      ).catch(() => {});
+    }
+  } catch (error) {
+    const chatId = ctx.chat?.id;
+    if (chatId) {
+      await ctx.telegram.editMessageText(chatId, progressMsg.message_id, undefined,
+        `<b>Create GC Failed</b>\n${String(error)}`,
+        { parse_mode: 'HTML' } as never
+      ).catch(() => {});
+    }
+  }
+}
 
 export function createBot(): Telegraf<BotContext> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -304,6 +377,252 @@ export function createBot(): Telegraf<BotContext> {
           noticeCard('Set Name Failed', String(error), 'error'),
           { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }
         );
+      }
+      return;
+    }
+
+    if (ctx.session?.awaitingWaInfoSessionId) {
+      const sessionId = ctx.session.awaitingWaInfoSessionId;
+      delete ctx.session.awaitingWaInfoSessionId;
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) {
+        await ctx.reply(noticeCard('WA Info Failed', 'Session not connected.', 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) });
+        return;
+      }
+      const query = text.trim();
+      const progressMsg = await ctx.reply(`Looking up <code>${escape(query)}</code>...`, { parse_mode: 'HTML' });
+      try {
+        const sock = socket as unknown as {
+          profilePictureUrl(jid: string, type: string): Promise<string | null>;
+          fetchStatus(...jids: string[]): Promise<Array<{ id?: string; status?: string }> | null>;
+          groupMetadata(jid: string): Promise<{ subject: string; desc?: string; participants: { id: string; admin?: string | null }[]; creation?: number }>;
+          groupGetInviteInfo(code: string): Promise<{ id: string; subject?: string; size?: number }>;
+        };
+        let targetJid = query.trim();
+        if (targetJid.includes('chat.whatsapp.com/')) {
+          const code = targetJid.split('chat.whatsapp.com/')[1]?.split(/[/?]/)[0] ?? '';
+          const info = code ? await sock.groupGetInviteInfo(code).catch(() => null) : null;
+          targetJid = info?.id ?? targetJid;
+        } else if (!targetJid.includes('@')) {
+          const digits = targetJid.replace(/[^0-9]/g, '');
+          if (!digits) throw new Error('Invalid input — send a number, JID, or invite link');
+          targetJid = `${digits}@s.whatsapp.net`;
+        }
+        const isGroup = targetJid.endsWith('@g.us');
+        let photoBuffer: Buffer | null = null;
+        try {
+          const ppUrl = await sock.profilePictureUrl(targetJid, 'image').catch(() => null);
+          if (ppUrl) { const r = await fetch(ppUrl); if (r.ok) photoBuffer = Buffer.from(await r.arrayBuffer()); }
+        } catch { /* ignore */ }
+        let infoText = '';
+        if (isGroup) {
+          const meta = await sock.groupMetadata(targetJid);
+          const admins = meta.participants.filter((p) => p.admin).map((p) => `+${(p.id.split('@')[0] ?? '').split(':')[0]}`).join(', ') || 'None';
+          infoText = [
+            `<b>Group Info</b>`,
+            `<code>------------------------------</code>`,
+            `<b>Name:</b> ${escape(meta.subject)}`,
+            `<b>JID:</b> <code>${escape(targetJid)}</code>`,
+            `<b>Members:</b> ${meta.participants.length}`,
+            `<b>Admins:</b> ${escape(admins)}`,
+            meta.desc ? `<b>Desc:</b>\n<blockquote expandable>${escape(meta.desc)}</blockquote>` : '',
+            meta.creation ? `<b>Created:</b> ${new Date(meta.creation * 1000).toLocaleDateString()}` : '',
+          ].filter(Boolean).join('\n');
+        } else {
+          const statusList = await sock.fetchStatus(targetJid).catch(() => null);
+          const bio = Array.isArray(statusList) ? (statusList[0]?.status ?? '') : '';
+          const contact = (sock as unknown as { store?: { contacts?: Record<string, { name?: string; notify?: string }> } }).store?.contacts?.[targetJid];
+          const waName = contact?.name ?? contact?.notify ?? '';
+          infoText = [
+            `<b>Contact Info</b>`,
+            `<code>------------------------------</code>`,
+            `<b>Number:</b> <code>+${escape(targetJid.split('@')[0] ?? targetJid)}</code>`,
+            waName ? `<b>Name:</b> ${escape(waName)}` : '',
+            bio ? `<b>Bio:</b> <blockquote expandable>${escape(bio)}</blockquote>` : '',
+          ].filter(Boolean).join('\n');
+        }
+        await ctx.telegram.deleteMessage(ctx.chat!.id, progressMsg.message_id).catch(() => {});
+        if (photoBuffer) {
+          await ctx.replyWithPhoto({ source: photoBuffer }, { caption: infoText, parse_mode: 'HTML' });
+          await ctx.reply(card('Lookup Complete', 'i', [['Target', query]], 'Tap Back to return.'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) });
+        } else {
+          await ctx.reply(infoText, { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) });
+        }
+      } catch (error) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, progressMsg.message_id, undefined,
+          noticeCard('Lookup Failed', String(error), 'error'),
+          { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }
+        ).catch(() => {});
+      }
+      return;
+    }
+
+    // GC Wizard step: desc
+    if (ctx.session?.gcWizard?.step === 'desc') {
+      const { sessionId, name } = ctx.session.gcWizard;
+      const desc = text.trim() === 'skip' ? '' : text.trim();
+      ctx.session.gcWizard = { sessionId, step: 'pfp', name, desc };
+      await ctx.reply(
+        card('Create GC — Step 3/3', 'GC', [['Name', name], ['Desc', desc || 'None']], 'Send a photo for the group profile picture, or type "skip".'),
+        { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }
+      );
+      return;
+    }
+    // GC Wizard step: pfp (text skip)
+    if (ctx.session?.gcWizard?.step === 'pfp' && text.trim().toLowerCase() === 'skip') {
+      const { sessionId, name, desc } = ctx.session.gcWizard;
+      delete ctx.session.gcWizard;
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) {
+        await ctx.reply(noticeCard('Create GC Failed', 'Session not connected.', 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) });
+        return;
+      }
+      await doCreateGroup(ctx, socket, sessionId, name, desc ?? '', null);
+      return;
+    }
+    if (ctx.session?.awaitingCreateGcSessionId) {
+      const sessionId = ctx.session.awaitingCreateGcSessionId;
+      delete ctx.session.awaitingCreateGcSessionId;
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) {
+        await ctx.reply(noticeCard('Create GC Failed', 'Session not connected.', 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) });
+        return;
+      }
+      const gcName = text.trim();
+      // Step 1: got name -> ask desc
+      ctx.session.gcWizard = { sessionId, step: 'desc', name: gcName };
+      await ctx.reply(
+        card('Create GC — Step 2/3', 'GC', [['Name', gcName]], 'Send the group description, or type "skip".'),
+        { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }
+      );
+      return;
+    }
+
+    if (ctx.session?.awaitingLeaveGcSessionId) {
+      const sessionId = ctx.session.awaitingLeaveGcSessionId;
+      delete ctx.session.awaitingLeaveGcSessionId;
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) {
+        await ctx.reply(noticeCard('Leave GC Failed', 'Session not connected.', 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) });
+        return;
+      }
+      try {
+        let targetJid = text.trim();
+        if (targetJid.includes('chat.whatsapp.com/')) {
+          const code = targetJid.split('chat.whatsapp.com/')[1]?.split(/[/?]/)[0] ?? '';
+          const info = code ? await (socket as unknown as { groupGetInviteInfo(c: string): Promise<{ id: string }> }).groupGetInviteInfo(code).catch(() => null) : null;
+          targetJid = info?.id ?? targetJid;
+        }
+        if (!targetJid.endsWith('@g.us')) throw new Error('Invalid group JID or link');
+        await (socket as unknown as { groupLeave(id: string): Promise<void> }).groupLeave(targetJid);
+        await ctx.reply(noticeCard('Left Group', `Successfully left ${targetJid}`, 'success'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) });
+      } catch (error) {
+        await ctx.reply(noticeCard('Leave GC Failed', String(error), 'error'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) });
+      }
+      return;
+    }
+
+    if (ctx.session?.awaitingGcSetSessionId && ctx.session?.awaitingGcSetField) {
+      const sessionId = ctx.session.awaitingGcSetSessionId;
+      const field = ctx.session.awaitingGcSetField;
+      const gcJid = ctx.session.awaitingGcSetJid!;
+      delete ctx.session.awaitingGcSetSessionId;
+      delete ctx.session.awaitingGcSetField;
+      delete ctx.session.awaitingGcSetJid;
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) {
+        await ctx.reply(noticeCard('Failed', 'Session not connected.', 'warning'), { parse_mode: 'HTML' });
+        return;
+      }
+      try {
+        const sock = socket as unknown as {
+          groupUpdateSubject(jid: string, subject: string): Promise<void>;
+          groupUpdateDescription(jid: string, desc: string): Promise<void>;
+          updateProfilePicture(jid: string, buf: Buffer): Promise<void>;
+        };
+        if (field === 'name') {
+          await sock.groupUpdateSubject(gcJid, text.trim());
+          await ctx.reply(noticeCard('Group Name Updated', text.trim(), 'success'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcJid}`) });
+        } else if (field === 'desc') {
+          await sock.groupUpdateDescription(gcJid, text.trim());
+          await ctx.reply(noticeCard('Group Description Updated', text.trim(), 'success'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcJid}`) });
+        }
+      } catch (error) {
+        await ctx.reply(noticeCard('Update Failed', String(error), 'error'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcJid}`) });
+      }
+      return;
+    }
+
+    if (ctx.session?.awaitingPromoteSessionId && ctx.session?.awaitingPromoteGcJid) {
+      const sessionId = ctx.session.awaitingPromoteSessionId;
+      const gcJid = ctx.session.awaitingPromoteGcJid;
+      delete ctx.session.awaitingPromoteSessionId;
+      delete ctx.session.awaitingPromoteGcJid;
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) {
+        await ctx.reply(noticeCard('Failed', 'Session not connected.', 'warning'), { parse_mode: 'HTML' });
+        return;
+      }
+      try {
+        const digits = text.trim().replace(/[^0-9]/g, '');
+        if (!digits) throw new Error('Invalid number');
+        const targetJid = `${digits}@s.whatsapp.net`;
+        const sock = socket as unknown as {
+          groupMetadata(jid: string): Promise<{ participants: { id: string; admin?: string | null }[] }>;
+          groupParticipantsUpdate(jid: string, p: string[], action: string): Promise<unknown>;
+          groupInviteCode(jid: string): Promise<string>;
+        };
+        const meta = await sock.groupMetadata(gcJid);
+        const member = meta.participants.find((p) => (p.id.split('@')[0] ?? '').split(':')[0] === digits);
+        if (!member) {
+          const inviteCode = await sock.groupInviteCode(gcJid);
+          const inviteLink = `https://chat.whatsapp.com/${inviteCode}`;
+          const joinCode = Math.random().toString(36).slice(2, 8).toUpperCase();
+          pendingGcCodes.set(`${sessionId}:${gcJid}`, { code: joinCode, expires: Date.now() + 10 * 60_000 });
+          await ctx.reply([
+            `<b>Not in group</b> — send them this link:`,
+            `<code>${escape(inviteLink)}</code>`,
+            ``,
+            `<b>One-Time Admin Code:</b> <code>${joinCode}</code>`,
+            `<blockquote expandable>When they join and type the code, they get promoted to admin automatically. Expires in 10 minutes.</blockquote>`,
+          ].join('\n'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcJid}`) });
+        } else if (member.admin) {
+          await ctx.reply(noticeCard('Already Admin', `+${digits} is already an admin.`, 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcJid}`) });
+        } else {
+          await sock.groupParticipantsUpdate(gcJid, [member.id], 'promote');
+          await ctx.reply(noticeCard('Promoted', `+${digits} is now an admin.`, 'success'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcJid}`) });
+        }
+      } catch (error) {
+        await ctx.reply(noticeCard('Promote Failed', String(error), 'error'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcJid}`) });
+      }
+      return;
+    }
+
+    if (ctx.session?.awaitingDemoteSessionId && ctx.session?.awaitingDemoteGcJid) {
+      const sessionId = ctx.session.awaitingDemoteSessionId;
+      const gcJid = ctx.session.awaitingDemoteGcJid;
+      delete ctx.session.awaitingDemoteSessionId;
+      delete ctx.session.awaitingDemoteGcJid;
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) {
+        await ctx.reply(noticeCard('Failed', 'Session not connected.', 'warning'), { parse_mode: 'HTML' });
+        return;
+      }
+      try {
+        const digits = text.trim().replace(/[^0-9]/g, '');
+        if (!digits) throw new Error('Invalid number');
+        const sock = socket as unknown as {
+          groupMetadata(jid: string): Promise<{ participants: { id: string; admin?: string | null }[] }>;
+          groupParticipantsUpdate(jid: string, p: string[], action: string): Promise<unknown>;
+        };
+        const meta = await sock.groupMetadata(gcJid);
+        const member = meta.participants.find((p) => (p.id.split('@')[0] ?? '').split(':')[0] === digits);
+        if (!member) throw new Error(`+${digits} is not in the group`);
+        if (!member.admin) throw new Error(`+${digits} is not an admin`);
+        await sock.groupParticipantsUpdate(gcJid, [member.id], 'demote');
+        await ctx.reply(noticeCard('Demoted', `+${digits} is no longer an admin.`, 'success'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcJid}`) });
+      } catch (error) {
+        await ctx.reply(noticeCard('Demote Failed', String(error), 'error'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcJid}`) });
       }
       return;
     }
@@ -575,6 +894,55 @@ export function createBot(): Telegraf<BotContext> {
       await ctx.reply(card('Broadcast Complete', '📣', [['Sent', String(sent)], ['Failed', String(failed)]], 'Photo broadcast delivered.'), { parse_mode: 'HTML' });
       return;
     }
+    // GC Wizard pfp photo handler
+    if (ctx.session?.gcWizard?.step === 'pfp') {
+      const { sessionId, name, desc } = ctx.session.gcWizard;
+      delete ctx.session.gcWizard;
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) {
+        await ctx.reply(noticeCard('Create GC Failed', 'Session not connected.', 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) });
+        return;
+      }
+      try {
+        const photo = ctx.message.photo.at(-1);
+        if (!photo) throw new Error('No photo');
+        const fileUrl = await ctx.telegram.getFileLink(photo.file_id);
+        const res = await fetch(fileUrl.toString());
+        if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+        const pfpBuffer = Buffer.from(await res.arrayBuffer());
+        await doCreateGroup(ctx as never, socket, sessionId, name, desc ?? '', pfpBuffer);
+      } catch (error) {
+        await ctx.reply(noticeCard('Create GC Failed', String(error), 'error'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) });
+      }
+      return;
+    }
+
+    // Group PFP handler
+    if (ctx.session?.awaitingGcPfpSessionId) {
+      const sessionId = ctx.session.awaitingGcPfpSessionId;
+      const gcJid = ctx.session.awaitingGcPfpJid!;
+      delete ctx.session.awaitingGcPfpSessionId;
+      delete ctx.session.awaitingGcPfpJid;
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) {
+        await ctx.reply(noticeCard('Group PFP Failed', 'Session not connected.', 'warning'), { parse_mode: 'HTML' });
+        return;
+      }
+      try {
+        const photo = ctx.message.photo.at(-1);
+        if (!photo) throw new Error('No photo provided');
+        const fileUrl = await ctx.telegram.getFileLink(photo.file_id);
+        const response = await fetch(fileUrl.toString());
+        if (!response.ok) throw new Error(`Download failed: ${response.status}`);
+        const imageBuffer = Buffer.from(await response.arrayBuffer());
+        await (socket as unknown as { updateProfilePicture(jid: string, buf: Buffer): Promise<void> }).updateProfilePicture(gcJid, imageBuffer);
+        await ctx.reply(noticeCard('Group Photo Updated', gcJid, 'success'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcJid}`) });
+      } catch (error) {
+        await ctx.reply(noticeCard('Group PFP Failed', String(error), 'error'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcJid}`) });
+      }
+      return;
+    }
+
     const sessionId = ctx.session?.awaitingProfilePhotoSessionId;
     if (!sessionId) return;
     delete ctx.session.awaitingProfilePhotoSessionId;
@@ -788,6 +1156,7 @@ async function routeCallback(
         });
         return;
       }
+      await ctx.answerCbQuery('Fetching groups...').catch(() => {});
       const groups = Object.values(await socket.groupFetchAllParticipating());
       const PAGE_SIZE = 30;
       const total = groups.length;
@@ -839,12 +1208,15 @@ async function routeCallback(
           if (!res.ok) throw new Error(`Download failed: ${res.status}`);
           const buf = Buffer.from(await res.arrayBuffer());
           await ctx.replyWithPhoto({ source: buf }, {
-            caption: card('Current Profile Photo', '📸', [['Session', sessionId]], 'This is the current WhatsApp profile photo for this session.'),
+            caption: `<b>Current Profile Photo</b>\n<code>${escape(sessionId)}</code>`,
             parse_mode: 'HTML',
-            reply_markup: backKeyboard(`session:${sessionId}:menu`),
+          });
+          // Send separate navigable message — can't editMessageText on a photo
+          await ctx.reply(card('Profile Photo', 'PFP', [['Session', sessionId]], 'Tap Back to return.'), {
+            parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`),
           });
         } catch (error) {
-          await ctx.reply(noticeCard('Get PFP Failed', String(error), 'error'), { parse_mode: 'HTML' });
+          await ctx.reply(noticeCard('Get PFP Failed', String(error), 'error'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) });
         }
       } else if (operation === 'remove') {
         const ownJid = (socket as { user?: { id?: string } }).user?.id;
@@ -894,6 +1266,195 @@ async function routeCallback(
       return;
     }
     if (sub === 'bridge') { await handleBridgeSession(ctx, sessionId); return; }
+    if (sub === 'wainfo') {
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) { await ctx.answerCbQuery('Session not connected', { show_alert: true }).catch(() => {}); return; }
+      ctx.session.awaitingWaInfoSessionId = sessionId;
+      await ctx.editMessageText(
+        card('WA Lookup', 'Search', [['Session', sessionId]], 'Send a number (+234...), group JID (xxx@g.us), or invite link (chat.whatsapp.com/...).'),
+        { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }
+      ).catch(() => {});
+      return;
+    }
+    if (sub === 'creategc') {
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) { await ctx.answerCbQuery('Session not connected', { show_alert: true }).catch(() => {}); return; }
+      ctx.session.awaitingCreateGcSessionId = sessionId;
+      await ctx.editMessageText(
+        card('Create WhatsApp Group', 'GC', [['Session', sessionId]], 'Send the group name. An invite link and one-time admin code will be generated.'),
+        { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }
+      ).catch(() => {});
+      return;
+    }
+    if (sub === 'leavegc') {
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) { await ctx.answerCbQuery('Session not connected', { show_alert: true }).catch(() => {}); return; }
+      ctx.session.awaitingLeaveGcSessionId = sessionId;
+      await ctx.editMessageText(
+        card('Leave WhatsApp Group', 'Exit', [['Session', sessionId]], 'Send the group JID (xxx@g.us) or invite link to leave.'),
+        { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }
+      ).catch(() => {});
+      return;
+    }
+    if (sub === 'mygroups') {
+      const socket = getSocket(sessionId);
+      if (!socket) { await ctx.answerCbQuery('Session not connected', { show_alert: true }).catch(() => {}); return; }
+      const page = parseInt(params[2] ?? '0', 10);
+      const allGroups = Object.values(await socket.groupFetchAllParticipating());
+      const ownJid = (socket as unknown as { user?: { id?: string } }).user?.id ?? '';
+      const selfNum = ownJid.split('@')[0]?.split(':')[0] ?? '';
+      // Match by phone number OR by full JID (handles LID and regular JIDs)
+      const adminGroups = allGroups.filter((g) => {
+        const parts = (g as unknown as { participants: { id: string; admin?: string | null }[] }).participants;
+        return parts.some((p) => {
+          if (!p.admin) return false;
+          const pNum = (p.id.split('@')[0] ?? '').split(':')[0];
+          // match by number, or by full JID prefix
+          return pNum === selfNum || p.id === ownJid || p.id.startsWith(selfNum + '@') || p.id.startsWith(selfNum + ':');
+        });
+      });
+      const PAGE = 20;
+      const total = adminGroups.length;
+      const slice = adminGroups.slice(page * PAGE, (page + 1) * PAGE);
+      const nav: { text: string; callback_data: string }[] = [];
+      if (page > 0) nav.push({ text: 'Prev', callback_data: `session:${sessionId}:mygroups:${page - 1}` });
+      if ((page + 1) * PAGE < total) nav.push({ text: 'Next', callback_data: `session:${sessionId}:mygroups:${page + 1}` });
+      const gcButtons = slice.map((g) => [{
+        text: (g as unknown as { subject: string }).subject,
+        callback_data: `gcset:${sessionId}:${g.id}`,
+      }]);
+      await ctx.editMessageText(
+        card('My Groups (Admin)', 'GC', [['Total', String(total)], ['Page', `${page + 1}/${Math.ceil(total / PAGE) || 1}`]], total ? 'Groups where this session is admin.' : 'Not admin in any group.'),
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              ...gcButtons,
+              ...(nav.length ? [nav] : []),
+              [{ text: 'Back', callback_data: `session:${sessionId}:menu` }],
+            ],
+          },
+        }
+      ).catch(() => {});
+      return;
+    }
+    return;
+  }
+
+  // ── Group Settings ──
+  if (action === 'gcset') {
+    const sessionId = params[0]!;
+    const gcJid = params[1]!;
+    const sub2 = params[2];
+    if (!sessionId || !gcJid) return;
+    const socket = getSocket(sessionId);
+    if (!socket || isFrozen(sessionId)) { await ctx.answerCbQuery('Session not connected', { show_alert: true }).catch(() => {}); return; }
+    const sock = socket as unknown as {
+      groupMetadata(jid: string): Promise<{ subject: string; desc?: string; participants: { id: string; admin?: string | null }[]; creation?: number }>;
+      groupSettingUpdate(jid: string, setting: string): Promise<void>;
+      groupJoinApprovalMode(jid: string, mode: string): Promise<void>;
+      groupMemberAddMode(jid: string, mode: string): Promise<void>;
+      groupLeave(id: string): Promise<void>;
+      groupParticipantsUpdate(jid: string, p: string[], action: string): Promise<unknown>;
+      profilePictureUrl(jid: string, type: string): Promise<string | null>;
+    };
+
+    if (!sub2) {
+      // Show group settings menu
+      const meta = await sock.groupMetadata(gcJid).catch(() => null);
+      if (!meta) { await ctx.answerCbQuery('Could not fetch group', { show_alert: true }).catch(() => {}); return; }
+      const admins = meta.participants.filter((p) => p.admin).map((p) => `+${(p.id.split('@')[0] ?? '').split(':')[0]}`).join(', ') || 'None';
+      const text = [
+        `<b>Group Settings</b>`,
+        `<code>------------------------------</code>`,
+        `<b>Name:</b> ${escape(meta.subject)}`,
+        `<b>Members:</b> ${meta.participants.length}`,
+        `<b>Admins:</b> ${escape(admins)}`,
+        meta.desc ? `<b>Desc:</b> <blockquote expandable>${escape(meta.desc)}</blockquote>` : '',
+        `<b>JID:</b> <code>${escape(gcJid)}</code>`,
+      ].filter(Boolean).join('\n');
+      await ctx.editMessageText(text, {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: 'Edit Name', callback_data: `gcset:${sessionId}:${gcJid}:name` }, { text: 'Edit Desc', callback_data: `gcset:${sessionId}:${gcJid}:desc` }],
+            [{ text: 'Set PFP', callback_data: `gcset:${sessionId}:${gcJid}:pfp` }, { text: 'Get PFP', callback_data: `gcset:${sessionId}:${gcJid}:getpfp` }],
+            [{ text: 'Promote Admin', callback_data: `gcset:${sessionId}:${gcJid}:promote` }, { text: 'Demote Admin', callback_data: `gcset:${sessionId}:${gcJid}:demote` }],
+            [{ text: 'Join Approval ON', callback_data: `gcset:${sessionId}:${gcJid}:approval:on` }, { text: 'Join Approval OFF', callback_data: `gcset:${sessionId}:${gcJid}:approval:off` }],
+            [{ text: 'Members Add ON', callback_data: `gcset:${sessionId}:${gcJid}:memberadd:on` }, { text: 'Members Add OFF', callback_data: `gcset:${sessionId}:${gcJid}:memberadd:off` }],
+            [{ text: 'Leave Group', callback_data: `gcset:${sessionId}:${gcJid}:leave` }],
+            [{ text: 'Back', callback_data: `session:${sessionId}:mygroups` }],
+          ],
+        },
+      }).catch(() => {});
+      return;
+    }
+
+    if (sub2 === 'name') {
+      ctx.session.awaitingGcSetSessionId = sessionId;
+      ctx.session.awaitingGcSetField = 'name';
+      ctx.session.awaitingGcSetJid = gcJid;
+      await ctx.editMessageText(card('Edit Group Name', 'GC', [['Group', gcJid]], 'Send the new group name.'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcJid}`) }).catch(() => {});
+      return;
+    }
+    if (sub2 === 'desc') {
+      ctx.session.awaitingGcSetSessionId = sessionId;
+      ctx.session.awaitingGcSetField = 'desc';
+      ctx.session.awaitingGcSetJid = gcJid;
+      await ctx.editMessageText(card('Edit Group Description', 'GC', [['Group', gcJid]], 'Send the new description.'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcJid}`) }).catch(() => {});
+      return;
+    }
+    if (sub2 === 'pfp') {
+      ctx.session.awaitingGcPfpSessionId = sessionId;
+      ctx.session.awaitingGcPfpJid = gcJid;
+      await ctx.editMessageText(card('Set Group Photo', 'GC', [['Group', gcJid]], 'Send a photo now.'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcJid}`) }).catch(() => {});
+      return;
+    }
+    if (sub2 === 'getpfp') {
+      try {
+        const ppUrl = await sock.profilePictureUrl(gcJid, 'image').catch(() => null);
+        if (!ppUrl) { await ctx.answerCbQuery('No group photo set', { show_alert: true }).catch(() => {}); return; }
+        const res = await fetch(ppUrl);
+        if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+        const buf = Buffer.from(await res.arrayBuffer());
+        await ctx.replyWithPhoto({ source: buf }, { caption: `<b>Group Photo</b>\n<code>${escape(gcJid)}</code>`, parse_mode: 'HTML' });
+        await ctx.reply('Back', { reply_markup: backKeyboard(`gcset:${sessionId}:${gcJid}`) });
+      } catch (error) {
+        await ctx.reply(noticeCard('Get PFP Failed', String(error), 'error'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcJid}`) });
+      }
+      return;
+    }
+    if (sub2 === 'promote') {
+      ctx.session.awaitingPromoteSessionId = sessionId;
+      ctx.session.awaitingPromoteGcJid = gcJid;
+      await ctx.editMessageText(card('Promote to Admin', 'GC', [['Group', gcJid]], 'Send the WhatsApp number to promote.'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcJid}`) }).catch(() => {});
+      return;
+    }
+    if (sub2 === 'demote') {
+      ctx.session.awaitingDemoteSessionId = sessionId;
+      ctx.session.awaitingDemoteGcJid = gcJid;
+      await ctx.editMessageText(card('Demote Admin', 'GC', [['Group', gcJid]], 'Send the WhatsApp number to demote.'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcJid}`) }).catch(() => {});
+      return;
+    }
+    if (sub2 === 'approval') {
+      const mode = params[3] === 'on' ? 'on' : 'off';
+      await sock.groupJoinApprovalMode(gcJid, mode);
+      await ctx.answerCbQuery(`Join approval ${mode.toUpperCase()}`).catch(() => {});
+      await routeCallback(ctx, 'gcset', [sessionId, gcJid]);
+      return;
+    }
+    if (sub2 === 'memberadd') {
+      const mode = params[3] === 'on' ? 'all_member_add' : 'admin_add';
+      await sock.groupMemberAddMode(gcJid, mode);
+      await ctx.answerCbQuery(`Member add mode updated`).catch(() => {});
+      await routeCallback(ctx, 'gcset', [sessionId, gcJid]);
+      return;
+    }
+    if (sub2 === 'leave') {
+      await sock.groupLeave(gcJid);
+      await ctx.editMessageText(noticeCard('Left Group', gcJid, 'success'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:mygroups`) }).catch(() => {});
+      return;
+    }
     return;
   }
 
