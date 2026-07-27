@@ -918,7 +918,7 @@ async function processMessage(
       const text = commandText('📢');
       const res = await cmdTag(socket, sessionId, groupJid, text, { existingPreview: quotedPreview, sourceExt });
       await reply(res.success
-        ? tagSummary(res.pinged, 'tag')
+        ? ''
         : errorCard('TAG FAILED', res.error ?? 'Could not fetch group participants.'));
       break;
     }

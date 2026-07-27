@@ -1178,7 +1178,41 @@ async function routeCallback(
       ).catch(() => {});
       return;
     }
-    if (sub === 'info') { await handleSessionInfo(ctx, sessionId); return; }
+    if (sub === 'info') {
+      const ownerId = sessionOwner(ctx, sessionId);
+      const meta = loadSessionMeta(ownerId, sessionId);
+      if (!meta) { await ctx.answerCbQuery('Session not found', { show_alert: true }).catch(() => {}); return; }
+      const socket = getSocket(sessionId);
+      let waName = '';
+      let waBio = '';
+      // Fast profile fetch — no groupFetchAllParticipating
+      if (socket) {
+        try {
+          const ownJid = (socket as unknown as { user?: { id?: string } }).user?.id ?? '';
+          const statusList = await (socket as unknown as { fetchStatus(...j: string[]): Promise<Array<{status?: string}>|null> }).fetchStatus(ownJid).catch(() => null);
+          waBio = Array.isArray(statusList) ? (statusList[0]?.status ?? '') : '';
+          const contacts = (socket as unknown as { store?: { contacts?: Record<string, { name?: string; notify?: string }> } }).store?.contacts;
+          const c = contacts?.[ownJid];
+          waName = c?.name ?? c?.notify ?? '';
+        } catch { /* ignore */ }
+      }
+      const statusEmoji = { open: '🟢', connecting: '🟡', frozen: '🔵', error: '🔴', banned: '💀', closed: '⚫' }[meta.status] ?? '⚪';
+      const text = [
+        `${statusEmoji} <b>Session Info</b>`,
+        `<code>------------------------------</code>`,
+        `🏷️ <b>Label:</b> ${escape(meta.label || meta.phone)}`,
+        `📱 <b>Number:</b> <code>${escape(meta.phone)}</code>`,
+        waName ? `👤 <b>WA Name:</b> ${escape(waName)}` : '',
+        waBio ? `📝 <b>Bio:</b> ${escape(waBio)}` : '',
+        `📊 <b>Status:</b> ${statusEmoji} ${meta.status.toUpperCase()}`,
+        `🔗 <b>Paired:</b> ${meta.status === 'open' ? '✅ Yes' : '❌ No'}`,
+        meta.pairedAt ? `⏰ <b>Since:</b> ${new Date(meta.pairedAt).toLocaleString()}` : '',
+        ``,
+        `<blockquote expandable>🔑 Session ID\n<code>${escape(sessionId)}</code></blockquote>`,
+      ].filter(Boolean).join('\n');
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId) }).catch(() => {});
+      return;
+    }
     if (sub === 'groups') {
       const page = parseInt(params[2] ?? '0', 10);
       const socket = getSocket(sessionId);
@@ -1416,12 +1450,17 @@ async function routeCallback(
       const meta = await sock.groupMetadata(gcJid).catch(() => null);
       if (!meta) { await ctx.answerCbQuery('Could not fetch group', { show_alert: true }).catch(() => {}); return; }
       const admins = meta.participants.filter((p) => p.admin).map((p) => { const phone = (p as unknown as { phoneNumber?: string }).phoneNumber?.replace(/[^0-9]/g, '') || (p.id.split('@')[0] ?? '').split(':')[0]; return `+${phone}`; }).join(', ') || 'None';
+      const metaFull = meta as unknown as { joinApprovalMode?: boolean; memberAddMode?: boolean };
+      const joinApproval = metaFull.joinApprovalMode ? '🟢 ON' : '🔴 OFF';
+      const memberAdd = metaFull.memberAddMode ? '🟢 All Members' : '🔴 Admins Only';
       const text = [
         `<b>Group Settings</b>`,
         `<code>------------------------------</code>`,
         `<b>Name:</b> ${escape(meta.subject)}`,
         `<b>Members:</b> ${meta.participants.length}`,
         `<b>Admins:</b> ${escape(admins)}`,
+        `<b>Join Approval:</b> ${joinApproval}`,
+        `<b>Member Add:</b> ${memberAdd}`,
         meta.desc ? `<b>Desc:</b> <blockquote expandable>${escape(meta.desc)}</blockquote>` : '',
         `<b>JID:</b> <code>${escape(gcJid)}</code>`,
       ].filter(Boolean).join('\n');

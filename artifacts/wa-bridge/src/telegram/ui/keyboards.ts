@@ -25,7 +25,7 @@ function copyBtn(text: string, copy_text: string, style: ButtonStyle = 'primary'
 }
 
 export function backKeyboard(callback = 'menu:main'): InlineKeyboardMarkup {
-  return { inline_keyboard: [[btn('🔙 Back', callback)]] };
+  return { inline_keyboard: [[btn('🔙 Back', callback, 'primary')]] };
 }
 
 export function bridgeExitKeyboard(): InlineKeyboardMarkup {
@@ -40,7 +40,7 @@ export function statusKeyboard(): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [btn('🔄 Refresh', 'status:overview', 'success')],
-      [btn('🔙 Back', 'menu:main')],
+      [btn('🔙 Back', 'menu:main', 'primary')],
     ],
   };
 }
@@ -48,8 +48,8 @@ export function statusKeyboard(): InlineKeyboardMarkup {
 export function stickerMacrosKeyboard(): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
-      [btn('📖 Binding Help', 'help:stickers')],
-      [btn('🔙 Back', 'settings:menu')],
+      [btn('📖 Binding Help', 'help:stickers', 'primary')],
+      [btn('🔙 Back', 'settings:menu', 'primary')],
     ],
   };
 }
@@ -58,10 +58,10 @@ export function stickerMacrosKeyboard(): InlineKeyboardMarkup {
 
 export function mainMenuKeyboard(isOwner: boolean): InlineKeyboardMarkup {
   const rows: IKB[][] = [
-    [btn('Pair Number', 'session:new', 'success'), btn('Sessions', 'sessions:list')],
-    [btn('Validator Hub', 'bucket:status'), btn('Global Bridge', 'bridge:global')],
-    [btn('Sleep Mode', 'sleep:menu'), btn('Settings', 'settings:menu')],
-    [btn('Support', 'support:menu'), btn('Help', 'help:main')],
+    [btn('Pair Number', 'session:new', 'success'), btn('Sessions', 'sessions:list', 'primary')],
+    [btn('Validator Hub', 'bucket:status', 'primary'), btn('Global Bridge', 'bridge:global', 'primary')],
+    [btn('Sleep Mode', 'sleep:menu', 'primary'), btn('Settings', 'settings:menu', 'primary')],
+    [btn('Support', 'support:menu', 'primary'), btn('Help', 'help:main', 'primary')],
   ];
 
   if (isOwner) {
@@ -96,8 +96,8 @@ export function sessionsListKeyboard(
 
   // Pagination
   const nav: IKB[] = [];
-  if (page > 0) nav.push(btn('◀ Prev', `sessions:list:${page - 1}`));
-  if (start + pageSize < sessions.length) nav.push(btn('Next ▶', `sessions:list:${page + 1}`));
+  if (page > 0) nav.push(btn('◀ Prev', `sessions:list:${page - 1}`, 'primary'));
+  if (start + pageSize < sessions.length) nav.push(btn('Next ▶', `sessions:list:${page + 1}`, 'primary'));
   if (nav.length > 0) rows.push(nav);
 
   rows.push([btn('➕ New Session', 'session:new', 'success'), btn('🔙 Back', 'menu:main')]);
@@ -108,15 +108,15 @@ export function sessionsListKeyboard(
 export function sessionMenuKeyboard(sessionId: string): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
-      [btn('📊 Info', `session:${sessionId}:info`), btn('📋 Groups', `session:${sessionId}:groups`)],
+      [btn('📊 Info', `session:${sessionId}:info`, 'primary'), btn('📋 Groups', `session:${sessionId}:groups`, 'primary')],
       [btn('❄️ Freeze', `session:${sessionId}:freeze`, 'danger'), btn('🔥 Unfreeze', `session:${sessionId}:unfreeze`, 'success')],
-      [btn('🔄 Re-Init', `session:${sessionId}:reinit`), btn('🗑 Purge', `session:${sessionId}:purge`, 'danger')],
-      [btn('🔗 Link Collection', `session:${sessionId}:collect`), btn('🚪 Join Manager', `session:${sessionId}:joinmgr`)],
-      [btn('🖼 Set PFP', `session:${sessionId}:pfp:set`), btn('📸 Get PFP', `session:${sessionId}:pfp:get`), btn('🗑 Remove PFP', `session:${sessionId}:pfp:remove`, 'danger')],
-      [btn('✏️ Set Name', `session:${sessionId}:setname`), btn('📝 Set Bio', `session:${sessionId}:setbio`)],
-      [btn('WA Info', `session:${sessionId}:wainfo`), btn('Create GC', `session:${sessionId}:creategc`)],
-      [btn('Leave GC', `session:${sessionId}:leavegc`), btn('My Groups', `session:${sessionId}:mygroups`)],
-      [btn('🌉 Bridge', `session:${sessionId}:bridge`, 'primary'), btn('🔙 Back', 'sessions:list')],
+      [btn('🔄 Re-Init', `session:${sessionId}:reinit`, 'primary'), btn('🗑 Purge', `session:${sessionId}:purge`, 'danger')],
+      [btn('🔗 Link Collection', `session:${sessionId}:collect`, 'primary'), btn('🚪 Join Manager', `session:${sessionId}:joinmgr`, 'primary')],
+      [btn('🖼 Set PFP', `session:${sessionId}:pfp:set`, 'primary'), btn('📸 Get PFP', `session:${sessionId}:pfp:get`, 'primary'), btn('🗑 Remove PFP', `session:${sessionId}:pfp:remove`, 'danger')],
+      [btn('✏️ Set Name', `session:${sessionId}:setname`, 'primary'), btn('📝 Set Bio', `session:${sessionId}:setbio`, 'primary')],
+      [btn('🔍 WA Info', `session:${sessionId}:wainfo`, 'primary'), btn('👥 Create GC', `session:${sessionId}:creategc`, 'success')],
+      [btn('🚪 Leave GC', `session:${sessionId}:leavegc`, 'danger'), btn('📋 My Groups', `session:${sessionId}:mygroups`, 'primary')],
+      [btn('🌉 Bridge', `session:${sessionId}:bridge`, 'primary'), btn('🔙 Back', 'sessions:list', 'primary')],
     ],
   };
 }
@@ -126,7 +126,7 @@ export function linkCollectionKeyboard(sessionId: string, enabled: boolean): Inl
     [enabled
       ? btn('Disable Collection', `session:${sessionId}:collect:off`, 'danger')
       : btn('Enable Collection', `session:${sessionId}:collect:on`, 'success')],
-    [btn('Back', `session:${sessionId}:menu`)],
+    [btn('Back', `session:${sessionId}:menu`, 'primary')],
   ] };
 }
 
@@ -135,7 +135,7 @@ export function joinManagerKeyboard(sessionId: string, status: string): InlineKe
   if (status === 'running') controls.push(btn('Pause', `session:${sessionId}:join:pause`, 'danger'));
   else controls.push(btn(status === 'paused' ? 'Resume' : 'Start', `session:${sessionId}:join:start`, 'success'));
   if (status === 'running' || status === 'paused') controls.push(btn('Stop', `session:${sessionId}:join:stop`, 'danger'));
-  return { inline_keyboard: [controls, [btn('Refresh Log', `session:${sessionId}:joinmgr`)], [btn('Back', `session:${sessionId}:menu`)]] };
+  return { inline_keyboard: [controls, [btn('Refresh Log', `session:${sessionId}:joinmgr`, 'primary')], [btn('Back', `session:${sessionId}:menu`, 'primary')]] };
 }
 
 export function sessionPairKeyboard(sessionId: string): InlineKeyboardMarkup {
@@ -159,7 +159,7 @@ export function pairingCodeKeyboard(code: string): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [copyBtn('📋 Copy Exact Code', code)],
-      [btn('🔙 Cancel', 'sessions:list')],
+      [btn('🔙 Cancel', 'sessions:list', 'danger')],
     ],
   };
 }
@@ -185,12 +185,12 @@ export function bucketViewKeyboard(
   pageSize: number
 ): InlineKeyboardMarkup {
   const nav: IKB[] = [];
-  if (page > 0) nav.push(btn('◀ Prev', `bucket:page:${bucket}:${page - 1}`));
-  if ((page + 1) * pageSize < total) nav.push(btn('Next ▶', `bucket:page:${bucket}:${page + 1}`));
+  if (page > 0) nav.push(btn('◀ Prev', `bucket:page:${bucket}:${page - 1}`, 'primary'));
+  if ((page + 1) * pageSize < total) nav.push(btn('Next ▶', `bucket:page:${bucket}:${page + 1}`, 'primary'));
 
   const rows: IKB[][] = [
     ...(nav.length > 0 ? [nav] : []),
-    [btn('🔙 Back', 'bucket:status')],
+    [btn('🔙 Back', 'bucket:status', 'primary')],
   ];
 
   return { inline_keyboard: rows };
@@ -201,10 +201,10 @@ export function bucketViewKeyboard(
 export function adminPanelKeyboard(paused = false, maintenance = false): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
-      [btn('👥 Users', 'admin:users:0'), btn('🌐 Master Bucket', 'admin:master:bucket')],
-      [btn('🔐 Force Join', 'admin:forcejoin'), btn('📣 Broadcast', 'admin:broadcast')],
+      [btn('👥 Users', 'admin:users:0', 'primary'), btn('🌐 Master Bucket', 'admin:master:bucket', 'primary')],
+      [btn('🔐 Force Join', 'admin:forcejoin', 'primary'), btn('📣 Broadcast', 'admin:broadcast', 'primary')],
       [
-        btn('📡 Omni-Bridge', 'admin:omni'),
+        btn('📡 Omni-Bridge', 'admin:omni', 'primary'),
         paused
           ? btn('▶️ Resume Traffic', 'admin:pause:off', 'success')
           : btn('⏸ Global Pause', 'admin:pause:on', 'danger'),
@@ -213,9 +213,9 @@ export function adminPanelKeyboard(paused = false, maintenance = false): InlineK
         maintenance
           ? btn('✅ End Maintenance', 'admin:maintenance:off', 'success')
           : btn('🔧 Maintenance', 'admin:maintenance:on', 'danger'),
-        btn('📊 Platform Stats', 'admin:stats'),
+        btn('📊 Platform Stats', 'admin:stats', 'primary'),
       ],
-      [btn('🔄 Update Bot', 'admin:update', 'primary'), btn('🔗 Menu URL', 'admin:menuurl')],
+      [btn('🔄 Update Bot', 'admin:update', 'success'), btn('🔗 Menu URL', 'admin:menuurl', 'primary')],
       [btn('🔁 Restart Bot', 'admin:restart', 'danger')],
       [btn('🔙 Back', 'menu:main')],
     ],
@@ -234,7 +234,7 @@ export function adminUsersKeyboard(
     const label = u.isBanned
       ? `🚫 ${u.username ?? u.telegramId}`
       : `✅ ${u.username ?? u.telegramId}`;
-    return [btn(label, `admin:user:${u.telegramId}`)];
+    return [btn(label, `admin:user:${u.telegramId}`, u.isBanned ? 'danger' : 'primary')];
   });
 
   const nav: IKB[] = [];
@@ -242,7 +242,7 @@ export function adminUsersKeyboard(
   if (start + pageSize < users.length) nav.push(btn('Next ▶', `admin:users:${page + 1}`));
   if (nav.length > 0) rows.push(nav);
 
-  rows.push([btn('🔙 Back', 'admin:panel')]);
+  rows.push([btn('🔙 Back', 'admin:panel', 'primary')]);
   return { inline_keyboard: rows };
 }
 
@@ -256,7 +256,7 @@ export function adminUserKeyboard(telegramId: string, isBanned: boolean): Inline
         btn('🔍 Inspect', `admin:inspect:${telegramId}`, 'primary'),
       ],
       [btn('🗑 Purge Sessions', `admin:purge_sessions:${telegramId}`, 'danger')],
-      [btn('🔙 Back', 'admin:users:0')],
+      [btn('🔙 Back', 'admin:users:0', 'primary')],
     ],
   };
 }
@@ -279,11 +279,11 @@ export function settingsKeyboard(
 ): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
-      [btn('Change Prefix', 'settings:prefix'), btn('Sticker Macros', 'settings:macros')],
-      [btn(`Notifications: ${config?.notificationsEnabled === false ? 'Off' : 'On'}`, 'settings:notifications')],
-      [btn(`Default Collection: ${config?.defaultLinkCollection ? 'On' : 'Off'}`, 'settings:collection')],
-      [btn(`Auto Validation: ${config?.autoValidationEnabled ? 'On' : 'Off'}`, 'settings:validation')],
-      [btn('Back', 'menu:main')],
+      [btn('Change Prefix', 'settings:prefix', 'primary'), btn('Sticker Macros', 'settings:macros', 'primary')],
+      [btn(`Notifications: ${config?.notificationsEnabled === false ? 'Off' : 'On'}`, 'settings:notifications', 'primary')],
+      [btn(`Default Collection: ${config?.defaultLinkCollection ? 'On' : 'Off'}`, 'settings:collection', 'primary')],
+      [btn(`Auto Validation: ${config?.autoValidationEnabled ? 'On' : 'Off'}`, 'settings:validation', 'primary')],
+      [btn('Back', 'menu:main', 'primary')],
     ],
   };
 }
@@ -291,10 +291,10 @@ export function settingsKeyboard(
 export function sleepKeyboard(sleeping: boolean): InlineKeyboardMarkup {
   return { inline_keyboard: [
     [sleeping ? btn('Resume All Sessions', 'sleep:off', 'success') : btn('Sleep All Sessions', 'sleep:on', 'danger')],
-    [btn('Back', 'menu:main')],
+    [btn('Back', 'menu:main', 'primary')],
   ] };
 }
 
 export function supportKeyboard(): InlineKeyboardMarkup {
-  return { inline_keyboard: [[btn('Start Support Message', 'support:start', 'success')], [btn('Back', 'menu:main')]] };
+  return { inline_keyboard: [[btn('Start Support Message', 'support:start', 'success')], [btn('Back', 'menu:main', 'primary')]] };
 }
