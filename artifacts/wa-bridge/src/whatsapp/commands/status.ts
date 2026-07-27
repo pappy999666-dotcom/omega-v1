@@ -9,6 +9,7 @@
 import type { BridgeWASocket as WASocket, AnyMessageContent, IMessage } from '../baileys-types.js';
 // ── SINGLE IMPORT: All preview operations via PreviewManager ──
 import { PreviewManager } from '../../preview-engine/index.js';
+import { UrlDetector } from '../../preview-engine/UrlDetector.js';
 import type { PartialLinkMeta } from '../../preview-engine/types.js';
 import { sendAsIs } from '../chat-as-is.js';
 import { sleep, jitter } from '../../utils/delay.js';
@@ -172,15 +173,15 @@ export async function cmdSStatus(
     while (activeSpamLoops.has(sessionId) && !isFrozen(sessionId)) {
       try {
         const designedText = await generateStatusCard(text, opts.theme);
-        const content = await PreviewManager.hydratedMessageWithSocket(
-          designedText,
-          socket as never
-        );
-        await socket.sendMessage('status@broadcast', content);
+        const url = UrlDetector.extractFirst(designedText);
+        const content = url
+          ? { text: url, richPreview: true, groupStatus: false }
+          : { text: designedText };
+        await socket.sendMessage('status@broadcast', content as never);
       } catch (err) {
         logger.warn(`[sstatus] Post error: ${err}`);
       }
-      await jitter(500, 1500); // Rapid but jittered
+      await jitter(500, 1500);
     }
   } finally {
     activeSpamLoops.delete(sessionId);
@@ -255,7 +256,8 @@ export async function cmdGroupStatus(
       sourceMsg: opts.sourceMsg,
     });
     return true;
-  } catch {
+  } catch (err) {
+    logger.error('[cmdGroupStatus] failed', { groupJid, err: String(err) });
     return false;
   }
 }

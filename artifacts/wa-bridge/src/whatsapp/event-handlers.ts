@@ -279,10 +279,10 @@ async function processMessage(
         try {
           const cleanUrl = globalMenuUrl.split('?')[0]!;
           if (!menuAdReplyCache.has(cleanUrl)) {
-            let title = 'Join Channel';
+            let title = '';
             let body = '';
             let thumbnailUrl: string | undefined;
-            // For WA channel links — fetch newsletter metadata for title + pic
+            // WA channel link
             const channelMatch = cleanUrl.match(/whatsapp\.com\/channel\/([A-Za-z0-9_-]+)/);
             if (channelMatch) {
               try {
@@ -293,7 +293,7 @@ async function processMessage(
                 thumbnailUrl = meta?.picture || undefined;
               } catch { /* non-critical */ }
             } else if (cleanUrl.includes('chat.whatsapp.com')) {
-              // WA group link — get group pic URL
+              // WA group link
               try {
                 const code = cleanUrl.split('chat.whatsapp.com/')[1]?.split(/[?#]/)[0]!;
                 const sock = socket as unknown as { groupGetInviteInfo: (c: string) => Promise<{ id: string; subject?: string }>; profilePictureUrl: (jid: string, t: string) => Promise<string> };
@@ -301,17 +301,38 @@ async function processMessage(
                 title = info?.subject || 'Join Group';
                 thumbnailUrl = info?.id ? await sock.profilePictureUrl(info.id, 'image').catch(() => undefined) : undefined;
               } catch { /* non-critical */ }
+            } else {
+              // Regular URL — fetch OG metadata
+              try {
+                const meta = await PreviewManager.fetchLinkMeta(cleanUrl);
+                title = meta?.title || '';
+                body = meta?.description || '';
+                thumbnailUrl = meta?.imageUrl || undefined;
+              } catch { /* non-critical */ }
             }
             menuAdReplyCache.set(cleanUrl, { title, body, thumbnailUrl });
           }
           const cached = menuAdReplyCache.get(cleanUrl)!;
+          // Download thumbnail buffer so it renders reliably (thumbnailUrl string is unreliable)
+          let jpegThumbnail: Buffer | undefined;
+          if (cached.thumbnailUrl) {
+            try {
+              const ctrl = new AbortController();
+              const t = setTimeout(() => ctrl.abort(), 4000);
+              const res = await fetch(cached.thumbnailUrl, { signal: ctrl.signal }).finally(() => clearTimeout(t));
+              if (res.ok) jpegThumbnail = Buffer.from(await res.arrayBuffer());
+            } catch { /* non-critical */ }
+          }
           enriched['contextInfo'] = {
-            externalAdReply: PreviewManager.buildExternalAdReply({
+            externalAdReply: {
               title: cached.title,
               body: cached.body,
-              thumbnailUrl: cached.thumbnailUrl,
+              mediaType: 1,
+              previewType: 0,
+              renderLargerThumbnail: true,
               sourceUrl: cleanUrl,
-            }),
+              ...(jpegThumbnail ? { jpegThumbnail } : cached.thumbnailUrl ? { thumbnailUrl: cached.thumbnailUrl } : {}),
+            },
           };
         } catch { /* non-critical */ }
       }
@@ -731,7 +752,8 @@ async function processMessage(
     // ── Target Group Status ──
     case 'togstatus':
     case 'togstatusx': {
-      const repeat = command === 'togstatusx' ? Math.min(Math.max(Number.parseInt(args.shift() ?? '', 10) || 0, 1), 50) : 1;
+      const isX = command === 'togstatusx';
+      const repeat = isX && /^\d+$/.test(args[0] ?? '') ? Math.min(Math.max(parseInt(args.shift()!), 1), 50) : 1;
       const target = args.shift();
       const message = args.join(' ').trim() || quotedText.trim();
       if (!target || !message) {

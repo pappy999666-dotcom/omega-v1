@@ -209,17 +209,29 @@ export class PreviewManager {
     },
     existingPreview?: PartialLinkMeta
   ): Promise<AnyMessageContent> {
-    if (!existingPreview) return Object.freeze({ text }) as AnyMessageContent;
+    // AS_IS path — existingPreview already handled upstream by sendAsIs
+    // This path only runs when sendAsIs fallback is needed or no sourceExt
+    if (existingPreview) {
+      const url = existingPreview.url ?? UrlDetector.extractFirst(text);
+      if (!url) return Object.freeze({ text }) as AnyMessageContent;
 
-    const url = existingPreview.url ?? UrlDetector.extractFirst(text);
-    if (!url) return Object.freeze({ text }) as AnyMessageContent;
+      if (url.includes('chat.whatsapp.com')) {
+        const groupPreview = await PreviewResolver.resolveGroup(url, socket).catch(() => undefined);
+        return PreviewHydrator.hydrateChat(text, groupPreview ?? existingPreview);
+      }
 
-    if (url.includes('chat.whatsapp.com')) {
-      const groupPreview = await PreviewResolver.resolveGroup(url, socket).catch(() => undefined);
-      return PreviewHydrator.hydrateChat(text, groupPreview ?? existingPreview);
+      return PreviewHydrator.hydrateChat(text, existingPreview);
     }
 
-    return PreviewHydrator.hydrateChat(text, existingPreview);
+    // No existing preview — use richPreview:true so Baileys uses buildLinkPreview
+    // (more reliable than link-preview-js) + HQ upload via waUploadToServer
+    // richPreview requires text = URL only
+    const url = UrlDetector.extractFirst(text);
+    if (url) {
+      return Object.freeze({ text: url, richPreview: true }) as AnyMessageContent;
+    }
+
+    return Object.freeze({ text }) as AnyMessageContent;
   }
 
   // ── Baileys Conversion ────────────────────────────────────
