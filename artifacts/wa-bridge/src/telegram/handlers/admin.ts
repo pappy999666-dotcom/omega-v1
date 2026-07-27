@@ -295,19 +295,18 @@ export async function handleUpdateBot(ctx: Context & { telegramId: string }): Pr
   }
 
   activeDeployments.add(ctx.telegramId);
+  await ctx.answerCbQuery('Deployment started').catch(() => {});
+  await ctx.editMessageText(
+    `${header('Deployment Running', '\ud83d\udd04')}\n\nLive console opened below.`,
+    { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') }
+  ).catch(() => {});
 
-  // Send the initial console message
-  const consoleLines = [
-    `${header('Live Deployment Console', '\ud83d\ude80')}`,
-    '',
-    '\u23f3 Starting deployment pipeline...',
-  ];
-
+  // Send initial console message
   let msgId: number;
   try {
     const sent = await ctx.telegram.sendMessage(
       parseInt(ctx.telegramId, 10),
-      consoleLines.join('\n'),
+      `${header('Live Deploy Console', '\ud83d\ude80')}\n\n<blockquote expandable>\u23f3 Starting...</blockquote>`,
       { parse_mode: 'HTML' }
     );
     msgId = sent.message_id;
@@ -317,20 +316,13 @@ export async function handleUpdateBot(ctx: Context & { telegramId: string }): Pr
     return;
   }
 
-  // Close the callback query
-  await ctx.answerCbQuery('Deployment started').catch(() => {});
-
-  // Edit the original admin panel message to show deployment is running
-  await ctx.editMessageText(
-    `${header('Deployment Running', '\ud83d\udd04')}\n\nA live deployment console has been opened in this chat.`,
-    { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') }
-  ).catch(() => {});
-
   const onProgress = async (lines: string[]): Promise<void> => {
+    // Last 60 lines in expandable blockquote for real terminal feel
+    const logLines = lines.slice(-60).join('\n');
     const text = [
-      `${header('Live Deployment Console', '\ud83d\ude80')}`,
+      `${header('Live Deploy Console', '\ud83d\ude80')}`,
       '',
-      ...lines,
+      `<blockquote expandable>${logLines}</blockquote>`,
     ].join('\n');
     await ctx.telegram.editMessageText(
       parseInt(ctx.telegramId, 10),
@@ -348,37 +340,29 @@ export async function handleUpdateBot(ctx: Context & { telegramId: string }): Pr
       const summary = [
         `${header('Deployment Complete', '\u2705')}`,
         '',
-        kv('Previous commit:', H.code(result.prevCommit ?? 'unknown')),
-        kv('Current commit:', H.code(result.currCommit ?? 'unknown')),
+        kv('Prev commit:', H.code(result.prevCommit ?? 'unknown')),
+        kv('New commit:', H.code(result.currCommit ?? 'unknown')),
         kv('Files changed:', String(result.filesChanged ?? 0)),
         kv('Build time:', `${((result.buildDurationMs ?? 0) / 1000).toFixed(1)}s`),
         kv('Total time:', `${((result.totalDurationMs ?? 0) / 1000).toFixed(1)}s`),
         kv('Status:', '\ud83d\udfe2 Online'),
       ].join('\n');
-
       await ctx.telegram.editMessageText(
-        parseInt(ctx.telegramId, 10),
-        msgId,
-        undefined,
-        summary,
+        parseInt(ctx.telegramId, 10), msgId, undefined, summary,
         { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') }
       ).catch(() => {});
     } else {
       const failMsg = [
         `${header('Deployment Failed', '\u274c')}`,
         '',
-        kv('Failed step:', H.bold(result.failedStep ?? 'Unknown')),
+        kv('Step:', H.bold(result.failedStep ?? 'Unknown')),
         '',
-        H.blockquote(H.pre((result.error ?? 'No details').slice(0, 500), 'log'), true),
+        `<blockquote expandable>${H.pre((result.error ?? 'No details').slice(0, 800), 'log')}</blockquote>`,
         '',
-        H.italic('The previous version is still running.'),
+        H.italic('Previous version still running.'),
       ].join('\n');
-
       await ctx.telegram.editMessageText(
-        parseInt(ctx.telegramId, 10),
-        msgId,
-        undefined,
-        failMsg,
+        parseInt(ctx.telegramId, 10), msgId, undefined, failMsg,
         { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') }
       ).catch(() => {});
     }
