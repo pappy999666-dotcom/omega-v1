@@ -648,7 +648,7 @@ export function createBot(): Telegraf<BotContext> {
           groupParticipantsUpdate(jid: string, p: string[], action: string): Promise<unknown>;
         };
         const meta = await sock.groupMetadata(gcJid);
-        const member = meta.participants.find((p) => (p.id.split('@')[0] ?? '').split(':')[0] === digits);
+        const member = meta.participants.find((p) => { const pNum = (p.id.split('@')[0]??'').split(':')[0]; const pPhone = (p as unknown as {phoneNumber?:string}).phoneNumber?.replace(/[^0-9]/g,'') || ''; return pNum === digits || pPhone === digits; });
         if (!member) throw new Error(`+${digits} is not in the group`);
         if (!member.admin) throw new Error(`+${digits} is not an admin`);
         await sock.groupParticipantsUpdate(gcJid, [member.id], 'demote');
@@ -1050,7 +1050,8 @@ export function createBot(): Telegraf<BotContext> {
     const [action, ...params] = data.split(':');
 
     try {
-      await ctx.answerCbQuery().catch(() => {});
+      // gcset handles its own answerCbQuery with show_alert for feedback
+      if (action !== 'gcset') await ctx.answerCbQuery().catch(() => {});
       await routeCallback(bc, action!, params);
     } catch (err) {
       logger.error('[Bot] Callback error', { data, err: String(err) });
@@ -1491,22 +1492,29 @@ async function routeCallback(
       const mode = params[3] === 'on' ? 'on' : 'off';
       try {
         await sock.groupJoinApprovalMode(gcJid, mode);
-        await ctx.answerCbQuery(`Join Approval ${mode === 'on' ? 'ON' : 'OFF'}`, { show_alert: true }).catch(() => {});
+        await ctx.answerCbQuery(`✅ Join Approval ${mode === 'on' ? 'ON' : 'OFF'}`, { show_alert: true }).catch(() => {});
+        await ctx.editMessageText(
+          noticeCard(`Join Approval ${mode === 'on' ? 'Enabled' : 'Disabled'}`, mode === 'on' ? 'New members must be approved before joining.' : 'Anyone with the link can join freely.', 'success'),
+          { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${storeGcJid(sessionId, gcJid)}`) }
+        ).catch(() => {});
       } catch (err) {
         await ctx.answerCbQuery(`Failed: ${String(err).slice(0, 50)}`, { show_alert: true }).catch(() => {});
       }
-      await routeCallback(ctx, 'gcset', [sessionId, storeGcJid(sessionId, gcJid)]);
       return;
     }
     if (sub2 === 'memberadd') {
+      const label = params[3] === 'on' ? 'All Members Can Add' : 'Admins Only Can Add';
       const mode = params[3] === 'on' ? 'all_member_add' : 'admin_add';
       try {
         await sock.groupMemberAddMode(gcJid, mode);
-        await ctx.answerCbQuery(`Member Add: ${params[3] === 'on' ? 'All Members' : 'Admins Only'}`, { show_alert: true }).catch(() => {});
+        await ctx.answerCbQuery(`✅ ${label}`, { show_alert: true }).catch(() => {});
+        await ctx.editMessageText(
+          noticeCard('Member Add Mode Updated', label, 'success'),
+          { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${storeGcJid(sessionId, gcJid)}`) }
+        ).catch(() => {});
       } catch (err) {
         await ctx.answerCbQuery(`Failed: ${String(err).slice(0, 50)}`, { show_alert: true }).catch(() => {});
       }
-      await routeCallback(ctx, 'gcset', [sessionId, storeGcJid(sessionId, gcJid)]);
       return;
     }
     if (sub2 === 'leave') {
