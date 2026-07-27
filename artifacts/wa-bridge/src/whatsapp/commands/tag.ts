@@ -72,23 +72,22 @@ export async function cmdTag(
       } else {
         content = { image: opts.mediaBuffer, caption: text, mentions: participants };
       }
+      await socket.sendMessage(groupJid, content);
     } else if (opts.sourceExt) {
       // As-is relay — WA-built preview relayed verbatim via likeThis
       const sent = await sendAsIs(socket, groupJid, text, opts.sourceExt, { mentions: participants });
       if (sent) return { success: true, pinged: participants.length };
       // fallthrough if likeThis failed
-      content = {
-        ...(await PreviewManager.buildChatPreview(text, socket as never, opts.existingPreview)),
-        mentions: participants,
-      };
+      await PreviewManager.send(socket as any, groupJid, text, {
+        existingPreview: opts.existingPreview,
+        extra: { mentions: participants },
+      });
     } else {
-      content = {
-        ...(await PreviewManager.buildChatPreview(text, socket as never, opts.existingPreview)),
-        mentions: participants,
-      };
+      await PreviewManager.send(socket as any, groupJid, text, {
+        existingPreview: opts.existingPreview,
+        extra: { mentions: participants },
+      });
     }
-
-    await Promise.all([socket.sendMessage(groupJid, content)]);
     logger.info(`[Tag] Hidetag sent to ${groupJid} — ${participants.length} pinged`);
 
     return { success: true, pinged: participants.length };
@@ -144,15 +143,15 @@ export async function cmdMTag(
       if (opts.sourceExt) {
         const sent = await sendAsIs(socket, groupJid, fullText, opts.sourceExt, { mentions: chunk });
         if (!sent) {
-          await socket.sendMessage(groupJid, {
-            ...(await PreviewManager.buildChatPreview(fullText, socket as never, opts.existingPreview)),
-            mentions: chunk,
+          await PreviewManager.send(socket as any, groupJid, fullText, {
+            existingPreview: opts.existingPreview,
+            extra: { mentions: chunk },
           });
         }
       } else {
-        await socket.sendMessage(groupJid, {
-          ...(await PreviewManager.buildChatPreview(fullText, socket as never, opts.existingPreview)),
-          mentions: chunk,
+        await PreviewManager.send(socket as any, groupJid, fullText, {
+          existingPreview: opts.existingPreview,
+          extra: { mentions: chunk },
         });
       }
 

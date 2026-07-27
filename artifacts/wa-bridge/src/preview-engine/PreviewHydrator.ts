@@ -26,7 +26,7 @@ export class PreviewHydrator {
       canonicalUrl: meta.canonicalUrl ?? matchedText,
       title: meta.title ?? '',
       description: meta.description ?? '',
-      jpegThumbnail: meta.thumbnail ? new Uint8Array(meta.thumbnail) : undefined,
+      jpegThumbnail: meta.thumbnail ? Buffer.from(meta.thumbnail) : undefined,
     };
   }
 
@@ -111,7 +111,7 @@ export class PreviewHydrator {
       extMsg['previewType'] = previewType;
 
       if (meta.thumbnail) {
-        extMsg['jpegThumbnail'] = meta.thumbnail;
+        extMsg['jpegThumbnail'] = Buffer.from(meta.thumbnail);
       }
 
       if (hqThumbnail) {

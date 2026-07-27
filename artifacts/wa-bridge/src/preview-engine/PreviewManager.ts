@@ -113,9 +113,9 @@ export class PreviewManager {
         if (thumb) {
           const normalized = await ThumbnailResolver.normalize(thumb);
           if (normalized) {
-            return { ...meta, thumbnail: new Uint8Array(normalized) };
+            return { ...meta, thumbnail: Buffer.from(normalized) };
           }
-          return { ...meta, thumbnail: thumb };
+          return { ...meta, thumbnail: Buffer.from(thumb) };
         }
       }
       return meta;
@@ -190,7 +190,13 @@ export class PreviewManager {
     }
 
     // All other URLs: use existingPreview if available, else fetch fresh
-    return PreviewHydrator.hydrateChat(text, existingPreview);
+    // Clone existing preview to prevent mutation and ensure Buffer
+    const clonedPreview = existingPreview ? {
+      ...existingPreview,
+      thumbnail: existingPreview.thumbnail ? Buffer.from(existingPreview.thumbnail) : undefined
+    } : undefined;
+
+    return PreviewHydrator.hydrateChat(text, clonedPreview);
   }
 
   // ── Chat Preview Builder ──────────────────────────────────
@@ -220,7 +226,13 @@ export class PreviewManager {
         return PreviewHydrator.hydrateChat(text, groupPreview ?? existingPreview);
       }
 
-      return PreviewHydrator.hydrateChat(text, existingPreview);
+      // Clone existing preview to prevent mutation and ensure Buffer
+      const clonedPreview = {
+        ...existingPreview,
+        thumbnail: existingPreview.thumbnail ? Buffer.from(existingPreview.thumbnail) : undefined
+      };
+
+      return PreviewHydrator.hydrateChat(text, clonedPreview);
     }
 
     // No existing preview — use richPreview:true so Baileys uses buildLinkPreview

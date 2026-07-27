@@ -128,7 +128,12 @@ export class PreviewCache {
     const key = this.normalizeKey(url);
     evictLRU(this.hqCache as unknown as Map<string, { expiresAt: number; insertedAt: number }>, MAX_HQ_ENTRIES);
     const now = Date.now();
-    this.hqCache.set(key, { data, expiresAt: now + HQ_THUMBNAIL_TTL_MS, insertedAt: now });
+    // Deep freeze HQ data to prevent mutation
+    const frozen = Object.freeze({
+      ...data,
+      ...(data['jpegThumbnail'] instanceof Uint8Array ? { jpegThumbnail: new Uint8Array(data['jpegThumbnail']) } : {}),
+    });
+    this.hqCache.set(key, { data: frozen, expiresAt: now + HQ_THUMBNAIL_TTL_MS, insertedAt: now });
     PreviewLogger.cacheSet(url, 'hq');
   }
 

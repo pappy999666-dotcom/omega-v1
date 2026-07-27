@@ -176,7 +176,7 @@ export async function sendGroupStatus(
         };
       } catch (err) {
         logger.warn('[GroupStatus] HQ upload failed during passthrough', { err: String(err) });
-        preview = { url, title: options.existingPreview.title || '', description: options.existingPreview.description || '', smallThumb: Buffer.from(options.existingPreview.thumbnail), hq: null };
+        preview = { url, title: options.existingPreview.title || '', description: options.existingPreview.description || '', smallThumb: buf, hq: null };
       }
     } else {
       preview = await buildStatusPreview(url, sock);
@@ -186,7 +186,7 @@ export async function sendGroupStatus(
       url: preview?.url ?? url,
       title: preview?.title ?? '',
       description: preview?.description ?? '',
-      thumbnail: preview?.smallThumb ? new Uint8Array(preview.smallThumb) : undefined,
+      thumbnail: preview?.smallThumb ? Buffer.from(preview.smallThumb) : undefined,
     }, preview?.hq ?? undefined);
 
     const { generateMessageIDV2 } = await getBaileys();

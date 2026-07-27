@@ -114,14 +114,44 @@ export class PayloadBuilder {
     if (c['linkPreview']) {
       const lp = c['linkPreview'] as Record<string, unknown>;
       const thumb = lp['jpegThumbnail'];
+      const hq = lp['highQualityThumbnail'] as Record<string, unknown> | undefined;
       const newLp = Object.freeze({
         ...lp,
         ...(thumb instanceof Uint8Array ? { jpegThumbnail: new Uint8Array(thumb) } : {}),
+        ...(hq ? {
+          highQualityThumbnail: Object.freeze({
+            ...hq,
+            ...(hq['jpegThumbnail'] instanceof Uint8Array ? { jpegThumbnail: new Uint8Array(hq['jpegThumbnail']) } : {}),
+          })
+        } : {}),
       });
       return Object.freeze({
         ...payload,
         content: Object.freeze({ ...c, linkPreview: newLp }) as AnyMessageContent,
       }) as PreviewPayload;
+    }
+
+    // Clone groupStatusMessageV2 if present
+    if (c['groupStatusMessageV2']) {
+      const gs = (c['groupStatusMessageV2'] as any).message?.extendedTextMessage;
+      if (gs) {
+        const thumb = gs.jpegThumbnail;
+        const newGs = Object.freeze({
+          ...gs,
+          ...(thumb instanceof Uint8Array ? { jpegThumbnail: new Uint8Array(thumb) } : {}),
+        });
+        return Object.freeze({
+          ...payload,
+          content: Object.freeze({
+            ...c,
+            groupStatusMessageV2: {
+              message: {
+                extendedTextMessage: newGs
+              }
+            }
+          }) as AnyMessageContent,
+        }) as PreviewPayload;
+      }
     }
 
     // Clone extra fields

@@ -85,7 +85,7 @@ export async function cmdToChat(
   sessionId: string,
   target: string,
   text: string,
-  opts: { mediaBuffer?: Buffer; mediaType?: string; sourceExt?: NonNullable<IMessage['extendedTextMessage']> } = {}
+  opts: { mediaBuffer?: Buffer; mediaType?: string; existingPreview?: PartialLinkMeta; sourceExt?: NonNullable<IMessage['extendedTextMessage']> } = {}
 ): Promise<{ success: boolean; error?: string }> {
   if (isFrozen(sessionId)) {
     return { success: false, error: 'Session frozen' };
@@ -97,9 +97,9 @@ export async function cmdToChat(
       await socket.sendMessage(jid, buildMediaContent(opts.mediaBuffer, opts.mediaType ?? 'image', text));
     } else if (opts.sourceExt) {
       const sent = await sendAsIs(socket, jid, text, opts.sourceExt);
-      if (!sent) await socket.sendMessage(jid, await PreviewManager.buildChatPreview(text, socket as never));
+      if (!sent) await socket.sendMessage(jid, await PreviewManager.buildChatPreview(text, socket as never, opts.existingPreview));
     } else {
-      await socket.sendMessage(jid, await PreviewManager.buildChatPreview(text, socket as never));
+      await socket.sendMessage(jid, await PreviewManager.buildChatPreview(text, socket as never, opts.existingPreview));
     }
     logger.info(`[tochat] ${sessionId} → ${jid}`);
     return { success: true };
@@ -117,7 +117,7 @@ export async function cmdToChatX(
   target: string,
   count: number,
   text: string,
-  opts: { sourceExt?: NonNullable<IMessage['extendedTextMessage']> } = {}
+  opts: { existingPreview?: PartialLinkMeta; sourceExt?: NonNullable<IMessage['extendedTextMessage']> } = {}
 ): Promise<{ sent: number; failed: number }> {
   if (isFrozen(sessionId)) return { sent: 0, failed: count };
 
@@ -132,9 +132,9 @@ export async function cmdToChatX(
       try {
         if (opts.sourceExt) {
           const sent = await sendAsIs(socket, jid, text, opts.sourceExt);
-          if (!sent) await socket.sendMessage(jid, await PreviewManager.buildChatPreview(text, socket as never));
+          if (!sent) await socket.sendMessage(jid, await PreviewManager.buildChatPreview(text, socket as never, opts.existingPreview));
         } else {
-          const content = await PreviewManager.buildChatPreview(text, socket as never);
+          const content = await PreviewManager.buildChatPreview(text, socket as never, opts.existingPreview);
           await socket.sendMessage(jid, content);
         }
         sent++;
@@ -159,7 +159,7 @@ export async function cmdSStatus(
   socket: WASocket,
   sessionId: string,
   text: string,
-  opts: { theme?: string } = {}
+  opts: { theme?: string; existingPreview?: PartialLinkMeta } = {}
 ): Promise<void> {
   if (activeSpamLoops.has(sessionId)) {
     logger.warn(`[sstatus] Loop already running for ${sessionId}`);
@@ -173,11 +173,14 @@ export async function cmdSStatus(
     while (activeSpamLoops.has(sessionId) && !isFrozen(sessionId)) {
       try {
         const designedText = await generateStatusCard(text, opts.theme);
-        const url = UrlDetector.extractFirst(designedText);
-        const content = url
-          ? { text: url, richPreview: true, groupStatus: false }
-          : { text: designedText };
-        await socket.sendMessage('status@broadcast', content as never);
+        const content = await PreviewManager.hydratedMessageWithSocket(
+          designedText,
+          socket as never,
+          opts.existingPreview
+        );
+        await socket.sendMessage('status@broadcast', content, {
+          statusJidList: undefined,
+        });
       } catch (err) {
         logger.warn(`[sstatus] Post error: ${err}`);
       }

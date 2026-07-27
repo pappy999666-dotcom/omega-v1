@@ -283,33 +283,21 @@ async function processMessage(
     const globalMenuUrl = getGlobalMenuUrl();
     const mentions = await getGroupParticipants();
 
-    // Build reply content via PreviewManager — Baileys normal path calls getUrlInfo automatically
-    // if replyText contains a URL, so just pass text as-is through the centralized pipeline
-    const content = await PreviewManager.hydratedMessage(replyText).catch(() => ({ text: replyText }));
-    const enriched: Record<string, unknown> = { ...content as Record<string, unknown> };
-
-    // CLEANUP: If we have a global menu URL, and it is present in the reply text,
-    // we suppress it from the visible text to keep the UI clean (premium requirement).
-    // The preview card (externalAdReply) will still show the link.
     let visibleText = replyText;
-    if (globalMenuUrl) {
-      const cleanMenuUrl = globalMenuUrl.split('?')[0]!;
-      if (visibleText.includes(cleanMenuUrl)) {
-        // Remove the URL and any surrounding whitespace/newlines
-        visibleText = visibleText.replace(cleanMenuUrl, '').replace(/\n\s*\n/g, '\n').trim();
-        (enriched as { text: string }).text = visibleText;
-      }
-    }
-    if (mentions.length > 0) enriched['mentions'] = mentions;
+    let externalAdReply: Record<string, unknown> | undefined;
 
     // Menu URL — attach as externalAdReply card on every command reply
-    // Uses contextInfo.externalAdReply with thumbnailUrl (WA fetches image itself)
-    // Cached permanently after first fetch
     if (globalMenuUrl) {
       const isJid = globalMenuUrl.includes('@g.us') || globalMenuUrl.includes('@newsletter') || globalMenuUrl.includes('@s.whatsapp.net');
       if (!isJid) {
         try {
           const cleanUrl = globalMenuUrl.split('?')[0]!;
+          
+          // Clean up visible text
+          if (visibleText.includes(cleanUrl)) {
+            visibleText = visibleText.replace(cleanUrl, '').replace(/\n\s*\n/g, '\n').trim();
+          }
+
           if (!menuAdReplyCache.has(cleanUrl)) {
             let title = '';
             let body = '';
@@ -344,37 +332,36 @@ async function processMessage(
             }
             menuAdReplyCache.set(cleanUrl, { title, body, thumbnailUrl });
           }
+          
           const cached = menuAdReplyCache.get(cleanUrl)!;
-          // Download thumbnail buffer so it renders reliably (thumbnailUrl string is unreliable)
           let jpegThumbnail: Buffer | undefined;
           if (cached.thumbnailUrl) {
             try {
-              const ctrl = new AbortController();
-              const t = setTimeout(() => ctrl.abort(), 4000);
-              const res = await fetch(cached.thumbnailUrl, { signal: ctrl.signal }).finally(() => clearTimeout(t));
-              if (res.ok) jpegThumbnail = Buffer.from(await res.arrayBuffer());
+              const thumb = await PreviewManager.fetchThumbnail(cached.thumbnailUrl);
+              if (thumb) jpegThumbnail = Buffer.from(thumb);
             } catch { /* non-critical */ }
           }
-          enriched['contextInfo'] = {
-            externalAdReply: {
-              title: cached.title,
-              body: cached.body,
-              mediaType: 1,
-              previewType: 0,
-              renderLargerThumbnail: true,
-              sourceUrl: cleanUrl,
-              ...(jpegThumbnail ? { jpegThumbnail } : cached.thumbnailUrl ? { thumbnailUrl: cached.thumbnailUrl } : {}),
-            },
-          };
+
+          externalAdReply = PreviewManager.buildExternalAdReply({
+            title: cached.title,
+            body: cached.body,
+            sourceUrl: cleanUrl,
+          });
+
+          if (jpegThumbnail) {
+            (externalAdReply as any).jpegThumbnail = jpegThumbnail;
+          } else if (cached.thumbnailUrl) {
+            (externalAdReply as any).thumbnailUrl = cached.thumbnailUrl;
+          }
         } catch { /* non-critical */ }
       }
     }
 
-    try {
-      await socket.sendMessage(groupJid, enriched as never, { quoted: msg });
-    } catch {
-      await socket.sendMessage(groupJid, enriched as never);
-    }
+    await PreviewManager.send(socket as any, groupJid, visibleText, {
+      quoted: msg,
+      extra: mentions.length > 0 ? { mentions } : undefined,
+      externalAdReply,
+    });
   };
 
   const reply = replyOverride ?? baseWhatsAppReply;
@@ -710,7 +697,7 @@ async function processMessage(
       const [target, ...msgParts] = args;
       const message = msgParts.join(' ').trim() || quotedText.trim();
       if (!target || !message) { await reply(warningCard('USAGE', `${config.prefix}tochat [jid/link] [message]`)); break; }
-      const res = await cmdToChat(socket, sessionId, target, message, { sourceExt });
+      const res = await cmdToChat(socket, sessionId, target, message, { existingPreview: quotedPreview, sourceExt });
       await reply(res.success
         ? successCard('MESSAGE DELIVERED', 'The target chat accepted the message.', [['Target', target]])
         : errorCard('DELIVERY FAILED', 'WhatsApp rejected the target message.', res.error));
@@ -726,7 +713,7 @@ async function processMessage(
         break;
       }
       const count = Math.min(parseInt(countStr, 10), 50);
-      const res = await cmdToChatX(socket, sessionId, target, count, message, { sourceExt });
+      const res = await cmdToChatX(socket, sessionId, target, count, message, { existingPreview: quotedPreview, sourceExt });
       await reply(successCard('REPEAT DELIVERY COMPLETE', 'The operation finished.', [
         ['Target', target],
         ['Sent', `${res.sent}/${count}`],
@@ -742,7 +729,7 @@ async function processMessage(
       if (!text) { await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}sstatus [message]\nStop: ${config.prefix}stop spam`)); break; }
       if (isSpamLoopActive(sessionId)) { await reply(warningCard('LOOP ACTIVE', `A spam loop is already running. Use ${config.prefix}stop spam to kill it.`)); break; }
       await reply(successCard('STATUS LOOP STARTED', `Use ${config.prefix}stop spam to stop it.`, [['Message', text.slice(0, 40)]]));
-      cmdSStatus(socket, sessionId, text, { theme: config.statusDesignTheme }).catch(() => { /* background */ });
+      cmdSStatus(socket, sessionId, text, { theme: config.statusDesignTheme, existingPreview: quotedPreview }).catch(() => { /* background */ });
       break;
     }
 
@@ -851,6 +838,7 @@ async function processMessage(
       }));
       cmdAllChat(socket, sessionId, telegramId, text, {
         onProgress: updateProgress,
+        existingPreview: quotedPreview,
         sourceExt,
       }).catch(async (error) => {
         logger.error('[EventHandler] allchat failed', { sessionId, error: String(error) });

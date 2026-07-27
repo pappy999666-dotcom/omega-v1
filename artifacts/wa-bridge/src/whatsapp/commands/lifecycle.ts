@@ -37,8 +37,8 @@ async function maybeAutoPromote(socket: WASocket, telegramId: string, sessionId:
   const now = Date.now();
   const intervalMs = Math.max(0, settings.intervalMinutes ?? 0) * 60_000;
   if (settings.lastPostedAt && intervalMs > 0 && now - settings.lastPostedAt < intervalMs) return;
-  // Use centralized PreviewManager.hyratedMessage for preview hydration
-  await socket.sendMessage(groupJid, await PreviewManager.hydratedMessage(settings.message));
+  // Use centralized PreviewManager.send for proper preview hydration and stability
+  await PreviewManager.send(socket as any, groupJid, settings.message);
   updateSessionMeta(telegramId, sessionId, { autoPromote: { ...settings, lastPostedAt: now } });
 }
 

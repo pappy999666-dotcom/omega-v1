@@ -159,7 +159,7 @@ export class PreviewResolver {
         url,
         title: info.subject ?? 'WhatsApp Group',
         description: `${info.size ?? 0} members`,
-        thumbnail: normalizedThumb ? new Uint8Array(normalizedThumb) : thumbnail,
+        thumbnail: normalizedThumb ? Buffer.from(normalizedThumb) : thumbnail ? Buffer.from(thumbnail) : undefined,
       };
     } catch {
       return undefined;

@@ -61,6 +61,7 @@ export async function cmdAllChat(
     mediaBuffer?: Buffer;
     mediaType?: string;
     onProgress?: (msg: string) => Promise<void>;
+    existingPreview?: PartialLinkMeta;
     sourceExt?: NonNullable<IMessage['extendedTextMessage']>;
   } = {}
 ): Promise<JobResult> {
@@ -83,8 +84,14 @@ export async function cmdAllChat(
 
   const groups = await getJoinedGroups(socket);
 
-  // Resolve route ONCE before the loop
+  // ── Route decided ONCE before the loop ─────────────────
   const sourceExt = opts.sourceExt;
+  let resolvedPreview: PartialLinkMeta | undefined = opts.existingPreview;
+  const rawUrl = text.match(/https?:\/\/[^\s]+/u)?.[0];
+
+  if (!sourceExt && !resolvedPreview && rawUrl) {
+    resolvedPreview = await PreviewManager.resolvePreviewOnce(rawUrl, socket as never);
+  }
 
   await opts.onProgress?.(`📣 Starting allchat for ${groups.length} groups…`);
 
@@ -93,8 +100,10 @@ export async function cmdAllChat(
 
     if (!activeRuns.get(sessionId)) break;
     if (isCircuitOpen(telegramId, sessionId, 'allchat')) {
-      result.rateLimited += groups.length - i;
-      break;
+      result.rateLimited++;
+      result.details.push(`🚦 Circuit open — backing off before ${group.subject}`);
+      await opts.onProgress?.(`🚦 allchat backoff before ${i + 1}/${groups.length}; queue preserved.`);
+      await exponentialBackoff(Math.max(result.rateLimited, 1), 30_000, 300_000);
     }
 
     try {
@@ -102,18 +111,26 @@ export async function cmdAllChat(
       const mentions = participants.map((p) => p.id);
 
       if (opts.mediaBuffer) {
-        await socket.sendMessage(group.id, { image: opts.mediaBuffer, caption: text, mentions });
+        const content = buildContent(text, {
+          mediaBuffer: opts.mediaBuffer,
+          mediaType: opts.mediaType,
+        });
+        await socket.sendMessage(group.id, { ...content, mentions });
       } else if (sourceExt) {
         // AS_IS — relay quoted/own WA-built preview verbatim
         const sent = await sendAsIs(socket, group.id, text, sourceExt, { mentions });
         if (!sent) {
-          // fallback
-          const base = await PreviewManager.buildChatPreview(text, socket as never).catch(() => ({ text } as AnyMessageContent));
-          await socket.sendMessage(group.id, { ...base, mentions });
+          // fallback to RICH via PreviewManager.send
+          await PreviewManager.send(socket as any, group.id, text, {
+            existingPreview: resolvedPreview,
+            extra: { mentions },
+          });
         }
       } else {
-        const base = await PreviewManager.buildChatPreview(text, socket as never).catch(() => ({ text } as AnyMessageContent));
-        await socket.sendMessage(group.id, { ...base, mentions });
+        await PreviewManager.send(socket as any, group.id, text, {
+          existingPreview: resolvedPreview,
+          extra: { mentions },
+        });
       }
       result.success++;
       recordSuccess(telegramId, sessionId, 'allchat');
@@ -129,11 +146,11 @@ export async function cmdAllChat(
       const msg = String(err);
       if (msg.includes('rate') || msg.includes('429')) {
         result.rateLimited++;
-        const tripped = recordFailure(telegramId, sessionId, 'allchat');
-        if (tripped) break;
+        recordFailure(telegramId, sessionId, 'allchat');
         await exponentialBackoff(result.rateLimited, 5000, 120_000);
       } else {
         result.failed++;
+        result.details.push(`❌ ${group.subject}: ${msg.slice(0, 50)}`);
       }
     }
   }
