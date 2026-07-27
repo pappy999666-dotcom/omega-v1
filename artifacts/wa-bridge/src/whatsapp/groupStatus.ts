@@ -1,16 +1,17 @@
 // ============================================================
 // WA-Bridge — Group Status Sending
-// Posts to group status with full HQ preview.
 //
-// Uses the centralized PreviewManager for metadata resolution
-// and Baileys-native pipeline for HQ thumbnail upload.
+// PATH 0  AS_IS   — source has WA-built extendedTextMessage → likeThis relay
+// PATH B  RICH    — URL found, no WA preview → richPreview:true (Baileys fetches)
+// PATH C  PLAIN   — no URL → plain text groupStatus
 // ============================================================
 
-import type { BridgeWASocket as WASocket } from './baileys-types.js';
-// ── SINGLE IMPORT: All preview operations via PreviewManager ──
-import { PreviewManager, UrlDetector } from '../preview-engine/index.js';
+import type { BridgeWASocket as WASocket, IMessage } from './baileys-types.js';
+import { UrlDetector } from '../preview-engine/index.js';
 import type { PartialLinkMeta } from '../preview-engine/types.js';
 import { PreviewHydrator } from '../preview-engine/PreviewHydrator.js';
+import { resolvePreviewRoute } from './preview-router.js';
+import { sendStatusAsIs } from './status-as-is.js';
 import { logger } from '../utils/logger.js';
 
 // Import from exact Baileys internal paths — not exported from main index
@@ -40,6 +41,8 @@ export interface GroupStatusOptions {
   caption?: string;
   likeThis?: boolean;
   existingPreview?: PartialLinkMeta;
+  /** Raw source message for as-is relay (PATH 0) */
+  sourceMsg?: { message?: IMessage | null };
 }
 
 type Sock = {
@@ -124,27 +127,37 @@ export async function sendGroupStatus(
       return;
     }
 
-    // ── Text path ─────────────────────────────────────────────
-    // Extract URL using centralized UrlDetector
-    const url = options.existingPreview?.url ?? UrlDetector.extractFirst(text);
+    // ── Text path — route via preview-router ─────────────────
+    const route = options.sourceMsg
+      ? resolvePreviewRoute(options.sourceMsg, text)
+      : { route: 'RICH' as const, url: options.existingPreview?.url ?? UrlDetector.extractFirst(text) ?? undefined };
 
+    // ── PATH 0: AS_IS — relay WA-built extendedTextMessage verbatim ──
+    if (route.route === 'AS_IS' && route.sourceExt) {
+      const sent = await sendStatusAsIs(socket, groupJid, text, route.sourceExt);
+      if (sent) {
+        logger.info('[GroupStatus] PATH 0 AS_IS sent', { sessionId, groupJid });
+        return;
+      }
+      // fallthrough to RICH if likeThis failed
+    }
+
+    const url = route.url ?? options.existingPreview?.url ?? UrlDetector.extractFirst(text);
+
+    // ── PATH C: PLAIN — no URL ────────────────────────────────
     if (!url) {
-      // No URL — plain text status
       const msg = PreviewHydrator.buildGroupStatusMessage(text, undefined, undefined);
       const { generateMessageIDV2 } = await getBaileys();
       const msgId = generateMessageIDV2(sock.user.id);
       await sock.relayMessage(groupJid, msg as unknown as Record<string, unknown>, { messageId: msgId });
-      logger.info('[GroupStatus] Plain text sent', { sessionId, groupJid });
+      logger.info('[GroupStatus] PATH C plain text sent', { sessionId, groupJid });
       return;
     }
 
-    // Build preview once — if existingPreview has thumbnail already use it,
-    // otherwise fetch fresh via buildLinkPreview + waUploadToServer
+    // ── PATH B: RICH — build HQ preview ──────────────────────
     let preview: { url: string; title: string; description: string; smallThumb: Buffer | null; hq: Record<string, unknown> | null } | null = null;
 
     if (options.existingPreview?.thumbnail) {
-      // Stage 1 passthrough — but still upload to WA servers for HQ
-      // IMMUTABILITY: Clone the thumbnail buffer immediately to prevent mutation in the relay path
       const buf = Buffer.from(options.existingPreview.thumbnail);
       try {
         const { prepareWAMessageMedia } = await getBaileys();
@@ -153,10 +166,7 @@ export async function sendGroupStatus(
           { upload: sock.waUploadToServer, mediaTypeOverride: 'thumbnail-link' }
         );
         const hq = prepared?.imageMessage ? { ...prepared.imageMessage } : null;
-        if (hq?.jpegThumbnail) {
-          hq.jpegThumbnail = Buffer.from(hq.jpegThumbnail as Uint8Array);
-        }
-
+        if (hq?.jpegThumbnail) hq.jpegThumbnail = Buffer.from(hq.jpegThumbnail as Uint8Array);
         preview = {
           url,
           title: options.existingPreview.title || '',
@@ -166,16 +176,9 @@ export async function sendGroupStatus(
         };
       } catch (err) {
         logger.warn('[GroupStatus] HQ upload failed during passthrough', { err: String(err) });
-        preview = {
-          url,
-          title: options.existingPreview.title || '',
-          description: options.existingPreview.description || '',
-          smallThumb: buf,
-          hq: null,
-        };
+        preview = { url, title: options.existingPreview.title || '', description: options.existingPreview.description || '', smallThumb: Buffer.from(options.existingPreview.thumbnail), hq: null };
       }
     } else {
-      // Stage 2 — fresh fetch via Baileys-native buildLinkPreview
       preview = await buildStatusPreview(url, sock);
     }
 
@@ -189,8 +192,7 @@ export async function sendGroupStatus(
     const { generateMessageIDV2 } = await getBaileys();
     const msgId = generateMessageIDV2(sock.user.id);
     await sock.relayMessage(groupJid, msg as unknown as Record<string, unknown>, { messageId: msgId });
-
-    logger.info('[GroupStatus] Sent', { sessionId, groupJid, hasPreview: !!preview, hasHQ: !!preview?.hq });
+    logger.info('[GroupStatus] PATH B RICH sent', { sessionId, groupJid, hasHQ: !!preview?.hq });
   } catch (error) {
     logger.error('[GroupStatus] Failed', { sessionId, groupJid, error: String(error) });
     throw error;

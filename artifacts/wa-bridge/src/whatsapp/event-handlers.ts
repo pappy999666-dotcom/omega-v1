@@ -9,7 +9,8 @@ import type { BridgeWASocket as WASocket, BaileysEventMap, IMessage, WebMessageI
 import { parseCommand, parseStickerCommand, hashSticker } from './command-parser.js';
 import { loadSessionConfig, loadSessionMeta, updateSessionMeta, saveSessionMeta, getGlobalMenuUrl } from '../services/workspace.js';
 import { stopSpamLoop, isSpamLoopActive, cmdToChat, cmdToChatX, cmdSStatus, cmdGroupStatus } from './commands/status.js';
-import { cmdAllStatus, cmdAllChat, stopOutreach } from './commands/mass-outreach.js';
+import { cmdAllStatus, stopAllStatus, isAllStatusRunning } from './commands/all-status.js';
+import { cmdAllChat, stopOutreach, isOutreachRunning } from './commands/mass-outreach.js';
 import { cmdJoin, cmdLeave, cmdJoinAll, cmdLeaveAll, resolveGroupJid } from './commands/lifecycle.js';
 import { cmdTag, cmdMTag, tagSummary } from './commands/tag.js';
 import { updateSessionConfig, addToMainBucket } from '../services/workspace.js';
@@ -192,6 +193,10 @@ async function processMessage(
   const quotedText = extractMessageText(quotedMessage);
   // Stage 1: Extract existing preview from quoted message via PreviewManager
   const quotedPreview = PreviewManager.extractIncomingPreview(quotedMessage);
+  // As-is relay: use preview-router to detect sourceExt for chat commands
+  const { resolvePreviewRoute } = await import('./preview-router.js');
+  const chatRoute = resolvePreviewRoute(msg, text);
+  const sourceExt = chatRoute.route === 'AS_IS' ? chatRoute.sourceExt : undefined;
 
   // Extract sticker for macro matching
   const stickerMsg = msg.message?.stickerMessage;
@@ -639,6 +644,7 @@ async function processMessage(
       const sent = await cmdGroupStatus(socket, sessionId, groupJid, text, {
         theme: config.statusDesignTheme,
         existingPreview: quotedPreview,
+        sourceMsg: msg,
       });
       await reply(sent
         ? successCard('STATUS POSTED', 'The group status was published successfully.')
@@ -651,7 +657,7 @@ async function processMessage(
       const [target, ...msgParts] = args;
       const message = msgParts.join(' ').trim() || quotedText.trim();
       if (!target || !message) { await reply(warningCard('USAGE', `${config.prefix}tochat [jid/link] [message]`)); break; }
-      const res = await cmdToChat(socket, sessionId, target, message);
+      const res = await cmdToChat(socket, sessionId, target, message, { sourceExt });
       await reply(res.success
         ? successCard('MESSAGE DELIVERED', 'The target chat accepted the message.', [['Target', target]])
         : errorCard('DELIVERY FAILED', 'WhatsApp rejected the target message.', res.error));
@@ -667,7 +673,7 @@ async function processMessage(
         break;
       }
       const count = Math.min(parseInt(countStr, 10), 50);
-      const res = await cmdToChatX(socket, sessionId, target, count, message);
+      const res = await cmdToChatX(socket, sessionId, target, count, message, { sourceExt });
       await reply(successCard('REPEAT DELIVERY COMPLETE', 'The operation finished.', [
         ['Target', target],
         ['Sent', `${res.sent}/${count}`],
@@ -739,6 +745,7 @@ async function processMessage(
         if (await cmdGroupStatus(socket, sessionId, targetJid, message, {
           theme: config.statusDesignTheme,
           existingPreview: quotedPreview,
+          sourceMsg: msg,
         })) sent += 1;
       }
       await reply(successCard('GROUP STATUS COMPLETE', 'The target status operation finished.', [
@@ -768,6 +775,7 @@ async function processMessage(
           await cmdAllStatus(socket, sessionId, telegramId, text, {
             onProgress: updateProgress,
             existingPreview: quotedPreview,
+            sourceExt,
           });
         }
       })().catch(async (error) => {
@@ -789,6 +797,7 @@ async function processMessage(
       }));
       cmdAllChat(socket, sessionId, telegramId, text, {
         onProgress: updateProgress,
+        sourceExt,
       }).catch(async (error) => {
         logger.error('[EventHandler] allchat failed', { sessionId, error: String(error) });
         await updateProgress(errorCard('ALLCHAT FAILED', 'The background campaign could not finish.', String(error)));
@@ -865,7 +874,7 @@ async function processMessage(
     case 'tag': {
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
       const text = commandText('📢');
-      const res = await cmdTag(socket, sessionId, groupJid, text, { existingPreview: quotedPreview });
+      const res = await cmdTag(socket, sessionId, groupJid, text, { existingPreview: quotedPreview, sourceExt });
       await reply(res.success
         ? tagSummary(res.pinged, 'tag')
         : errorCard('TAG FAILED', res.error ?? 'Could not fetch group participants.'));
@@ -876,7 +885,7 @@ async function processMessage(
     case 'mtag': {
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
       const text = commandText('📢');
-      const res = await cmdMTag(socket, sessionId, groupJid, text, { existingPreview: quotedPreview });
+      const res = await cmdMTag(socket, sessionId, groupJid, text, { existingPreview: quotedPreview, sourceExt });
       await reply(res.success
         ? successCard('MENTION COMPLETE', `Tagged all members in ${res.messages} message(s).`, [['Members', String(res.pinged)]])
         : errorCard('MTAG FAILED', res.error ?? 'Could not fetch group participants.'));

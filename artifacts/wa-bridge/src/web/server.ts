@@ -11,7 +11,8 @@ import { addToMainBucket, loadBucket, loadSessionMeta, loadWorkspace, purgeSessi
 import { exportBucket } from '../services/tri-bucket.js';
 import { freezeSession, getSocket, getUserSockets, initSocket, normalizePairingPhone, unfreezeSession } from '../whatsapp/socket-manager.js';
 import { registerSessionOwner } from '../whatsapp/event-handlers.js';
-import { cmdAllChat, cmdAllStatus, stopOutreach } from '../whatsapp/commands/mass-outreach.js';
+import { cmdAllStatus } from '../whatsapp/commands/all-status.js';
+import { cmdAllChat, stopOutreach } from '../whatsapp/commands/mass-outreach.js';
 import { startAutoFilter, stopAutoFilter, validateLinksHttp } from '../services/tri-bucket.js';
 import { importLinksToMainBucket } from '../services/importer.js';
 import { statusDesignEngine, type StatusTheme } from '../services/StatusDesignEngine.js';

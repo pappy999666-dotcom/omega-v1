@@ -6,10 +6,11 @@
 // PreviewManager — the single source of truth.
 // ============================================================
 
-import type { BridgeWASocket as WASocket, AnyMessageContent } from '../baileys-types.js';
+import type { BridgeWASocket as WASocket, AnyMessageContent, IMessage } from '../baileys-types.js';
 // ── SINGLE IMPORT: All preview operations via PreviewManager ──
 import { PreviewManager } from '../../preview-engine/index.js';
 import type { PartialLinkMeta } from '../../preview-engine/types.js';
+import { sendAsIs } from '../chat-as-is.js';
 import { sleep, jitter } from '../../utils/delay.js';
 import { logger } from '../../utils/logger.js';
 import { asciiBox, bold, italic } from '../../utils/ascii-art.js';
@@ -83,7 +84,7 @@ export async function cmdToChat(
   sessionId: string,
   target: string,
   text: string,
-  opts: { mediaBuffer?: Buffer; mediaType?: string } = {}
+  opts: { mediaBuffer?: Buffer; mediaType?: string; sourceExt?: NonNullable<IMessage['extendedTextMessage']> } = {}
 ): Promise<{ success: boolean; error?: string }> {
   if (isFrozen(sessionId)) {
     return { success: false, error: 'Session frozen' };
@@ -91,11 +92,14 @@ export async function cmdToChat(
 
   try {
     const jid = await resolveTargetJid(socket, target);
-    const content: AnyMessageContent = opts.mediaBuffer
-      ? buildMediaContent(opts.mediaBuffer, opts.mediaType ?? 'image', text)
-      : await PreviewManager.buildChatPreview(text, socket as never);
-
-    await socket.sendMessage(jid, content);
+    if (opts.mediaBuffer) {
+      await socket.sendMessage(jid, buildMediaContent(opts.mediaBuffer, opts.mediaType ?? 'image', text));
+    } else if (opts.sourceExt) {
+      const sent = await sendAsIs(socket, jid, text, opts.sourceExt);
+      if (!sent) await socket.sendMessage(jid, await PreviewManager.buildChatPreview(text, socket as never));
+    } else {
+      await socket.sendMessage(jid, await PreviewManager.buildChatPreview(text, socket as never));
+    }
     logger.info(`[tochat] ${sessionId} → ${jid}`);
     return { success: true };
   } catch (err) {
@@ -111,7 +115,8 @@ export async function cmdToChatX(
   sessionId: string,
   target: string,
   count: number,
-  text: string
+  text: string,
+  opts: { sourceExt?: NonNullable<IMessage['extendedTextMessage']> } = {}
 ): Promise<{ sent: number; failed: number }> {
   if (isFrozen(sessionId)) return { sent: 0, failed: count };
 
@@ -124,8 +129,13 @@ export async function cmdToChatX(
     for (let i = 0; i < count; i++) {
       if (isFrozen(sessionId)) break;
       try {
-        const content = await PreviewManager.buildChatPreview(text, socket as never);
-        await socket.sendMessage(jid, content);
+        if (opts.sourceExt) {
+          const sent = await sendAsIs(socket, jid, text, opts.sourceExt);
+          if (!sent) await socket.sendMessage(jid, await PreviewManager.buildChatPreview(text, socket as never));
+        } else {
+          const content = await PreviewManager.buildChatPreview(text, socket as never);
+          await socket.sendMessage(jid, content);
+        }
         sent++;
       } catch {
         failed++;
@@ -231,7 +241,7 @@ export async function cmdGroupStatus(
   sessionId: string,
   groupJid: string,
   text: string,
-  opts: { mediaBuffer?: Buffer; mediaType?: string; caption?: string; theme?: string; skipDesign?: boolean; existingPreview?: PartialLinkMeta } = {}
+  opts: { mediaBuffer?: Buffer; mediaType?: string; caption?: string; theme?: string; skipDesign?: boolean; existingPreview?: PartialLinkMeta; sourceMsg?: { message?: import('../baileys-types.js').IMessage | null } } = {}
 ): Promise<boolean> {
   if (isFrozen(sessionId)) return false;
 
@@ -242,6 +252,7 @@ export async function cmdGroupStatus(
       mediaType: opts.mediaType as 'image' | 'video' | 'audio' | undefined,
       caption: opts.caption ?? designedText,
       existingPreview: opts.existingPreview,
+      sourceMsg: opts.sourceMsg,
     });
     return true;
   } catch {

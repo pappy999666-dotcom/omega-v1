@@ -6,10 +6,11 @@
 // PreviewManager — the single source of truth.
 // ============================================================
 
-import type { BridgeWASocket as WASocket, AnyMessageContent } from '../baileys-types.js';
+import type { BridgeWASocket as WASocket, AnyMessageContent, IMessage } from '../baileys-types.js';
 // ── SINGLE IMPORT: All preview operations via PreviewManager ──
 import { PreviewManager } from '../../preview-engine/index.js';
 import type { PartialLinkMeta } from '../../preview-engine/types.js';
+import { sendAsIs } from '../chat-as-is.js';
 import { logger } from '../../utils/logger.js';
 import { isFrozen } from '../socket-manager.js';
 import { bold } from '../../utils/ascii-art.js';
@@ -47,6 +48,7 @@ export async function cmdTag(
     mediaBuffer?: Buffer;
     mediaType?: string;
     existingPreview?: PartialLinkMeta;
+    sourceExt?: NonNullable<IMessage['extendedTextMessage']>;
   } = {}
 ): Promise<{ success: boolean; pinged: number; error?: string }> {
   if (isFrozen(sessionId)) {
@@ -70,8 +72,16 @@ export async function cmdTag(
       } else {
         content = { image: opts.mediaBuffer, caption: text, mentions: participants };
       }
+    } else if (opts.sourceExt) {
+      // As-is relay — WA-built preview relayed verbatim via likeThis
+      const sent = await sendAsIs(socket, groupJid, text, opts.sourceExt, { mentions: participants });
+      if (sent) return { success: true, pinged: participants.length };
+      // fallthrough if likeThis failed
+      content = {
+        ...(await PreviewManager.buildChatPreview(text, socket as never, opts.existingPreview)),
+        mentions: participants,
+      };
     } else {
-      // Use centralized PreviewManager.buildChatPreview for preview hydration
       content = {
         ...(await PreviewManager.buildChatPreview(text, socket as never, opts.existingPreview)),
         mentions: participants,
@@ -100,8 +110,9 @@ export async function cmdMTag(
   groupJid: string,
   text: string,
   opts: {
-    chunkSize?: number; // mentions per message (default: 100)
+    chunkSize?: number;
     existingPreview?: PartialLinkMeta;
+    sourceExt?: NonNullable<IMessage['extendedTextMessage']>;
   } = {}
 ): Promise<{ success: boolean; pinged: number; messages: number; error?: string }> {
   if (isFrozen(sessionId)) {
@@ -130,11 +141,20 @@ export async function cmdMTag(
       const mentionText = chunk.map((jid) => `@${jid.split('@')[0]}`).join(' ');
       const fullText = `${text}\n\n${mentionText}`;
 
-      // Use centralized PreviewManager.buildChatPreview for preview hydration
-      await socket.sendMessage(groupJid, {
-        ...(await PreviewManager.buildChatPreview(fullText, socket as never, opts.existingPreview)),
-        mentions: chunk,
-      });
+      if (opts.sourceExt) {
+        const sent = await sendAsIs(socket, groupJid, fullText, opts.sourceExt, { mentions: chunk });
+        if (!sent) {
+          await socket.sendMessage(groupJid, {
+            ...(await PreviewManager.buildChatPreview(fullText, socket as never, opts.existingPreview)),
+            mentions: chunk,
+          });
+        }
+      } else {
+        await socket.sendMessage(groupJid, {
+          ...(await PreviewManager.buildChatPreview(fullText, socket as never, opts.existingPreview)),
+          mentions: chunk,
+        });
+      }
 
       pinged += chunk.length;
       messages++;
