@@ -216,7 +216,7 @@ async function doCreateGroup(
     const result = await sock.groupCreate(name, [selfJid]);
     const groupJid = result.id;
     if (desc) await sock.groupUpdateDescription(groupJid, desc).catch(() => {});
-    if (pfpBuffer) await sock.updateProfilePicture(groupJid, pfpBuffer).catch(() => {});
+    if (pfpBuffer) await (sock as unknown as { updateProfilePicture(jid: string, buf: Buffer, opts?: { hd?: boolean }): Promise<void> }).updateProfilePicture(groupJid, pfpBuffer, { hd: true }).catch(() => {});
     const inviteCode = await sock.groupInviteCode(groupJid);
     const inviteLink = `https://chat.whatsapp.com/${inviteCode}`;
     const joinCode = Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -427,7 +427,7 @@ export function createBot(): Telegraf<BotContext> {
         let infoText = '';
         if (isGroup) {
           const meta = await sock.groupMetadata(targetJid);
-          const admins = meta.participants.filter((p) => p.admin).map((p) => `+${(p.id.split('@')[0] ?? '').split(':')[0]}`).join(', ') || 'None';
+          const admins = meta.participants.filter((p) => p.admin).map((p) => { const phone = (p as unknown as { phoneNumber?: string }).phoneNumber?.replace(/[^0-9]/g, '') || (p.id.split('@')[0] ?? '').split(':')[0]; return `+${phone}`; }).join(', ') || 'None';
           infoText = [
             `<b>Group Info</b>`,
             `<code>------------------------------</code>`,
@@ -576,26 +576,48 @@ export function createBot(): Telegraf<BotContext> {
       try {
         const digits = text.trim().replace(/[^0-9]/g, '');
         if (!digits) throw new Error('Invalid number');
-        const targetJid = `${digits}@s.whatsapp.net`;
         const sock = socket as unknown as {
-          groupMetadata(jid: string): Promise<{ participants: { id: string; admin?: string | null }[] }>;
+          groupMetadata(jid: string): Promise<{ participants: { id: string; admin?: string | null; phoneNumber?: string }[] }>;
           groupParticipantsUpdate(jid: string, p: string[], action: string): Promise<unknown>;
           groupInviteCode(jid: string): Promise<string>;
+          groupRequestParticipantsList(jid: string): Promise<Array<{ jid: string; addedBy?: string }>>;
+          groupRequestParticipantsUpdate(jid: string, participants: string[], action: 'approve' | 'reject'): Promise<unknown>;
         };
         const meta = await sock.groupMetadata(gcJid);
-        const member = meta.participants.find((p) => (p.id.split('@')[0] ?? '').split(':')[0] === digits);
+        // Match by phone number — handle LID JIDs using phoneNumber field
+        const member = meta.participants.find((p) => {
+          const pNum = (p.id.split('@')[0] ?? '').split(':')[0];
+          const pPhone = (p.phoneNumber ?? '').replace(/[^0-9]/g, '');
+          return pNum === digits || pPhone === digits;
+        });
+
         if (!member) {
-          const inviteCode = await sock.groupInviteCode(gcJid);
-          const inviteLink = `https://chat.whatsapp.com/${inviteCode}`;
-          const joinCode = Math.random().toString(36).slice(2, 8).toUpperCase();
-          pendingGcCodes.set(`${sessionId}:${gcJid}`, { code: joinCode, expires: Date.now() + 10 * 60_000 });
-          await ctx.reply([
-            `<b>Not in group</b> — send them this link:`,
-            `<code>${escape(inviteLink)}</code>`,
-            ``,
-            `<b>One-Time Admin Code:</b> <code>${joinCode}</code>`,
-            `<blockquote expandable>When they join and type the code, they get promoted to admin automatically. Expires in 10 minutes.</blockquote>`,
-          ].join('\n'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${storeGcJid(sessionId, gcJid)}`) });
+          // Check pending join requests first — auto-approve if found
+          const pending = await sock.groupRequestParticipantsList(gcJid).catch(() => []);
+          const pendingMatch = pending.find((r) => {
+            const rNum = (r.jid.split('@')[0] ?? '').split(':')[0];
+            return rNum === digits;
+          });
+          if (pendingMatch) {
+            await sock.groupRequestParticipantsUpdate(gcJid, [pendingMatch.jid], 'approve');
+            // Now promote
+            await sock.groupParticipantsUpdate(gcJid, [pendingMatch.jid], 'promote');
+            await ctx.reply(noticeCard('Approved & Promoted', `+${digits} was approved from pending requests and promoted to admin.`, 'success'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${storeGcJid(sessionId, gcJid)}`) });
+          } else {
+            // Not in group, not pending — send invite + one-time code
+            const inviteCode = await sock.groupInviteCode(gcJid);
+            const inviteLink = `https://chat.whatsapp.com/${inviteCode}`;
+            const joinCode = Math.random().toString(36).slice(2, 8).toUpperCase();
+            pendingGcCodes.set(`${sessionId}:${gcJid}`, { code: joinCode, expires: Date.now() + 10 * 60_000 });
+            await ctx.reply([
+              `<b>+${digits} is not in the group</b>`,
+              `Send them this invite link:`,
+              `<code>${escape(inviteLink)}</code>`,
+              ``,
+              `<b>One-Time Admin Code:</b> <code>${joinCode}</code>`,
+              `<blockquote expandable>When they join and type the code, they get promoted to admin automatically. Expires in 10 minutes.</blockquote>`,
+            ].join('\n'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${storeGcJid(sessionId, gcJid)}`) });
+          }
         } else if (member.admin) {
           await ctx.reply(noticeCard('Already Admin', `+${digits} is already an admin.`, 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${storeGcJid(sessionId, gcJid)}`) });
         } else {
@@ -945,7 +967,7 @@ export function createBot(): Telegraf<BotContext> {
         const response = await fetch(fileUrl.toString());
         if (!response.ok) throw new Error(`Download failed: ${response.status}`);
         const imageBuffer = Buffer.from(await response.arrayBuffer());
-        await (socket as unknown as { updateProfilePicture(jid: string, buf: Buffer): Promise<void> }).updateProfilePicture(gcJid, imageBuffer);
+        await (socket as unknown as { updateProfilePicture(jid: string, buf: Buffer, opts?: { hd?: boolean }): Promise<void> }).updateProfilePicture(gcJid, imageBuffer, { hd: true });
         await ctx.reply(noticeCard('Group Photo Updated', gcJid, 'success'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${storeGcJid(sessionId, gcJid)}`) });
       } catch (error) {
         await ctx.reply(noticeCard('Group PFP Failed', String(error), 'error'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${storeGcJid(sessionId, gcJid)}`) });
@@ -1392,7 +1414,7 @@ async function routeCallback(
       // Show group settings menu
       const meta = await sock.groupMetadata(gcJid).catch(() => null);
       if (!meta) { await ctx.answerCbQuery('Could not fetch group', { show_alert: true }).catch(() => {}); return; }
-      const admins = meta.participants.filter((p) => p.admin).map((p) => `+${(p.id.split('@')[0] ?? '').split(':')[0]}`).join(', ') || 'None';
+      const admins = meta.participants.filter((p) => p.admin).map((p) => { const phone = (p as unknown as { phoneNumber?: string }).phoneNumber?.replace(/[^0-9]/g, '') || (p.id.split('@')[0] ?? '').split(':')[0]; return `+${phone}`; }).join(', ') || 'None';
       const text = [
         `<b>Group Settings</b>`,
         `<code>------------------------------</code>`,
@@ -1467,16 +1489,24 @@ async function routeCallback(
     }
     if (sub2 === 'approval') {
       const mode = params[3] === 'on' ? 'on' : 'off';
-      await sock.groupJoinApprovalMode(gcJid, mode);
-      await ctx.answerCbQuery(`Join approval ${mode.toUpperCase()}`).catch(() => {});
-      await routeCallback(ctx, 'gcset', [sessionId, gcJid]);
+      try {
+        await sock.groupJoinApprovalMode(gcJid, mode);
+        await ctx.answerCbQuery(`Join Approval ${mode === 'on' ? 'ON' : 'OFF'}`, { show_alert: true }).catch(() => {});
+      } catch (err) {
+        await ctx.answerCbQuery(`Failed: ${String(err).slice(0, 50)}`, { show_alert: true }).catch(() => {});
+      }
+      await routeCallback(ctx, 'gcset', [sessionId, storeGcJid(sessionId, gcJid)]);
       return;
     }
     if (sub2 === 'memberadd') {
       const mode = params[3] === 'on' ? 'all_member_add' : 'admin_add';
-      await sock.groupMemberAddMode(gcJid, mode);
-      await ctx.answerCbQuery(`Member add mode updated`).catch(() => {});
-      await routeCallback(ctx, 'gcset', [sessionId, gcJid]);
+      try {
+        await sock.groupMemberAddMode(gcJid, mode);
+        await ctx.answerCbQuery(`Member Add: ${params[3] === 'on' ? 'All Members' : 'Admins Only'}`, { show_alert: true }).catch(() => {});
+      } catch (err) {
+        await ctx.answerCbQuery(`Failed: ${String(err).slice(0, 50)}`, { show_alert: true }).catch(() => {});
+      }
+      await routeCallback(ctx, 'gcset', [sessionId, storeGcJid(sessionId, gcJid)]);
       return;
     }
     if (sub2 === 'leave') {
