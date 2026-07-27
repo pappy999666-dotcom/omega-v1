@@ -141,8 +141,13 @@ export async function executeBridgeCommand(
   onReply: (text: string) => Promise<void>
 ): Promise<void> {
   if (loadSessionConfig(telegramId, sessionId).sleeping) throw new Error('User sleep mode is active');
+
+  // Use the bot's own JID as remoteJid so isGroup=false but commands still run.
+  // For commands that need a group JID (allstatus, allchat etc.) the command
+  // itself fetches groups internally — remoteJid is only used for reply routing.
+  const ownJid = (socket as unknown as { user?: { id?: string } }).user?.id ?? `${telegramId}@s.whatsapp.net`;
   const syntheticMessage = {
-    key: { remoteJid: 'status@broadcast', fromMe: false, id: `telegram-${Date.now()}` },
+    key: { remoteJid: ownJid, fromMe: true, id: `bridge-${Date.now()}` },
     message: { conversation: text },
   } as WebMessageInfo;
 

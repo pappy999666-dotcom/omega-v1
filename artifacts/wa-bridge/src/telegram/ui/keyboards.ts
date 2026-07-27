@@ -108,11 +108,12 @@ export function sessionsListKeyboard(
 export function sessionMenuKeyboard(sessionId: string): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
-      [btn('📊 Info', `session:${sessionId}:info`, 'primary'), btn('📋 Groups', `session:${sessionId}:groups`, 'primary')],
+      [btn('📊 Info', `session:${sessionId}:info`), btn('📋 Groups', `session:${sessionId}:groups`)],
       [btn('❄️ Freeze', `session:${sessionId}:freeze`, 'danger'), btn('🔥 Unfreeze', `session:${sessionId}:unfreeze`, 'success')],
-      [btn('🔄 Re-Init', `session:${sessionId}:reinit`, 'primary'), btn('🗑 Purge', `session:${sessionId}:purge`, 'danger')],
-      [btn('🔗 Link Collection', `session:${sessionId}:collect`, 'primary'), btn('🚪 Join Manager', `session:${sessionId}:joinmgr`, 'primary')],
-      [btn('🖼 Set PFP', `session:${sessionId}:pfp:set`, 'primary'), btn('🗑 Remove PFP', `session:${sessionId}:pfp:remove`, 'danger'), btn('✏️ Set Name', `session:${sessionId}:setname`, 'primary')],
+      [btn('🔄 Re-Init', `session:${sessionId}:reinit`), btn('🗑 Purge', `session:${sessionId}:purge`, 'danger')],
+      [btn('🔗 Link Collection', `session:${sessionId}:collect`), btn('🚪 Join Manager', `session:${sessionId}:joinmgr`)],
+      [btn('🖼 Set PFP', `session:${sessionId}:pfp:set`), btn('📸 Get PFP', `session:${sessionId}:pfp:get`), btn('🗑 Remove PFP', `session:${sessionId}:pfp:remove`, 'danger')],
+      [btn('✏️ Set Name', `session:${sessionId}:setname`), btn('📝 Set Bio', `session:${sessionId}:setbio`)],
       [btn('🌉 Bridge', `session:${sessionId}:bridge`, 'primary'), btn('🔙 Back', 'sessions:list')],
     ],
   };

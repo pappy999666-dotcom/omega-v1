@@ -107,25 +107,38 @@ export async function handleBanUser(
 
 // ── Inspect Workspace ─────────────────────────────────────
 
-export async function handleInspectUser(ctx: Context, targetId: string): Promise<void> {
+export async function handleInspectUser(ctx: Context & { telegramId?: string }, targetId: string): Promise<void> {
   const cfg = loadConfig(targetId);
   const main = loadBucket(targetId, 'main');
   const active = loadBucket(targetId, 'active');
   const dead = loadBucket(targetId, 'dead');
+  const { loadAllSessions } = await import('../../services/workspace.js');
+  const sessions = Object.values(loadAllSessions(targetId));
 
   const text = [
     header(`Workspace: ${cfg.username ?? targetId}`, '🔍'),
     '',
-    kv('Sessions:', 'see /sessions'),
+    kv('Telegram ID:', H.code(targetId)),
     kv('Main Bucket:', String(main.length)),
     kv('Active Bucket:', String(active.length)),
     kv('Dead Bucket:', String(dead.length)),
     kv('Prefix:', cfg.prefix || 'null'),
+    kv('Sessions:', String(sessions.length)),
   ].join('\n');
+
+  const sessionButtons = sessions.map((s) => {
+    const icon = { open: '🟢', frozen: '🔵', error: '🔴', connecting: '🟡', closed: '⚫', banned: '💀' }[s.status] ?? '⚪';
+    return [{ text: `${icon} ${s.label ?? s.phone}`, callback_data: `session:${s.sessionId}:menu` }];
+  });
 
   await ctx.editMessageText(text, {
     parse_mode: 'HTML',
-    reply_markup: backKeyboard(`admin:user:${targetId}`),
+    reply_markup: {
+      inline_keyboard: [
+        ...sessionButtons,
+        [{ text: '🔙 Back', callback_data: `admin:user:${targetId}` }],
+      ],
+    },
   }).catch(() => {});
 }
 

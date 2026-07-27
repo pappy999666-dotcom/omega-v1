@@ -103,6 +103,7 @@ interface BotContext extends Context {
     awaitingSupport?: boolean;
     awaitingProfilePhotoSessionId?: string;
     awaitingSetNameSessionId?: string;
+    awaitingSetBioSessionId?: string;
     awaitingForceJoin?: boolean;
     awaitingBroadcast?: boolean;
     awaitingGlobalMenuUrl?: boolean;
@@ -307,6 +308,32 @@ export function createBot(): Telegraf<BotContext> {
       return;
     }
 
+    if (ctx.session?.awaitingSetBioSessionId) {
+      const sessionId = ctx.session.awaitingSetBioSessionId;
+      delete ctx.session.awaitingSetBioSessionId;
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) {
+        await ctx.reply(noticeCard('Set Bio Failed', 'Session not connected.', 'warning'), { parse_mode: 'HTML' });
+        return;
+      }
+      try {
+        await (socket as unknown as {
+          updateProfileStatus(bio: string): Promise<void>;
+        }).updateProfileStatus(text.trim());
+        await ctx.reply(
+          noticeCard('Bio Updated', `WhatsApp bio set to: ${text.trim()}`, 'success'),
+          { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }
+        );
+      } catch (error) {
+        logger.error('[Bot] setbio failed', { sessionId, error: String(error) });
+        await ctx.reply(
+          noticeCard('Set Bio Failed', String(error), 'error'),
+          { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }
+        );
+      }
+      return;
+    }
+
     if (ctx.session?.awaitingForceJoin) {
       ctx.session.awaitingForceJoin = false;
       const targets = [...new Set(text.split(/[\s,]+/u).map((target) => target.trim()).filter(Boolean))];
@@ -433,19 +460,33 @@ export function createBot(): Telegraf<BotContext> {
     if (ctx.session?.awaitingGlobalBridge) {
     ctx.session.awaitingGlobalBridge = false;
     const sessionIds = getUserSockets(ctx.telegramId);
+    if (sessionIds.length === 0) {
+      await ctx.reply(noticeCard('No Active Sessions', 'Connect at least one WhatsApp session first.', 'warning'), { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(ctx.isOwner) });
+      return;
+    }
+    const progressMsg = await ctx.reply(
+      card('Global Bridge Running', '📡', [['Sessions', String(sessionIds.length)], ['Command', text.slice(0, 60)]], 'Executing on all connected sessions…'),
+      { parse_mode: 'HTML' }
+    );
     const results = await Promise.allSettled(sessionIds.map(async (sessionId) => {
       const socket = getSocket(sessionId);
       if (!socket || isFrozen(sessionId)) throw new Error('Unavailable');
       const replies: string[] = [];
       await executeBridgeCommand(sessionId, ctx.telegramId, text, socket, async (response) => { replies.push(response); });
-      return `${sessionId}: ${replies.at(-1) ?? 'Completed'}`;
+      return { sessionId, reply: replies.join('\n') || '✅ Done' };
     }));
-    const summary = results.map((result, index) => result.status === 'fulfilled'
-      ? `OK ${result.value}`
-      : `FAILED ${sessionIds[index]}: ${String(result.reason)}`).join('\n');
-    await ctx.reply(`${header('Global Bridge Complete', '📡')}\n\n${H.pre(summary || 'No connected sessions.', 'log')}`, {
-      parse_mode: 'HTML', reply_markup: mainMenuKeyboard(ctx.isOwner),
+    const lines = results.map((r, i) => {
+      const sid = sessionIds[i] ?? '?';
+      if (r.status === 'fulfilled') return `✅ ${sid}\n${r.value.reply}`;
+      return `❌ ${sid}: ${String(r.reason)}`;
     });
+    await ctx.telegram.editMessageText(
+      ctx.chat!.id, progressMsg.message_id, undefined,
+      `${header('Global Bridge Complete', '📡')}\n\n${H.blockquote(lines.join('\n\n').slice(0, 3500), true)}`,
+      { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(ctx.isOwner) }
+    ).catch(() =>
+      ctx.reply(`${header('Global Bridge Complete', '📡')}\n\n${H.blockquote(lines.join('\n\n').slice(0, 3500), true)}`, { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(ctx.isOwner) })
+    );
     return;
   }
 
@@ -738,6 +779,7 @@ async function routeCallback(
     }
     if (sub === 'info') { await handleSessionInfo(ctx, sessionId); return; }
     if (sub === 'groups') {
+      const page = parseInt(params[2] ?? '0', 10);
       const socket = getSocket(sessionId);
       if (!socket) {
         await ctx.editMessageText(noticeCard('Session Groups', 'Connect this session before requesting its group list.', 'warning'), {
@@ -746,15 +788,25 @@ async function routeCallback(
         });
         return;
       }
-      const groups = await socket.groupFetchAllParticipating();
-      const names = Object.values(groups).slice(0, 50).map((group, index) => `${index + 1}. ${escape(group.subject)}`);
-      await ctx.editMessageText(
-        [
-          card('Session Groups', '📋', [['Total shown', String(names.length)]], names.length ? 'Open the expandable section to review group names.' : 'No groups were found.'),
-          names.length ? H.blockquote(names.join('\n'), true) : '',
-        ].filter(Boolean).join('\n\n'),
-        { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }
-      );
+      const groups = Object.values(await socket.groupFetchAllParticipating());
+      const PAGE_SIZE = 30;
+      const total = groups.length;
+      const slice = groups.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+      const names = slice.map((g, i) => `${page * PAGE_SIZE + i + 1}. ${escape(g.subject)}`);
+      const nav: { text: string; callback_data: string }[] = [];
+      if (page > 0) nav.push({ text: '◀ Prev', callback_data: `session:${sessionId}:groups:${page - 1}` });
+      if ((page + 1) * PAGE_SIZE < total) nav.push({ text: 'Next ▶', callback_data: `session:${sessionId}:groups:${page + 1}` });
+      const keyboard = {
+        inline_keyboard: [
+          ...(nav.length ? [nav] : []),
+          [{ text: '🔙 Back', callback_data: `session:${sessionId}:menu` }],
+        ],
+      };
+      const text = [
+        card('Session Groups', '📋', [['Total', String(total)], ['Page', `${page + 1}/${Math.ceil(total / PAGE_SIZE) || 1}`]], total ? 'Paginated — use arrows to browse.' : 'No groups found.'),
+        names.length ? H.blockquote(names.join('\n'), true) : '',
+      ].filter(Boolean).join('\n\n');
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard }).catch(() => {});
       return;
     }
     if (sub === 'freeze') { await handleFreezeSession(ctx, sessionId); return; }
@@ -774,6 +826,26 @@ async function routeCallback(
         await ctx.editMessageText(card('Set WhatsApp Profile Photo', '🖼', [['Session', sessionId]], 'Send one photo now. Use a square image for the best result.'), {
           parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`),
         });
+      } else if (operation === 'get') {
+        const ownJid = (socket as { user?: { id?: string } }).user?.id;
+        if (!ownJid) { await ctx.answerCbQuery('JID unavailable', { show_alert: true }).catch(() => {}); return; }
+        try {
+          const ppUrl = await (socket as unknown as { profilePictureUrl(jid: string, type: string): Promise<string | null> }).profilePictureUrl(ownJid, 'image').catch(() => null);
+          if (!ppUrl) {
+            await ctx.answerCbQuery('No profile photo set', { show_alert: true }).catch(() => {});
+            return;
+          }
+          const res = await fetch(ppUrl);
+          if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+          const buf = Buffer.from(await res.arrayBuffer());
+          await ctx.replyWithPhoto({ source: buf }, {
+            caption: card('Current Profile Photo', '📸', [['Session', sessionId]], 'This is the current WhatsApp profile photo for this session.'),
+            parse_mode: 'HTML',
+            reply_markup: backKeyboard(`session:${sessionId}:menu`),
+          });
+        } catch (error) {
+          await ctx.reply(noticeCard('Get PFP Failed', String(error), 'error'), { parse_mode: 'HTML' });
+        }
       } else if (operation === 'remove') {
         const ownJid = (socket as { user?: { id?: string } }).user?.id;
         if (!ownJid) throw new Error('The WhatsApp account JID is unavailable');
@@ -797,6 +869,19 @@ async function routeCallback(
       ).catch(() => {});
       return;
     }
+    if (sub === 'setbio') {
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) {
+        await ctx.answerCbQuery('Session not connected', { show_alert: true }).catch(() => {});
+        return;
+      }
+      ctx.session.awaitingSetBioSessionId = sessionId;
+      await ctx.editMessageText(
+        card('Set WhatsApp Bio', '📝', [['Session', sessionId]], 'Send your new bio text now. This appears on your WhatsApp profile.'),
+        { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }
+      ).catch(() => {});
+      return;
+    }
     if (sub === 'collect') {
       const enabled = params[2] === 'on' ? true : params[2] === 'off' ? false : undefined;
       await handleLinkCollection(ctx, sessionId, enabled);
@@ -808,6 +893,7 @@ async function routeCallback(
       await handleJoinManager(ctx, sessionId, operation);
       return;
     }
+    if (sub === 'bridge') { await handleBridgeSession(ctx, sessionId); return; }
     return;
   }
 
