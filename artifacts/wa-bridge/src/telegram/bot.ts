@@ -1210,7 +1210,8 @@ async function routeCallback(
         ``,
         `<blockquote expandable>🔑 Session ID\n<code>${escape(sessionId)}</code></blockquote>`,
       ].filter(Boolean).join('\n');
-      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId) }).catch(() => {});
+      const { sessionMenuKeyboard: smk } = await import('./ui/keyboards.js');
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: smk(sessionId) }).catch(() => {});
       return;
     }
     if (sub === 'groups') {
