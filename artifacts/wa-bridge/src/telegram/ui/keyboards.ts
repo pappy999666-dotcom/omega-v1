@@ -32,6 +32,14 @@ export function bridgeExitKeyboard(): InlineKeyboardMarkup {
   return { inline_keyboard: [[btn('❌ Exit Bridge', 'bridge:exit', 'danger')]] };
 }
 
+export function groupBridgeActiveKeyboard(sessionId: string, gcKey: string): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [btn('❌ Exit Group Bridge', `gcbridge:${sessionId}:${gcKey}:exit`, 'danger')],
+    ],
+  };
+}
+
 export function helpKeyboard(): InlineKeyboardMarkup {
   return backKeyboard('menu:main');
 }

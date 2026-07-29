@@ -26,6 +26,7 @@ import {
   normalizePairingPhone,
 } from '../../whatsapp/socket-manager.js';
 import { registerSessionOwner } from '../../whatsapp/event-handlers.js';
+import type { BridgeWASocket as WASocket } from '../../whatsapp/baileys-types.js';
 import {
   sessionsListKeyboard,
   sessionMenuKeyboard,

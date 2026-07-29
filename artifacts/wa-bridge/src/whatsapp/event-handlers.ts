@@ -48,6 +48,25 @@ import {
   handleAntiDemote,
   handleAntiStatus,
 } from './anti-system/commands.js';
+// ── Group Moderation Commands ─────────────────────────────
+import {
+  cmdKick,
+  cmdBan,
+  cmdUnban,
+  cmdBanList,
+  cmdPromote,
+  cmdDemote,
+  cmdWarn,
+  cmdUnwarn,
+  cmdWarnCount,
+  cmdPoll,
+  cmdSetWelcome,
+  cmdWelcomeToggle,
+  cmdSetGoodbye,
+  cmdGoodbyeToggle,
+  cmdSetModerationMsg,
+  cmdEventStatus,
+} from './commands/group-moderation.js';
 
 // Map from sessionId → telegramId (populated at init)
 const sessionOwnerMap = new Map<string, string>();
@@ -180,6 +199,35 @@ export async function executeBridgeCommand(
   const ownJid = (socket as unknown as { user?: { id?: string } }).user?.id ?? `${telegramId}@s.whatsapp.net`;
   const syntheticMessage = {
     key: { remoteJid: ownJid, fromMe: true, id: `bridge-${Date.now()}` },
+    message: { conversation: text },
+  } as WebMessageInfo;
+
+  await processMessage(sessionId, telegramId, syntheticMessage, socket, onReply);
+}
+
+/**
+ * Execute a command text within the context of a specific WhatsApp group.
+ * Sets remoteJid = gcJid so isGroup=true — all group management commands
+ * (kick, promote, demote, antilink, welcomemsg, etc.) work correctly.
+ */
+export async function executeGroupBridgeCommand(
+  sessionId: string,
+  telegramId: string,
+  text: string,
+  gcJid: string,
+  socket: WASocket,
+  onReply: (text: string) => Promise<void>
+): Promise<void> {
+  if (loadSessionConfig(telegramId, sessionId).sleeping) throw new Error('User sleep mode is active');
+
+  const ownJid = (socket as unknown as { user?: { id?: string } }).user?.id ?? `${telegramId}@s.whatsapp.net`;
+  const syntheticMessage = {
+    key: {
+      remoteJid: gcJid,       // group JID → isGroup=true in processMessage
+      fromMe: true,
+      id: `gc-bridge-${Date.now()}`,
+      participant: ownJid,    // required for group message ownership
+    },
     message: { conversation: text },
   } as WebMessageInfo;
 
@@ -1261,6 +1309,118 @@ async function processMessage(
     }
 
     // ──────────────────────────────────────────────────────────
+
+    // ──────────────────────────────────────────────────────────
+    // ◈ GROUP MODERATION COMMANDS
+    // All require groupJid.endsWith('@g.us') — enforced inside each handler
+    // ──────────────────────────────────────────────────────────
+
+    case 'kick':
+    case 'remove': {
+      await reply(await cmdKick(args, msg, socket, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+
+    case 'ban': {
+      await reply(await cmdBan(args, msg, socket, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+
+    case 'unban': {
+      await reply(cmdUnban(args, msg, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+
+    case 'banlist': {
+      await reply(cmdBanList(telegramId, sessionId, groupJid));
+      break;
+    }
+
+    case 'promote': {
+      await reply(await cmdPromote(args, msg, socket, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+
+    case 'demote': {
+      await reply(await cmdDemote(args, msg, socket, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+
+    case 'warn': {
+      await reply(await cmdWarn(args, msg, socket, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+
+    case 'unwarn':
+    case 'resetwarn': {
+      await reply(cmdUnwarn(args, msg, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+
+    case 'warns': {
+      await reply(cmdWarnCount(args, msg, sessionId, groupJid, config.prefix));
+      break;
+    }
+
+    case 'poll': {
+      await reply(await cmdPoll(args, msg, socket, groupJid, config.prefix));
+      break;
+    }
+
+    // ── Welcome / Goodbye ──
+    case 'setwelcome':
+    case 'welcomemsg': {
+      await reply(cmdSetWelcome(args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    case 'welcome': {
+      const sub = args[0]?.toLowerCase();
+      if (sub === 'on') { await reply(cmdWelcomeToggle(true, telegramId, sessionId, groupJid)); break; }
+      if (sub === 'off') { await reply(cmdWelcomeToggle(false, telegramId, sessionId, groupJid)); break; }
+      await reply(cmdSetWelcome(args.slice(1), msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    case 'setgoodbye':
+    case 'goodbyemsg': {
+      await reply(cmdSetGoodbye(args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    case 'goodbye': {
+      const sub = args[0]?.toLowerCase();
+      if (sub === 'on') { await reply(cmdGoodbyeToggle(true, telegramId, sessionId, groupJid)); break; }
+      if (sub === 'off') { await reply(cmdGoodbyeToggle(false, telegramId, sessionId, groupJid)); break; }
+      await reply(cmdSetGoodbye(args.slice(1), msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    // ── Moderation Response Templates ──
+    case 'kickmsg': {
+      await reply(cmdSetModerationMsg('kick', 'Kick', args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    case 'warnmsg': {
+      await reply(cmdSetModerationMsg('warn', 'Warn', args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    case 'banmsg': {
+      await reply(cmdSetModerationMsg('ban', 'Ban', args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    case 'unbanmsg': {
+      await reply(cmdSetModerationMsg('unban', 'Unban', args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    case 'eventstatus': {
+      await reply(cmdEventStatus(telegramId, sessionId, groupJid));
+      break;
+    }
 
     // ── Add links to bucket ──
     case 'addlink': {

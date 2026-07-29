@@ -8,6 +8,7 @@
 
 import type { BridgeWASocket as WASocket, AnyMessageContent, IMessage } from '../baileys-types.js';
 import type { JobResult } from '../../types/index.js';
+import type { PartialLinkMeta } from '../../preview-engine/types.js';
 import { PreviewManager } from '../../preview-engine/index.js';
 import { sendAsIs } from '../chat-as-is.js';
 import { allstatusDelay, exponentialBackoff } from '../../utils/delay.js';

@@ -10,6 +10,8 @@ import { loadGroupAntiConfig } from './config.js';
 import { normalizeWhatsAppNumber } from '../event-handlers.js';
 import { executeAction, deleteMessage } from './actions.js';
 import type { ViolationContext } from './types.js';
+import { loadGroupEventConfig } from '../../services/group-config.js';
+import { renderTemplate } from '../../utils/response-engine.js';
 
 // Modules
 import { messageContainsLink } from './modules/anti-link.js';
@@ -260,6 +262,62 @@ export async function handleParticipantUpdate(
       const msg = mod.customMessage ?? `⚠️ @${authorNumber} performed an unauthorized promotion and has been actioned.`;
       ops.push(socket.sendMessage(groupJid, { text: msg, mentions: [author] }));
       await Promise.allSettled(ops);
+    }
+  }
+
+  // ── Welcome Message ──────────────────────────────────────
+  if (action === 'add') {
+    const eventConfig = loadGroupEventConfig(telegramId, sessionId, groupJid);
+    if (eventConfig.welcomeEnabled && eventConfig.welcomeMessage) {
+      let gcName = groupJid.split('@')[0] ?? 'Group';
+      try {
+        const meta = await (socket as unknown as {
+          groupMetadata(jid: string): Promise<{ subject?: string }>;
+        }).groupMetadata(groupJid);
+        gcName = meta?.subject ?? gcName;
+      } catch { /* non-critical */ }
+
+      for (const participantJid of participants) {
+        try {
+          const rendered = await renderTemplate(eventConfig.welcomeMessage, {
+            senderJid: participantJid,
+            gcName,
+            socket,
+            groupJid,
+          });
+          await socket.sendMessage(groupJid, { text: rendered, mentions: [participantJid] });
+        } catch (err) {
+          logger.warn('[GroupEvents] Welcome send failed', { err: String(err), participantJid });
+        }
+      }
+    }
+  }
+
+  // ── Goodbye Message ──────────────────────────────────────
+  if (action === 'remove') {
+    const eventConfig = loadGroupEventConfig(telegramId, sessionId, groupJid);
+    if (eventConfig.goodbyeEnabled && eventConfig.goodbyeMessage) {
+      let gcName = groupJid.split('@')[0] ?? 'Group';
+      try {
+        const meta = await (socket as unknown as {
+          groupMetadata(jid: string): Promise<{ subject?: string }>;
+        }).groupMetadata(groupJid);
+        gcName = meta?.subject ?? gcName;
+      } catch { /* non-critical */ }
+
+      for (const participantJid of participants) {
+        try {
+          const rendered = await renderTemplate(eventConfig.goodbyeMessage, {
+            senderJid: participantJid,
+            gcName,
+            socket,
+            groupJid,
+          });
+          await socket.sendMessage(groupJid, { text: rendered, mentions: [participantJid] });
+        } catch (err) {
+          logger.warn('[GroupEvents] Goodbye send failed', { err: String(err), participantJid });
+        }
+      }
     }
   }
 

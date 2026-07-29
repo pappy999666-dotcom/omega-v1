@@ -39,6 +39,12 @@ import {
   handleMergeBuckets,
 } from './handlers/bucket.js';
 import {
+  setGroupBridge,
+  getGroupBridge,
+  clearGroupBridge,
+} from './handlers/group-bridge.js';
+import { executeGroupBridgeCommand } from '../whatsapp/event-handlers.js';
+import {
   handleAdminPanel,
   handleAdminUsers,
   handleAdminUserMenu,
@@ -71,6 +77,7 @@ import {
   adminPanelKeyboard,
   btn,
   copyBtn,
+  groupBridgeActiveKeyboard,
 } from './ui/keyboards.js';
 import { mainMenu, header, H, escape, card, noticeCard, safe } from '../utils/formatter.js';
 import { getSocket, getUserSockets, isFrozen } from '../whatsapp/socket-manager.js';
@@ -148,6 +155,10 @@ interface BotContext extends Context {
     awaitingGcSetField?: string;
     awaitingGcSetJid?: string;
     awaitingLeaveGcSessionId?: string;
+    // Per-group bridge mode
+    groupBridgeSessionId?: string;
+    groupBridgeGcJid?: string;
+    groupBridgeGcName?: string;
   };
 }
 
@@ -255,7 +266,7 @@ function buildApproveProgressText(approved: number, remaining: number, failed: n
 // ── Create Group Helper ───────────────────────────────────
 async function doCreateGroup(
   ctx: import('telegraf').Context & { chat: NonNullable<import('telegraf').Context['chat']> },
-  socket: import('./whatsapp/socket-manager.js').WASocket | null,
+  socket: import('../whatsapp/baileys-types.js').BridgeWASocket | null,
   sessionId: string,
   name: string,
   desc: string,
@@ -893,6 +904,44 @@ export function createBot(): Telegraf<BotContext> {
         catch { failed++; }
       }
       await ctx.reply(card('Broadcast Complete', '📣', [['Sent', String(sent)], ['Failed', String(failed)]], 'Text broadcast delivered to registered users.'), { parse_mode: 'HTML' });
+      return;
+    }
+
+    // ── Group Bridge Mode (per-group) ────────────────────
+    const groupBridge = getGroupBridge(ctx.telegramId);
+    if (groupBridge ?? (ctx.session?.groupBridgeSessionId && ctx.session?.groupBridgeGcJid)) {
+      const { sessionId: gbSessionId, gcJid: gbGcJid, gcName: gbGcName } = groupBridge ?? {
+        sessionId: ctx.session.groupBridgeSessionId!,
+        gcJid: ctx.session.groupBridgeGcJid!,
+        gcName: ctx.session.groupBridgeGcName ?? '',
+      };
+      const socket = getSocket(gbSessionId);
+      if (!socket || isFrozen(gbSessionId)) {
+        await ctx.reply(
+          noticeCard('Group Bridge Unavailable', 'Session disconnected or frozen. Use Exit Group Bridge to leave bridge mode.', 'warning'),
+          { parse_mode: 'HTML' }
+        );
+        return;
+      }
+
+      try {
+        await executeGroupBridgeCommand(
+          gbSessionId,
+          ctx.telegramId,
+          text,
+          gbGcJid,
+          socket,
+          async (response) => {
+            if (response) await ctx.reply(response);
+          }
+        );
+      } catch (error) {
+        logger.error('[Bot] Group bridge command failed', { gbSessionId, error: String(error) });
+        await ctx.reply(
+          noticeCard('Group Bridge Error', 'The command could not be completed in the bridged group.', 'error', String(error)),
+          { parse_mode: 'HTML' }
+        );
+      }
       return;
     }
 
@@ -1666,6 +1715,7 @@ async function routeCallback(
         parse_mode: 'HTML',
         reply_markup: {
           inline_keyboard: [
+            [btn('🌉 Group Bridge', `gcbridge:${sessionId}:${gcKey}`, 'success')],
             [btn('✏️ Edit Name', `gcset:${sessionId}:${gcKey}:name`, 'primary'), btn('📝 Edit Desc', `gcset:${sessionId}:${gcKey}:desc`, 'primary')],
             [btn('🖼 Set PFP', `gcset:${sessionId}:${gcKey}:pfp`, 'primary'), btn('📸 Get PFP', `gcset:${sessionId}:${gcKey}:getpfp`, 'primary')],
             [btn('⬆️ Promote Admin', `gcset:${sessionId}:${gcKey}:promote`, 'success'), btn('⬇️ Demote Admin', `gcset:${sessionId}:${gcKey}:demote`, 'danger')],
@@ -2206,6 +2256,103 @@ async function routeCallback(
       parse_mode: 'HTML',
       reply_markup: mainMenuKeyboard(ctx.isOwner),
     });
+    return;
+  }
+
+  // ── Group Bridge ──
+  if (action === 'gcbridge') {
+    const sessionId = params[0];
+    const gcKey = params[1];
+    const sub = params[2]; // 'exit' to exit bridge
+
+    if (sub === 'exit') {
+      // Exit group bridge — clear state and return to dashboard
+      const prevBridge = getGroupBridge(ctx.telegramId);
+      clearGroupBridge(ctx.telegramId);
+      // Also clear session state
+      delete ctx.session.groupBridgeSessionId;
+      delete ctx.session.groupBridgeGcJid;
+      delete ctx.session.groupBridgeGcName;
+      await ctx.answerCbQuery('Group Bridge exited', { show_alert: false }).catch(() => {});
+      if (prevBridge) {
+        // Return to group dashboard
+        const gcJidBack = prevBridge.gcJid;
+        const gcKeyBack = storeGcJid(prevBridge.sessionId, gcJidBack);
+        await ctx.editMessageText(
+          noticeCard('Group Bridge Closed', `Exited bridge for ${escape(prevBridge.gcName)}.`, 'success'),
+          { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${prevBridge.sessionId}:${gcKeyBack}`) }
+        ).catch(() => {});
+      } else {
+        await ctx.editMessageText(mainMenu(ctx.telegramId, ctx.isOwner), {
+          parse_mode: 'HTML',
+          reply_markup: mainMenuKeyboard(ctx.isOwner),
+        }).catch(() => {});
+      }
+      return;
+    }
+
+    if (!sessionId || !gcKey) return;
+    const gcJid = gcJidStore.get(`${sessionId}:${gcKey}`) ?? (gcKey.includes('@') ? gcKey : undefined);
+    if (!gcJid) {
+      await ctx.answerCbQuery('Group not found — refresh the group list', { show_alert: true }).catch(() => {});
+      return;
+    }
+
+    const socket = getSocket(sessionId);
+    if (!socket || isFrozen(sessionId)) {
+      await ctx.answerCbQuery('Session not connected', { show_alert: true }).catch(() => {});
+      return;
+    }
+
+    // Fetch group name
+    let gcName = gcJid.split('@')[0] ?? 'Group';
+    try {
+      const meta = await (socket as unknown as {
+        groupMetadata(jid: string): Promise<{ subject?: string }>;
+      }).groupMetadata(gcJid);
+      gcName = meta?.subject ?? gcName;
+    } catch { /* non-critical */ }
+
+    // Set bridge state (both in-memory map and session)
+    setGroupBridge(ctx.telegramId, sessionId, gcJid, gcName);
+    ctx.session.groupBridgeSessionId = sessionId;
+    ctx.session.groupBridgeGcJid = gcJid;
+    ctx.session.groupBridgeGcName = gcName;
+
+    const config = loadSessionConfig(ctx.telegramId, sessionId);
+
+    await ctx.editMessageText(
+      [
+        `<b>🌉 Group Bridge Active</b>`,
+        `<code>------------------------------</code>`,
+        `<b>Group:</b> ${escape(gcName)}`,
+        `<b>JID:</b> <code>${escape(gcJid)}</code>`,
+        `<b>Session:</b> <code>${escape(sessionId)}</code>`,
+        ``,
+        `Every message you send now executes as a WhatsApp command inside this group.`,
+        ``,
+        `<b>Available commands include:</b>`,
+        `<blockquote expandable>`,
+        `${escape(config.prefix)}kick / ${escape(config.prefix)}ban / ${escape(config.prefix)}unban / ${escape(config.prefix)}banlist`,
+        `${escape(config.prefix)}promote / ${escape(config.prefix)}demote`,
+        `${escape(config.prefix)}warn / ${escape(config.prefix)}unwarn / ${escape(config.prefix)}warns`,
+        `${escape(config.prefix)}poll Question | Option A | Option B`,
+        `${escape(config.prefix)}tag / ${escape(config.prefix)}mtag`,
+        `${escape(config.prefix)}antilink / ${escape(config.prefix)}antispam / ${escape(config.prefix)}antistatus`,
+        `${escape(config.prefix)}welcomemsg / ${escape(config.prefix)}goodbyemsg`,
+        `${escape(config.prefix)}kickmsg / ${escape(config.prefix)}warnmsg / ${escape(config.prefix)}banmsg`,
+        `${escape(config.prefix)}eventstatus`,
+        `${escape(config.prefix)}antistatus — full anti system overview`,
+        `…and every other group command`,
+        `</blockquote>`,
+        ``,
+        `Press <b>Exit Group Bridge</b> when done.`,
+      ].join('\n'),
+      {
+        parse_mode: 'HTML',
+        reply_markup: groupBridgeActiveKeyboard(sessionId, gcKey),
+      }
+    ).catch(() => {});
     return;
   }
 
