@@ -216,7 +216,7 @@ export function adminPanelKeyboard(paused = false, maintenance = false): InlineK
         btn('📊 Platform Stats', 'admin:stats', 'primary'),
       ],
       [btn('🔄 Update Bot', 'admin:update', 'success'), btn('🔗 Menu URL', 'admin:menuurl', 'primary')],
-      [btn('🔁 Restart Bot', 'admin:restart', 'danger')],
+      [btn('🔁 Restart Bot', 'admin:restart', 'danger'), btn('📋 Logs', 'admin:logs', 'primary')],
       [btn('🔙 Back', 'menu:main')],
     ],
   };

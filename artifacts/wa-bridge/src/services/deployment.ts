@@ -132,11 +132,11 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
     log.push('', `📌 Current: <code>${prevCommit}</code>`, '⬇️ <b>Fetching from GitHub...</b>');
     await flush();
 
-    await runLive('git', ['fetch', 'origin', 'main'], APP_DIR, (l) => {
+    await runLive('git', ['fetch', 'pappy-omega', 'main'], APP_DIR, (l) => {
       push(`  <code>${l}</code>`);
     });
 
-    const remoteCommit = await safeExec('git rev-parse --short origin/main');
+    const remoteCommit = await safeExec('git rev-parse --short pappy-omega/main');
     log.push(`📌 Remote: <code>${remoteCommit}</code>`);
 
     if (remoteCommit === prevCommit) {
@@ -149,7 +149,7 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
     log.push('', '⬇️ <b>Pulling changes...</b>');
     await flush();
 
-    await runLive('git', ['pull', 'origin', 'main'], APP_DIR, (l) => {
+    await runLive('git', ['pull', 'pappy-omega', 'main'], APP_DIR, (l) => {
       push(`  <code>${l}</code>`);
       const m = l.match(/(\d+) file/);
       if (m) filesChanged = parseInt(m[1] ?? '0', 10);

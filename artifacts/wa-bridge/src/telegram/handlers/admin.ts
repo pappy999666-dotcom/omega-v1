@@ -371,6 +371,87 @@ export async function handleUpdateBot(ctx: Context & { telegramId: string }): Pr
   }
 }
 
+// ── Live Log Stream ──────────────────────────────────────
+
+const activeLogStreams = new Map<string, () => void>();
+
+export async function handleLogStream(ctx: Context & { telegramId: string }): Promise<void> {
+  // Stop existing stream if any
+  activeLogStreams.get(ctx.telegramId)?.();
+
+  await ctx.answerCbQuery('Opening log stream…').catch(() => {});
+
+  let msgId: number;
+  try {
+    const sent = await ctx.telegram.sendMessage(
+      parseInt(ctx.telegramId, 10),
+      `${header('Live Log Stream', '📋')}\n\n<blockquote expandable>⏳ Connecting to pm2 logs…</blockquote>`,
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏹ Stop Stream', callback_data: 'admin:logs:stop' }]] } }
+    );
+    msgId = sent.message_id;
+  } catch { return; }
+
+  const lines: string[] = [];
+  let lastEdit = 0;
+  let editTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const pushEdit = () => {
+    const now = Date.now();
+    if (now - lastEdit < 1000) {
+      if (!editTimer) editTimer = setTimeout(pushEdit, 1000 - (now - lastEdit));
+      return;
+    }
+    editTimer = null;
+    lastEdit = now;
+    const logText = lines.slice(-80).join('\n') || '(no output)';
+    const text = `${header('Live Log Stream', '📋')}\n\n<blockquote expandable>${logText}</blockquote>`;
+    ctx.telegram.editMessageText(
+      parseInt(ctx.telegramId, 10), msgId, undefined,
+      text.slice(0, 4096),
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏹ Stop Stream', callback_data: 'admin:logs:stop' }]] } }
+    ).catch(() => {});
+  };
+
+  const { spawn } = await import('child_process');
+  const proc = spawn('pm2', ['logs', 'wa-bridge', '--lines', '30', '--nocolor'], { env: process.env });
+  let buf = '';
+
+  const onData = (d: Buffer) => {
+    buf += d.toString();
+    const parts = buf.split('\n');
+    buf = parts.pop() ?? '';
+    for (const l of parts) {
+      const clean = l.replace(/\x1b\[[0-9;]*m/g, '').trim();
+      if (clean) lines.push(clean);
+    }
+    pushEdit();
+  };
+
+  proc.stdout.on('data', onData);
+  proc.stderr.on('data', onData);
+
+  const stop = () => {
+    proc.kill();
+    if (editTimer) clearTimeout(editTimer);
+    activeLogStreams.delete(ctx.telegramId);
+    const logText = lines.slice(-80).join('\n') || '(no output)';
+    ctx.telegram.editMessageText(
+      parseInt(ctx.telegramId, 10), msgId, undefined,
+      `${header('Log Stream Stopped', '⏹')}\n\n<blockquote expandable>${logText}</blockquote>`.slice(0, 4096),
+      { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') }
+    ).catch(() => {});
+  };
+
+  activeLogStreams.set(ctx.telegramId, stop);
+
+  // Auto-stop after 5 minutes
+  setTimeout(() => { if (activeLogStreams.has(ctx.telegramId)) stop(); }, 5 * 60 * 1000);
+}
+
+export function stopLogStream(telegramId: string): void {
+  activeLogStreams.get(telegramId)?.();
+}
+
 // ── Restart Bot ────────────────────────────────────────────
 
 export async function handleRestartBot(ctx: Context & { telegramId: string }): Promise<void> {

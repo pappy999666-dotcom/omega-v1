@@ -54,6 +54,8 @@ import {
   handlePlatformStats,
   handleUpdateBot,
   handleRestartBot,
+  handleLogStream,
+  stopLogStream,
 } from './handlers/admin.js';
 import {
   mainMenuKeyboard,
@@ -1649,6 +1651,8 @@ async function routeCallback(
     if (sub === 'stats') { await handlePlatformStats(ctx); return; }
     if (sub === 'update') { await handleUpdateBot(ctx); return; }
     if (sub === 'restart') { await handleRestartBot(ctx); return; }
+    if (sub === 'logs' && params[1] === 'stop') { stopLogStream(ctx.telegramId); await ctx.answerCbQuery('Stream stopped').catch(() => {}); return; }
+    if (sub === 'logs') { await handleLogStream(ctx); return; }
     if (sub === 'menuurl') {
       if (!ctx.isOwner) return;
       const currentUrl = getGlobalMenuUrl();
