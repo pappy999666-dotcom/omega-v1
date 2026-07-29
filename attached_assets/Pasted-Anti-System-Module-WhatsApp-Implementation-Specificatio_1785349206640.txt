@@ -1,0 +1,488 @@
+Anti System Module (WhatsApp) — Implementation Specification
+
+Build a high-performance, event-driven Anti System for a WhatsApp bot using @crysnovax/baileys as the only WhatsApp library.
+
+NPM Package:
+https://www.npmjs.com/package/@crysnovax/baileys
+
+The implementation must rely on the capabilities exposed by @crysnovax/baileys and should not fake unsupported features. Every detector must be implemented using real WhatsApp events and metadata whenever available.
+
+The Anti System should be lightweight, modular, isolated, and optimized for large groups with minimal latency.
+
+---
+
+Core Design
+
+Each anti module should be completely independent.
+
+Example:
+
+- AntiLink
+- AntiBot
+- AntiSpam
+- AntiMedia
+- AntiVoiceNote
+- AntiText
+- AntiEmoji
+- AntiSticker
+- AntiGroupCall
+- AntiNSFW
+- AntiGroupMention
+- AntiWords
+- AntiPoll
+- AntiForward
+- AntiChannel
+- AntiPromote
+- AntiDemote
+
+Every module should have:
+
+- Independent listener
+- Independent configuration
+- Independent permit list
+- Independent custom response
+- Independent action
+- Independent enable/disable state
+
+No module should interfere with another.
+
+---
+
+Available Actions
+
+Every Anti module should support configurable actions.
+
+Supported actions:
+
+- Kick
+- Warn
+- Delete
+- Ignore (disabled)
+
+Examples:
+
+antilink kick
+
+antilink warn 3
+
+antilink delete
+
+antilink off
+
+If an Anti feature is enabled with an action, it is considered ON.
+
+There is no separate ON command.
+
+Turning it OFF should be:
+
+antilink off
+
+The success response should remind the user:
+
+«To disable later, use "antilink off".»
+
+---
+
+Immediate Detection
+
+Detection should happen before users have time to interact with violating content.
+
+Flow:
+
+Detect violation
+
+↓
+
+Execute configured action immediately
+
+↓
+
+Delete violating message(s)
+
+Deletion should happen as quickly as possible using concurrent operations where safe.
+
+---
+
+Permit System
+
+Every Anti module should support exemptions.
+
+Examples:
+
+.linkpermit @user
+
+.linkpermit 234xxxxxxxxxx
+
+.linkpermit (quoted message)
+
+Removal:
+
+.rmlinkpermit @user
+
+.rmlinkpermit (quoted)
+
+.rmlinkpermit number
+
+Each Anti module should have its own permit list.
+
+Examples:
+
+- linkpermit
+- botpermit
+- spampermit
+- mediapermit
+- vnpermit
+
+etc.
+
+---
+
+AntiLink
+
+Implement an extremely fast link detector.
+
+Detect every possible link format supported by WhatsApp.
+
+Including:
+
+- Standard HTTPS links
+- HTTP links
+- chat.whatsapp.com links
+- Links without https://
+- Domain-only links
+- Invite links
+- Deep links
+- Group invite links
+
+Also detect links inside:
+
+- Polls
+- View Once Images
+- View Once Videos
+- Captions
+- Media captions
+- Group Status mentions (where exposed by Baileys)
+- Any supported message container available through @crysnovax/baileys
+
+Delete every detected violating message immediately.
+
+---
+
+AntiBot
+
+Detect automation clients whenever detection is legitimately possible through WhatsApp metadata exposed by Baileys.
+
+Use available metadata and device information to distinguish likely automation clients from normal mobile users.
+
+Do not falsely flag:
+
+- Android
+- iPhone
+- iPad
+- Tablets
+- Official linked devices
+
+Support:
+
+- kick
+- warn
+- delete
+
+Include botpermit.
+
+---
+
+AntiSpam
+
+Detect excessive messaging.
+
+Default:
+
+10 messages
+
+within
+
+5 seconds
+
+Configurable:
+
+.spamlimit [message_count] [seconds]
+
+Example:
+
+.spamlimit 15 8
+
+Use rolling windows instead of fixed intervals.
+
+Avoid false positives from normal fast typists.
+
+Support:
+
+- kick
+- warn
+- delete
+
+Include spampermit.
+
+---
+
+AntiMedia
+
+Split media detection into independent modules.
+
+Support:
+
+- Anti Image
+- Anti Video
+- Anti Audio
+
+Commands:
+
+antipic
+
+antivid
+
+antiaud
+
+Each supports:
+
+- kick
+- warn
+- delete
+- permit
+- off
+
+---
+
+Anti Voice Note
+
+Command:
+
+antivn
+
+Detect voice notes only.
+
+Support all actions.
+
+Include permit system.
+
+---
+
+Anti Text
+
+Command:
+
+antitxt
+
+Block plain text messages.
+
+Support all actions.
+
+---
+
+Anti Emoji
+
+Command:
+
+antiemoji
+
+Detect Unicode emoji.
+
+Support all actions.
+
+Include permit.
+
+---
+
+Anti Sticker
+
+Command:
+
+antisticker
+
+Detect stickers.
+
+Support all actions.
+
+---
+
+Anti Group Call
+
+Detect WhatsApp group call events where available through Baileys.
+
+Immediately execute configured action.
+
+Include permit support.
+
+---
+
+Anti NSFW
+
+Implement using an external NSFW detection API.
+
+Detect:
+
+- Images
+- Videos
+
+Support:
+
+- kick
+- warn
+- delete
+
+Include permit.
+
+---
+
+Anti Group Mention
+
+Detect WhatsApp Status group mentions (where supported by Baileys).
+
+Support all actions.
+
+---
+
+Anti Words
+
+Allow administrators to configure blocked words.
+
+Any matching message immediately triggers the configured action.
+
+Support permit.
+
+---
+
+Anti Poll
+
+Detect creation of polls.
+
+Support:
+
+- kick
+- warn
+- delete
+
+Include permit.
+
+---
+
+Anti Forward
+
+Detect forwarded messages using WhatsApp forwarding metadata.
+
+Block forwarded:
+
+- Text
+- Media
+- Documents
+- Audio
+- Videos
+
+Support all actions.
+
+---
+
+Anti Channel
+
+Detect forwarded WhatsApp Channel posts.
+
+Immediately execute configured action.
+
+Support permit.
+
+---
+
+Anti Promote
+
+Monitor administrator promotions.
+
+Allow configurable reactions when unauthorized promotions occur.
+
+---
+
+Anti Demote
+
+Support multiple modes.
+
+Mode:
+
+antidemote dwp
+
+Demote the admin responsible.
+
+Do not restore the removed admin.
+
+---
+
+Mode:
+
+antidemote dnp
+
+Demote the responsible admin.
+
+Restore the removed admin.
+
+---
+
+Mode:
+
+antidemote kwp
+
+Kick the responsible admin.
+
+Do not restore.
+
+---
+
+Mode:
+
+antidemote knp
+
+Kick the responsible admin.
+
+Restore the removed admin.
+
+---
+
+Performance
+
+The Anti System must:
+
+- Handle thousands of messages efficiently.
+- Minimize memory usage.
+- Use isolated listeners.
+- Support concurrent processing where safe.
+- Avoid blocking unrelated commands.
+- Continue operating if one detector encounters an error.
+
+---
+
+Custom Responses
+
+Every Anti module should support configurable responses.
+
+Examples:
+
+antilinkmsg
+
+antispammsg
+
+antiemoji msg
+
+antivnmsg
+
+Variables should include:
+
+- @mention
+- &gcname
+- &desc
+- &getpp
+
+The response system should be shared across all Anti modules.
+
+---
+
+Final Goal
+
+The Anti System should function as a professional moderation engine built entirely around @crysnovax/baileys, using real WhatsApp events and metadata wherever possible. It should be fast, modular, configurable, and resilient, providing reliable protection for large WhatsApp groups without unnecessary overhead.

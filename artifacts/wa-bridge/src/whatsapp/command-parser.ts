@@ -132,6 +132,46 @@ export const ALL_COMMANDS = [
   'addlink',
   // Pairing from WhatsApp
   'pair',
+  // ── Anti System ──
+  'antistatus',
+  // AntiLink
+  'antilink', 'linkpermit', 'rmlinkpermit', 'antilinkmsg',
+  // AntiBot
+  'antibot', 'botpermit', 'rmbotpermit',
+  // AntiSpam
+  'antispam', 'spamlimit', 'spampermit', 'rmspampermit', 'antispammsg',
+  // AntiPic
+  'antipic', 'picpermit', 'rmpicpermit',
+  // AntiVid
+  'antivid', 'vidpermit', 'rmvidpermit',
+  // AntiAud
+  'antiaud', 'audpermit', 'rmaudpermit',
+  // AntiVN
+  'antivn', 'vnpermit', 'rmvnpermit', 'antivnmsg',
+  // AntiText
+  'antitxt',
+  // AntiEmoji
+  'antiemoji', 'emojipermit', 'rmemojipermit', 'antiemojimsg',
+  // AntiSticker
+  'antisticker', 'sticpermit', 'rmsticpermit',
+  // AntiGroupCall
+  'antigroupcall',
+  // AntiNSFW
+  'antinsfw', 'nsfwpermit', 'rmnsfwpermit',
+  // AntiGroupMention
+  'antigroupmention', 'mentionpermit', 'rmmentionpermit',
+  // AntiWords
+  'antiwords', 'antiaddword', 'antirmword', 'antiwordlist', 'antiwordsmsg',
+  // AntiPoll
+  'antipoll', 'pollpermit', 'rmpollpermit',
+  // AntiForward
+  'antiforward', 'fwdpermit', 'rmfwdpermit',
+  // AntiChannel
+  'antichannel', 'chanpermit', 'rmchanpermit',
+  // AntiPromote
+  'antipromote',
+  // AntiDemote
+  'antidemote',
 ] as const;
 
 export type CommandName = typeof ALL_COMMANDS[number];

@@ -1,0 +1,312 @@
+// ============================================================
+// Anti System — Per-Session Group Config Storage
+// Stored at: workspaces/{tg_id}/sessions/{session_id}/anti-groups.json
+// ============================================================
+
+import fs from 'fs';
+import path from 'path';
+import { sessionDir } from '../../services/workspace.js';
+import { logger } from '../../utils/logger.js';
+import type {
+  GroupAntiConfig,
+  SessionAntiConfig,
+  AntiModuleConfig,
+  AntiSpamConfig,
+  AntiWordsConfig,
+  AntiDemoteConfig,
+  AntiAction,
+  AntiDemoteMode,
+} from './types.js';
+
+// ── Defaults ──────────────────────────────────────────────
+
+export function defaultModuleConfig(action: AntiAction = 'delete'): AntiModuleConfig {
+  return {
+    enabled: false,
+    action,
+    warnThreshold: 3,
+    permitList: [],
+  };
+}
+
+export function defaultSpamConfig(): AntiSpamConfig {
+  return {
+    ...defaultModuleConfig('kick'),
+    messageLimit: 10,
+    windowSeconds: 5,
+  };
+}
+
+export function defaultWordsConfig(): AntiWordsConfig {
+  return {
+    ...defaultModuleConfig('delete'),
+    words: [],
+  };
+}
+
+export function defaultDemoteConfig(): AntiDemoteConfig {
+  return {
+    ...defaultModuleConfig('kick'),
+    mode: 'dwp',
+  };
+}
+
+// ── Path ─────────────────────────────────────────────────
+
+function antiConfigPath(telegramId: string, sessionId: string): string {
+  return path.join(sessionDir(telegramId, sessionId), 'anti-groups.json');
+}
+
+// ── I/O ──────────────────────────────────────────────────
+
+export function loadSessionAntiConfig(
+  telegramId: string,
+  sessionId: string
+): SessionAntiConfig {
+  const p = antiConfigPath(telegramId, sessionId);
+  if (!fs.existsSync(p)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf8')) as SessionAntiConfig;
+  } catch (err) {
+    logger.warn('[AntiSystem] Failed to parse anti config, resetting', { err: String(err) });
+    return {};
+  }
+}
+
+export function saveSessionAntiConfig(
+  telegramId: string,
+  sessionId: string,
+  config: SessionAntiConfig
+): void {
+  const p = antiConfigPath(telegramId, sessionId);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify(config, null, 2), 'utf8');
+}
+
+export function loadGroupAntiConfig(
+  telegramId: string,
+  sessionId: string,
+  groupJid: string
+): GroupAntiConfig {
+  const all = loadSessionAntiConfig(telegramId, sessionId);
+  return all[groupJid] ?? { groupJid };
+}
+
+export function saveGroupAntiConfig(
+  telegramId: string,
+  sessionId: string,
+  config: GroupAntiConfig
+): void {
+  const all = loadSessionAntiConfig(telegramId, sessionId);
+  all[config.groupJid] = config;
+  saveSessionAntiConfig(telegramId, sessionId, all);
+}
+
+// ── Module Helpers ────────────────────────────────────────
+
+export function getModuleConfig<K extends keyof Omit<GroupAntiConfig, 'groupJid' | 'messages'>>(
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  key: K
+): GroupAntiConfig[K] | undefined {
+  const gc = loadGroupAntiConfig(telegramId, sessionId, groupJid);
+  return gc[key];
+}
+
+export function setModuleConfig<K extends keyof Omit<GroupAntiConfig, 'groupJid' | 'messages'>>(
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  key: K,
+  value: GroupAntiConfig[K]
+): void {
+  const all = loadSessionAntiConfig(telegramId, sessionId);
+  if (!all[groupJid]) all[groupJid] = { groupJid };
+  all[groupJid][key] = value;
+  saveSessionAntiConfig(telegramId, sessionId, all);
+}
+
+// ── Permit Helpers ────────────────────────────────────────
+
+export function addPermit(
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  moduleKey: keyof Omit<GroupAntiConfig, 'groupJid' | 'messages'>,
+  number: string
+): void {
+  const all = loadSessionAntiConfig(telegramId, sessionId);
+  if (!all[groupJid]) all[groupJid] = { groupJid };
+  const mod = (all[groupJid][moduleKey] as AntiModuleConfig | undefined);
+  if (!mod) return;
+  if (!mod.permitList.includes(number)) {
+    mod.permitList.push(number);
+  }
+  saveSessionAntiConfig(telegramId, sessionId, all);
+}
+
+export function removePermit(
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  moduleKey: keyof Omit<GroupAntiConfig, 'groupJid' | 'messages'>,
+  number: string
+): void {
+  const all = loadSessionAntiConfig(telegramId, sessionId);
+  if (!all[groupJid]) return;
+  const mod = (all[groupJid][moduleKey] as AntiModuleConfig | undefined);
+  if (!mod) return;
+  mod.permitList = mod.permitList.filter((n) => n !== number);
+  saveSessionAntiConfig(telegramId, sessionId, all);
+}
+
+// ── Custom Message ────────────────────────────────────────
+
+export function setCustomMessage(
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  key: string,
+  message: string
+): void {
+  const all = loadSessionAntiConfig(telegramId, sessionId);
+  if (!all[groupJid]) all[groupJid] = { groupJid };
+  if (!all[groupJid].messages) all[groupJid].messages = {};
+  all[groupJid].messages![key] = message;
+  saveSessionAntiConfig(telegramId, sessionId, all);
+}
+
+export function getCustomMessage(
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  key: string
+): string | undefined {
+  const gc = loadGroupAntiConfig(telegramId, sessionId, groupJid);
+  return gc.messages?.[key];
+}
+
+// ── Warn Counts — in-memory per process ──────────────────
+// key: `${sessionId}:${groupJid}:${senderNumber}:${moduleKey}`
+
+const warnCounts = new Map<string, number>();
+
+export function incrementWarn(
+  sessionId: string,
+  groupJid: string,
+  senderNumber: string,
+  moduleKey: string
+): number {
+  const key = `${sessionId}:${groupJid}:${senderNumber}:${moduleKey}`;
+  const count = (warnCounts.get(key) ?? 0) + 1;
+  warnCounts.set(key, count);
+  return count;
+}
+
+export function resetWarn(
+  sessionId: string,
+  groupJid: string,
+  senderNumber: string,
+  moduleKey: string
+): void {
+  const key = `${sessionId}:${groupJid}:${senderNumber}:${moduleKey}`;
+  warnCounts.delete(key);
+}
+
+export function getWarnCount(
+  sessionId: string,
+  groupJid: string,
+  senderNumber: string,
+  moduleKey: string
+): number {
+  const key = `${sessionId}:${groupJid}:${senderNumber}:${moduleKey}`;
+  return warnCounts.get(key) ?? 0;
+}
+
+// ── AntiSpam rolling window — in-memory ──────────────────
+// key: `${sessionId}:${groupJid}:${senderNumber}`
+
+const spamWindows = new Map<string, number[]>();
+
+export function recordSpamMessage(
+  sessionId: string,
+  groupJid: string,
+  senderNumber: string,
+  windowSeconds: number
+): number {
+  const key = `${sessionId}:${groupJid}:${senderNumber}`;
+  const now = Date.now();
+  const cutoff = now - windowSeconds * 1000;
+  const existing = (spamWindows.get(key) ?? []).filter((t) => t > cutoff);
+  existing.push(now);
+  spamWindows.set(key, existing);
+  return existing.length;
+}
+
+export function resetSpamWindow(
+  sessionId: string,
+  groupJid: string,
+  senderNumber: string
+): void {
+  spamWindows.delete(`${sessionId}:${groupJid}:${senderNumber}`);
+}
+
+// ── AntiSpam config update ────────────────────────────────
+
+export function setSpamLimit(
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  messageLimit: number,
+  windowSeconds: number
+): void {
+  const all = loadSessionAntiConfig(telegramId, sessionId);
+  if (!all[groupJid]) all[groupJid] = { groupJid };
+  const existing = (all[groupJid].antispam ?? defaultSpamConfig()) as AntiSpamConfig;
+  all[groupJid].antispam = { ...existing, messageLimit, windowSeconds };
+  saveSessionAntiConfig(telegramId, sessionId, all);
+}
+
+// ── AntiWords helpers ─────────────────────────────────────
+
+export function addWord(
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  word: string
+): void {
+  const all = loadSessionAntiConfig(telegramId, sessionId);
+  if (!all[groupJid]) all[groupJid] = { groupJid };
+  if (!all[groupJid].antiwords) all[groupJid].antiwords = defaultWordsConfig();
+  const words = all[groupJid].antiwords!.words;
+  if (!words.includes(word)) words.push(word);
+  saveSessionAntiConfig(telegramId, sessionId, all);
+}
+
+export function removeWord(
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  word: string
+): void {
+  const all = loadSessionAntiConfig(telegramId, sessionId);
+  if (!all[groupJid]?.antiwords) return;
+  all[groupJid].antiwords!.words = all[groupJid].antiwords!.words.filter((w) => w !== word);
+  saveSessionAntiConfig(telegramId, sessionId, all);
+}
+
+// ── AntiDemote mode update ────────────────────────────────
+
+export function setDemoteMode(
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  mode: AntiDemoteMode
+): void {
+  const all = loadSessionAntiConfig(telegramId, sessionId);
+  if (!all[groupJid]) all[groupJid] = { groupJid };
+  const existing = (all[groupJid].antidemote ?? defaultDemoteConfig()) as AntiDemoteConfig;
+  all[groupJid].antidemote = { ...existing, enabled: true, mode };
+  saveSessionAntiConfig(telegramId, sessionId, all);
+}

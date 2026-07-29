@@ -35,6 +35,19 @@ import { PreviewManager } from '../preview-engine/index.js';
 import { statusDesignEngine } from '../services/StatusDesignEngine.js';
 import type { SessionMeta } from '../types/index.js';
 import { pendingGcCodes } from '../telegram/bot.js';
+// ── Anti System ───────────────────────────────────────────
+import { runAntiChecks, handleParticipantUpdate } from './anti-system/index.js';
+import {
+  handleAntiCommand,
+  handlePermitCommand,
+  handleSpamlimit,
+  handleAntiMsg,
+  handleAntiAddWord,
+  handleAntiRemoveWord,
+  handleAntiWordList,
+  handleAntiDemote,
+  handleAntiStatus,
+} from './anti-system/commands.js';
 
 // Map from sessionId → telegramId (populated at init)
 const sessionOwnerMap = new Map<string, string>();
@@ -130,6 +143,24 @@ export async function handleWAEvent(
 ): Promise<void> {
   if (event === 'messages.upsert') {
     await handleMessages(sessionId, data as { messages: WebMessageInfo[]; type: string }, socket);
+    return;
+  }
+
+  // ── Anti System: group participant events (AntiPromote / AntiDemote) ──
+  if (event === 'group-participants.update') {
+    const telegramId = sessionOwnerMap.get(sessionId);
+    if (telegramId) {
+      const update = data as { id: string; participants: string[]; action: string; author?: string };
+      await handleParticipantUpdate(socket, sessionId, telegramId, {
+        id: update.id,
+        participants: update.participants,
+        action: update.action as 'add' | 'remove' | 'promote' | 'demote',
+        author: update.author,
+      }).catch((err) => {
+        logger.warn('[AntiSystem] handleParticipantUpdate error', { err: String(err) });
+      });
+    }
+    return;
   }
 }
 
@@ -194,6 +225,15 @@ async function handleMessages(
         }
         continue;
       }
+    }
+
+    // ── Anti System: run BEFORE command dispatch ──────────────
+    // Non-throwing; errors in anti modules are isolated internally.
+    try {
+      const triggered = await runAntiChecks(socket, msg, sessionId, telegramId);
+      if (triggered) continue; // skip command parsing for violated messages
+    } catch (err) {
+      logger.warn('[AntiSystem] runAntiChecks threw', { err: String(err) });
     }
 
     await processMessage(sessionId, telegramId, msg, socket).catch((err) => {
@@ -947,6 +987,280 @@ async function processMessage(
         : errorCard('MTAG FAILED', res.error ?? 'Could not fetch group participants.'));
       break;
     }
+
+    // ──────────────────────────────────────────────────────────
+    // ◈ ANTI SYSTEM — Group Moderation Engine
+    // ──────────────────────────────────────────────────────────
+
+    // ── Anti System Overview ──
+    case 'antistatus': {
+      await reply(handleAntiStatus(telegramId, sessionId, groupJid));
+      break;
+    }
+
+    // ── AntiLink ──
+    case 'antilink': {
+      await reply(handleAntiCommand('antilink', 'antilink', args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+    case 'linkpermit': {
+      await reply(handlePermitCommand('antilink', true, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'rmlinkpermit': {
+      await reply(handlePermitCommand('antilink', false, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'antilinkmsg': {
+      await reply(handleAntiMsg('antilink', args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    // ── AntiBot ──
+    case 'antibot': {
+      await reply(handleAntiCommand('antibot', 'antibot', args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+    case 'botpermit': {
+      await reply(handlePermitCommand('antibot', true, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'rmbotpermit': {
+      await reply(handlePermitCommand('antibot', false, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    // ── AntiSpam ──
+    case 'antispam': {
+      await reply(handleAntiCommand('antispam', 'antispam', args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+    case 'spamlimit': {
+      await reply(handleSpamlimit(args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+    case 'spampermit': {
+      await reply(handlePermitCommand('antispam', true, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'rmspampermit': {
+      await reply(handlePermitCommand('antispam', false, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'antispammsg': {
+      await reply(handleAntiMsg('antispam', args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    // ── AntiPic ──
+    case 'antipic': {
+      await reply(handleAntiCommand('antipic', 'antipic', args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+    case 'picpermit': {
+      await reply(handlePermitCommand('antipic', true, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'rmpicpermit': {
+      await reply(handlePermitCommand('antipic', false, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    // ── AntiVid ──
+    case 'antivid': {
+      await reply(handleAntiCommand('antivid', 'antivid', args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+    case 'vidpermit': {
+      await reply(handlePermitCommand('antivid', true, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'rmvidpermit': {
+      await reply(handlePermitCommand('antivid', false, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    // ── AntiAud ──
+    case 'antiaud': {
+      await reply(handleAntiCommand('antiaud', 'antiaud', args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+    case 'audpermit': {
+      await reply(handlePermitCommand('antiaud', true, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'rmaudpermit': {
+      await reply(handlePermitCommand('antiaud', false, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    // ── AntiVN ──
+    case 'antivn': {
+      await reply(handleAntiCommand('antivn', 'antivn', args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+    case 'vnpermit': {
+      await reply(handlePermitCommand('antivn', true, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'rmvnpermit': {
+      await reply(handlePermitCommand('antivn', false, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'antivnmsg': {
+      await reply(handleAntiMsg('antivn', args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    // ── AntiText ──
+    case 'antitxt': {
+      await reply(handleAntiCommand('antitxt', 'antitxt', args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+
+    // ── AntiEmoji ──
+    case 'antiemoji': {
+      await reply(handleAntiCommand('antiemoji', 'antiemoji', args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+    case 'emojipermit': {
+      await reply(handlePermitCommand('antiemoji', true, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'rmemojipermit': {
+      await reply(handlePermitCommand('antiemoji', false, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'antiemojimsg': {
+      await reply(handleAntiMsg('antiemoji', args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    // ── AntiSticker ──
+    case 'antisticker': {
+      await reply(handleAntiCommand('antisticker', 'antisticker', args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+    case 'sticpermit': {
+      await reply(handlePermitCommand('antisticker', true, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'rmsticpermit': {
+      await reply(handlePermitCommand('antisticker', false, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    // ── AntiGroupCall ──
+    case 'antigroupcall': {
+      await reply(handleAntiCommand('antigroupcall', 'antigroupcall', args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+
+    // ── AntiNSFW ──
+    case 'antinsfw': {
+      await reply(handleAntiCommand('antinsfw', 'antinsfw', args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+    case 'nsfwpermit': {
+      await reply(handlePermitCommand('antinsfw', true, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'rmnsfwpermit': {
+      await reply(handlePermitCommand('antinsfw', false, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    // ── AntiGroupMention ──
+    case 'antigroupmention': {
+      await reply(handleAntiCommand('antigroupmention', 'antigroupmention', args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+    case 'mentionpermit': {
+      await reply(handlePermitCommand('antigroupmention', true, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'rmmentionpermit': {
+      await reply(handlePermitCommand('antigroupmention', false, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    // ── AntiWords ──
+    case 'antiwords': {
+      await reply(handleAntiCommand('antiwords', 'antiwords', args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+    case 'antiaddword': {
+      await reply(handleAntiAddWord(args, telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'antirmword': {
+      await reply(handleAntiRemoveWord(args, telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'antiwordlist': {
+      await reply(handleAntiWordList(telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'antiwordsmsg': {
+      await reply(handleAntiMsg('antiwords', args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    // ── AntiPoll ──
+    case 'antipoll': {
+      await reply(handleAntiCommand('antipoll', 'antipoll', args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+    case 'pollpermit': {
+      await reply(handlePermitCommand('antipoll', true, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'rmpollpermit': {
+      await reply(handlePermitCommand('antipoll', false, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    // ── AntiForward ──
+    case 'antiforward': {
+      await reply(handleAntiCommand('antiforward', 'antiforward', args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+    case 'fwdpermit': {
+      await reply(handlePermitCommand('antiforward', true, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'rmfwdpermit': {
+      await reply(handlePermitCommand('antiforward', false, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    // ── AntiChannel ──
+    case 'antichannel': {
+      await reply(handleAntiCommand('antichannel', 'antichannel', args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+    case 'chanpermit': {
+      await reply(handlePermitCommand('antichannel', true, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'rmchanpermit': {
+      await reply(handlePermitCommand('antichannel', false, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
+    // ── AntiPromote ──
+    case 'antipromote': {
+      await reply(handleAntiCommand('antipromote', 'antipromote', args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+
+    // ── AntiDemote ──
+    case 'antidemote': {
+      await reply(handleAntiDemote(args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+
+    // ──────────────────────────────────────────────────────────
 
     // ── Add links to bucket ──
     case 'addlink': {
