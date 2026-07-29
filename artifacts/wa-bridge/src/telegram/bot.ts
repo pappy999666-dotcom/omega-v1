@@ -69,6 +69,8 @@ import {
   supportKeyboard,
   settingsKeyboard,
   adminPanelKeyboard,
+  btn,
+  copyBtn,
 } from './ui/keyboards.js';
 import { mainMenu, header, H, escape, card, noticeCard, safe } from '../utils/formatter.js';
 import { getSocket, getUserSockets, isFrozen } from '../whatsapp/socket-manager.js';
@@ -294,10 +296,10 @@ async function doCreateGroup(
           parse_mode: 'HTML',
           reply_markup: {
             inline_keyboard: [
-              [{ text: 'Copy Invite Link', copy_text: { text: inviteLink } } as never],
-              [{ text: 'Copy Admin Code', copy_text: { text: joinCode } } as never],
-              [{ text: 'Group Settings', callback_data: `gcset:${sessionId}:${storeGcJid(sessionId, groupJid)}` }],
-              [{ text: 'Back', callback_data: `session:${sessionId}:menu` }],
+              [copyBtn('📋 Copy Invite Link', inviteLink, 'primary')],
+              [copyBtn('📋 Copy Admin Code', joinCode, 'primary')],
+              [btn('⚙️ Group Settings', `gcset:${sessionId}:${storeGcJid(sessionId, groupJid)}`, 'primary')],
+              [btn('🔙 Back', `session:${sessionId}:menu`, 'primary')],
             ],
           },
         }
@@ -1409,13 +1411,13 @@ async function routeCallback(
       const total = groups.length;
       const slice = groups.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
       const names = slice.map((g, i) => `${page * PAGE_SIZE + i + 1}. ${escape(g.subject)}`);
-      const nav: { text: string; callback_data: string }[] = [];
-      if (page > 0) nav.push({ text: '◀ Prev', callback_data: `session:${sessionId}:groups:${page - 1}` });
-      if ((page + 1) * PAGE_SIZE < total) nav.push({ text: 'Next ▶', callback_data: `session:${sessionId}:groups:${page + 1}` });
+      const nav: ReturnType<typeof btn>[] = [];
+      if (page > 0) nav.push(btn('◀ Prev', `session:${sessionId}:groups:${page - 1}`, 'primary'));
+      if ((page + 1) * PAGE_SIZE < total) nav.push(btn('Next ▶', `session:${sessionId}:groups:${page + 1}`, 'primary'));
       const keyboard = {
         inline_keyboard: [
           ...(nav.length ? [nav] : []),
-          [{ text: '🔙 Back', callback_data: `session:${sessionId}:menu` }],
+          [btn('🔙 Back', `session:${sessionId}:menu`, 'primary')],
         ],
       };
       const text = [
@@ -1580,13 +1582,10 @@ async function routeCallback(
       const PAGE = 20;
       const total = groupsToShow.length;
       const slice = groupsToShow.slice(page * PAGE, (page + 1) * PAGE);
-      const nav: { text: string; callback_data: string }[] = [];
-      if (page > 0) nav.push({ text: 'Prev', callback_data: `session:${sessionId}:mygroups:${page - 1}` });
-      if ((page + 1) * PAGE < total) nav.push({ text: 'Next', callback_data: `session:${sessionId}:mygroups:${page + 1}` });
-      const gcButtons = slice.map((g) => [{
-        text: (g as unknown as { subject: string }).subject,
-        callback_data: `gcset:${sessionId}:${storeGcJid(sessionId, g.id)}`,
-      }]);
+      const nav: ReturnType<typeof btn>[] = [];
+      if (page > 0) nav.push(btn('◀ Prev', `session:${sessionId}:mygroups:${page - 1}`, 'primary'));
+      if ((page + 1) * PAGE < total) nav.push(btn('Next ▶', `session:${sessionId}:mygroups:${page + 1}`, 'primary'));
+      const gcButtons = slice.map((g) => [btn((g as unknown as { subject: string }).subject, `gcset:${sessionId}:${storeGcJid(sessionId, g.id)}`, 'primary')]);
       await ctx.editMessageText(
         card('My Groups (Admin)', 'GC', [['Total', String(total)], ['Page', `${page + 1}/${Math.ceil(total / PAGE) || 1}`]], total ? 'Groups where this session is admin.' : 'Not admin in any group.'),
         {
@@ -1595,7 +1594,7 @@ async function routeCallback(
             inline_keyboard: [
               ...gcButtons,
               ...(nav.length ? [nav] : []),
-              [{ text: 'Back', callback_data: `session:${sessionId}:menu` }],
+              [btn('🔙 Back', `session:${sessionId}:menu`, 'primary')],
             ],
           },
         }
@@ -1667,16 +1666,16 @@ async function routeCallback(
         parse_mode: 'HTML',
         reply_markup: {
           inline_keyboard: [
-            [{ text: 'Edit Name', callback_data: `gcset:${sessionId}:${gcKey}:name` }, { text: 'Edit Desc', callback_data: `gcset:${sessionId}:${gcKey}:desc` }],
-            [{ text: 'Set PFP', callback_data: `gcset:${sessionId}:${gcKey}:pfp` }, { text: 'Get PFP', callback_data: `gcset:${sessionId}:${gcKey}:getpfp` }],
-            [{ text: '⬆️ Promote Admin', callback_data: `gcset:${sessionId}:${gcKey}:promote` }, { text: '⬇️ Demote Admin', callback_data: `gcset:${sessionId}:${gcKey}:demote` }],
-            [{ text: 'Join Approval ON', callback_data: `gcset:${sessionId}:${gcKey}:approval:on` }, { text: 'Join Approval OFF', callback_data: `gcset:${sessionId}:${gcKey}:approval:off` }],
-            [{ text: 'Members Add ON', callback_data: `gcset:${sessionId}:${gcKey}:memberadd:on` }, { text: 'Members Add OFF', callback_data: `gcset:${sessionId}:${gcKey}:memberadd:off` }],
-            [{ text: '📎 Invite Link', callback_data: `gcset:${sessionId}:${gcKey}:invitelink` }],
-            [{ text: '🦵 Kick All Members', callback_data: `gcset:${sessionId}:${gcKey}:kickall` }, { text: '🦵 Kick All Admins', callback_data: `gcset:${sessionId}:${gcKey}:kickadmins` }],
-            [{ text: '⬇️ Demote All Admins', callback_data: `gcset:${sessionId}:${gcKey}:demoteall` }, { text: '✅ Approve Requests', callback_data: `gcset:${sessionId}:${gcKey}:approverequests` }],
-            [{ text: 'Leave Group', callback_data: `gcset:${sessionId}:${gcKey}:leave` }],
-            [{ text: 'Back', callback_data: `session:${sessionId}:mygroups` }],
+            [btn('✏️ Edit Name', `gcset:${sessionId}:${gcKey}:name`, 'primary'), btn('📝 Edit Desc', `gcset:${sessionId}:${gcKey}:desc`, 'primary')],
+            [btn('🖼 Set PFP', `gcset:${sessionId}:${gcKey}:pfp`, 'primary'), btn('📸 Get PFP', `gcset:${sessionId}:${gcKey}:getpfp`, 'primary')],
+            [btn('⬆️ Promote Admin', `gcset:${sessionId}:${gcKey}:promote`, 'success'), btn('⬇️ Demote Admin', `gcset:${sessionId}:${gcKey}:demote`, 'danger')],
+            [btn('✅ Join Approval ON', `gcset:${sessionId}:${gcKey}:approval:on`, 'success'), btn('🔴 Join Approval OFF', `gcset:${sessionId}:${gcKey}:approval:off`, 'danger')],
+            [btn('✅ Members Add ON', `gcset:${sessionId}:${gcKey}:memberadd:on`, 'success'), btn('🔴 Members Add OFF', `gcset:${sessionId}:${gcKey}:memberadd:off`, 'danger')],
+            [btn('📎 Invite Link', `gcset:${sessionId}:${gcKey}:invitelink`, 'primary')],
+            [btn('🦵 Kick All Members', `gcset:${sessionId}:${gcKey}:kickall`, 'danger'), btn('🦵 Kick All Admins', `gcset:${sessionId}:${gcKey}:kickadmins`, 'danger')],
+            [btn('⬇️ Demote All Admins', `gcset:${sessionId}:${gcKey}:demoteall`, 'danger'), btn('✅ Approve Requests', `gcset:${sessionId}:${gcKey}:approverequests`, 'success')],
+            [btn('🚪 Leave Group', `gcset:${sessionId}:${gcKey}:leave`, 'danger')],
+            [btn('🔙 Back', `session:${sessionId}:mygroups`, 'primary')],
           ],
         },
       }).catch(() => {});
@@ -1788,8 +1787,8 @@ async function routeCallback(
             parse_mode: 'HTML',
             reply_markup: {
               inline_keyboard: [
-                [{ text: '📋 Copy Link', copy_text: { text: inviteLink } } as unknown as import('telegraf/types').InlineKeyboardButton],
-                [{ text: '🔙 Back', callback_data: `gcset:${sessionId}:${gcKey}` }],
+                [copyBtn('📋 Copy Link', inviteLink, 'primary')],
+                [btn('🔙 Back', `gcset:${sessionId}:${gcKey}`, 'primary')],
               ],
             },
           }
@@ -1829,7 +1828,7 @@ async function routeCallback(
           parse_mode: 'HTML',
           reply_markup: {
             inline_keyboard: [
-              [{ text: '✅ Yes, Kick All', callback_data: `gcset:${sessionId}:${gcKey}:kickall:run` }, { text: '❌ Cancel', callback_data: `gcset:${sessionId}:${gcKey}` }],
+              [btn('✅ Yes, Kick All', `gcset:${sessionId}:${gcKey}:kickall:run`, 'danger'), btn('❌ Cancel', `gcset:${sessionId}:${gcKey}`, 'primary')],
             ],
           },
         }
@@ -1905,7 +1904,7 @@ async function routeCallback(
           parse_mode: 'HTML',
           reply_markup: {
             inline_keyboard: [
-              [{ text: '✅ Yes, Kick All Admins', callback_data: `gcset:${sessionId}:${gcKey}:kickadmins:run` }, { text: '❌ Cancel', callback_data: `gcset:${sessionId}:${gcKey}` }],
+              [btn('✅ Yes, Kick All Admins', `gcset:${sessionId}:${gcKey}:kickadmins:run`, 'danger'), btn('❌ Cancel', `gcset:${sessionId}:${gcKey}`, 'primary')],
             ],
           },
         }
@@ -1979,7 +1978,7 @@ async function routeCallback(
           parse_mode: 'HTML',
           reply_markup: {
             inline_keyboard: [
-              [{ text: '✅ Yes, Demote All', callback_data: `gcset:${sessionId}:${gcKey}:demoteall:run` }, { text: '❌ Cancel', callback_data: `gcset:${sessionId}:${gcKey}` }],
+              [btn('✅ Yes, Demote All', `gcset:${sessionId}:${gcKey}:demoteall:run`, 'danger'), btn('❌ Cancel', `gcset:${sessionId}:${gcKey}`, 'primary')],
             ],
           },
         }
@@ -2047,10 +2046,10 @@ async function routeCallback(
           parse_mode: 'HTML',
           reply_markup: {
             inline_keyboard: [
-              [{ text: `✅ Approve All (${pendingCount})`, callback_data: `gcset:${sessionId}:${gcKey}:approverequests:all` }],
-              [{ text: '🔢 Approve by Amount', callback_data: `gcset:${sessionId}:${gcKey}:approverequests:byamount` }],
-              [{ text: '🌍 Approve by Country', callback_data: `gcset:${sessionId}:${gcKey}:approverequests:bycountry` }],
-              [{ text: '🔙 Back', callback_data: `gcset:${sessionId}:${gcKey}` }],
+              [btn(`✅ Approve All (${pendingCount})`, `gcset:${sessionId}:${gcKey}:approverequests:all`, 'success')],
+              [btn('🔢 Approve by Amount', `gcset:${sessionId}:${gcKey}:approverequests:byamount`, 'success')],
+              [btn('🌍 Approve by Country', `gcset:${sessionId}:${gcKey}:approverequests:bycountry`, 'success')],
+              [btn('🔙 Back', `gcset:${sessionId}:${gcKey}`, 'primary')],
             ],
           },
         }
@@ -2079,7 +2078,7 @@ async function routeCallback(
           parse_mode: 'HTML',
           reply_markup: {
             inline_keyboard: [
-              [{ text: '✅ Yes, Approve All', callback_data: `gcset:${sessionId}:${gcKey}:approverequests:all:run` }, { text: '❌ Cancel', callback_data: `gcset:${sessionId}:${gcKey}:approverequests` }],
+              [btn('✅ Yes, Approve All', `gcset:${sessionId}:${gcKey}:approverequests:all:run`, 'success'), btn('❌ Cancel', `gcset:${sessionId}:${gcKey}:approverequests`, 'primary')],
             ],
           },
         }
@@ -2275,8 +2274,8 @@ async function routeCallback(
         {
           parse_mode: 'HTML',
           reply_markup: currentUrl
-            ? { inline_keyboard: [[{ text: '🗑 Clear URL', callback_data: 'admin:menuurl:clear' }], [{ text: '🔙 Back', callback_data: 'admin:panel' }]] }
-            : { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'admin:panel' }]] },
+            ? { inline_keyboard: [[btn('🗑 Clear URL', 'admin:menuurl:clear', 'danger')], [btn('🔙 Back', 'admin:panel', 'primary')]] }
+            : { inline_keyboard: [[btn('🔙 Back', 'admin:panel', 'primary')]] },
         }
       );
       return;

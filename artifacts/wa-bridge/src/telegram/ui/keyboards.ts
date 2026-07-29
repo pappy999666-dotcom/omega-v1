@@ -11,15 +11,15 @@ type IKB = InlineKeyboardMarkup['inline_keyboard'][number][number];
 type ButtonStyle = 'primary' | 'success' | 'danger';
 type StyledIKB = IKB & { style?: ButtonStyle };
 
-function btn(text: string, callback_data: string, style: ButtonStyle = 'primary'): IKB {
+export function btn(text: string, callback_data: string, style: ButtonStyle = 'primary'): IKB {
   return { text, callback_data, style } as StyledIKB;
 }
 
-function urlBtn(text: string, url: string, style: ButtonStyle = 'primary'): IKB {
+export function urlBtn(text: string, url: string, style: ButtonStyle = 'primary'): IKB {
   return { text, url, style } as StyledIKB;
 }
 
-function copyBtn(text: string, copy_text: string, style: ButtonStyle = 'primary'): IKB {
+export function copyBtn(text: string, copy_text: string, style: ButtonStyle = 'primary'): IKB {
   // Telegram API 9.0+ copy_text button
   return { text, copy_text: { text: copy_text }, style } as unknown as IKB;
 }

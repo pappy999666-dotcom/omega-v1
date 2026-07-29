@@ -277,90 +277,104 @@ async function processMessage(
   };
 
   // ── Enriched WhatsApp reply ───────────────────────────────
-  // ALL outgoing replies pass through PreviewManager.hydratedMessage
-  // or PreviewManager.buildChatPreview — the single source of truth.
+  // Replies with a global menu URL use Baileys native nativeFlowMessage
+  // (cta_url button) so the URL appears as a real clickable CTA button
+  // at the bottom of the message instead of an ad-reply preview card.
   const baseWhatsAppReply = async (replyText: string): Promise<void> => {
     const globalMenuUrl = getGlobalMenuUrl();
     const mentions = await getGroupParticipants();
 
     let visibleText = replyText;
-    let externalAdReply: Record<string, unknown> | undefined;
 
-    // Menu URL — attach as externalAdReply card on every command reply
     if (globalMenuUrl) {
       const isJid = globalMenuUrl.includes('@g.us') || globalMenuUrl.includes('@newsletter') || globalMenuUrl.includes('@s.whatsapp.net');
       if (!isJid) {
-        try {
-          const cleanUrl = globalMenuUrl.split('?')[0]!;
-          
-          // Clean up visible text
-          if (visibleText.includes(cleanUrl)) {
-            visibleText = visibleText.replace(cleanUrl, '').replace(/\n\s*\n/g, '\n').trim();
-          }
+        const cleanUrl = globalMenuUrl.split('?')[0]!;
 
-          if (!menuAdReplyCache.has(cleanUrl)) {
-            let title = '';
-            let body = '';
-            let thumbnailUrl: string | undefined;
-            // WA channel link
-            const channelMatch = cleanUrl.match(/whatsapp\.com\/channel\/([A-Za-z0-9_-]+)/);
-            if (channelMatch) {
-              try {
-                const sock = socket as unknown as { newsletterMetadata: (type: string, key: string) => Promise<{ name?: string; description?: string; picture?: string }> };
-                const meta = await sock.newsletterMetadata('invite', channelMatch[1]!);
-                title = meta?.name || 'Join Channel';
-                body = meta?.description || '';
-                thumbnailUrl = meta?.picture || undefined;
-              } catch { /* non-critical */ }
-            } else if (cleanUrl.includes('chat.whatsapp.com')) {
-              // WA group link
-              try {
-                const code = cleanUrl.split('chat.whatsapp.com/')[1]?.split(/[?#]/)[0]!;
-                const sock = socket as unknown as { groupGetInviteInfo: (c: string) => Promise<{ id: string; subject?: string }>; profilePictureUrl: (jid: string, t: string) => Promise<string> };
-                const info = await sock.groupGetInviteInfo(code);
-                title = info?.subject || 'Join Group';
-                thumbnailUrl = info?.id ? await sock.profilePictureUrl(info.id, 'image').catch(() => undefined) : undefined;
-              } catch { /* non-critical */ }
-            } else {
-              // Regular URL — fetch OG metadata
-              try {
-                const meta = await PreviewManager.fetchLinkMeta(cleanUrl);
-                title = meta?.title || '';
-                body = meta?.description || '';
-                thumbnailUrl = meta?.imageUrl || undefined;
-              } catch { /* non-critical */ }
-            }
-            menuAdReplyCache.set(cleanUrl, { title, body, thumbnailUrl });
-          }
-          
-          const cached = menuAdReplyCache.get(cleanUrl)!;
-          let jpegThumbnail: Buffer | undefined;
-          if (cached.thumbnailUrl) {
+        // Strip the raw URL from visible text if it's embedded
+        if (visibleText.includes(cleanUrl)) {
+          visibleText = visibleText.replace(cleanUrl, '').replace(/\n\s*\n/g, '\n').trim();
+        }
+
+        // Resolve display title (cached)
+        if (!menuAdReplyCache.has(cleanUrl)) {
+          let title = '';
+          let body = '';
+          let thumbnailUrl: string | undefined;
+          // WA channel link
+          const channelMatch = cleanUrl.match(/whatsapp\.com\/channel\/([A-Za-z0-9_-]+)/);
+          if (channelMatch) {
             try {
-              const thumb = await PreviewManager.fetchThumbnail(cached.thumbnailUrl);
-              if (thumb) jpegThumbnail = Buffer.from(thumb);
+              const sock = socket as unknown as { newsletterMetadata: (type: string, key: string) => Promise<{ name?: string; description?: string; picture?: string }> };
+              const meta = await sock.newsletterMetadata('invite', channelMatch[1]!);
+              title = meta?.name || 'Join Channel';
+              body = meta?.description || '';
+              thumbnailUrl = meta?.picture || undefined;
+            } catch { /* non-critical */ }
+          } else if (cleanUrl.includes('chat.whatsapp.com')) {
+            // WA group link
+            try {
+              const code = cleanUrl.split('chat.whatsapp.com/')[1]?.split(/[?#]/)[0]!;
+              const sock = socket as unknown as { groupGetInviteInfo: (c: string) => Promise<{ id: string; subject?: string }>; profilePictureUrl: (jid: string, t: string) => Promise<string> };
+              const info = await sock.groupGetInviteInfo(code);
+              title = info?.subject || 'Join Group';
+              thumbnailUrl = info?.id ? await sock.profilePictureUrl(info.id, 'image').catch(() => undefined) : undefined;
+            } catch { /* non-critical */ }
+          } else {
+            // Regular URL — fetch OG metadata
+            try {
+              const meta = await PreviewManager.fetchLinkMeta(cleanUrl);
+              title = meta?.title || '';
+              body = meta?.description || '';
+              thumbnailUrl = meta?.imageUrl || undefined;
             } catch { /* non-critical */ }
           }
+          menuAdReplyCache.set(cleanUrl, { title, body, thumbnailUrl });
+        }
 
-          externalAdReply = PreviewManager.buildExternalAdReply({
-            title: cached.title,
-            body: cached.body,
-            sourceUrl: cleanUrl,
-          });
+        const cached = menuAdReplyCache.get(cleanUrl)!;
+        const displayText = cached.title || '🔗 Open Menu';
 
-          if (jpegThumbnail) {
-            (externalAdReply as any).jpegThumbnail = jpegThumbnail;
-          } else if (cached.thumbnailUrl) {
-            (externalAdReply as any).thumbnailUrl = cached.thumbnailUrl;
-          }
-        } catch { /* non-critical */ }
+        // ── Native nativeFlowMessage URL button (Baileys native flow) ──
+        try {
+          const sock = socket as unknown as {
+            sendMessage(jid: string, content: Record<string, unknown>, opts?: Record<string, unknown>): Promise<unknown>;
+          };
+          await sock.sendMessage(
+            groupJid,
+            {
+              interactiveMessage: {
+                body: { text: visibleText },
+                footer: { text: '' },
+                header: { hasMediaAttachment: false },
+                nativeFlowMessage: {
+                  buttons: [{
+                    name: 'cta_url',
+                    buttonParamsJson: JSON.stringify({
+                      display_text: displayText,
+                      url: cleanUrl,
+                      merchant_url: cleanUrl,
+                    }),
+                  }],
+                  messageParamsJson: '',
+                },
+              },
+              ...(mentions.length > 0 ? { mentions } : {}),
+            } as Record<string, unknown>,
+            { quoted: msg }
+          );
+          return;
+        } catch (err) {
+          // Non-critical: fall through to plain reply below
+          logger.warn('[EventHandler] Native URL button send failed, falling back to plain reply', { err: String(err) });
+        }
       }
     }
 
+    // Plain reply — no menu URL configured (or JID-based menu, or button failed)
     await PreviewManager.send(socket as any, groupJid, visibleText, {
       quoted: msg,
       extra: mentions.length > 0 ? { mentions } : undefined,
-      externalAdReply,
     });
   };
 
