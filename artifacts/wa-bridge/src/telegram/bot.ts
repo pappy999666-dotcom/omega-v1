@@ -94,6 +94,8 @@ export const pendingGcCodes = new Map<string, { code: string; expires: number }>
 // Short key store for gcset callbacks (avoids 64-byte Telegram limit)
 // key: "sessionId:shortKey" -> gcJid
 const gcJidStore = new Map<string, string>();
+// Invite link cache: "sessionId:gcJid" -> { link, fetchedAt }
+const inviteLinkCache = new Map<string, { link: string; fetchedAt: number }>();
 let gcJidCounter = 0;
 function storeGcJid(sessionId: string, gcJid: string): string {
   // Check if already stored
@@ -132,6 +134,18 @@ interface BotContext extends Context {
     awaitingForceJoin?: boolean;
     awaitingBroadcast?: boolean;
     awaitingGlobalMenuUrl?: boolean;
+    awaitingApproveAmountSessionId?: string;
+    awaitingApproveAmountGcJid?: string;
+    awaitingApproveCountrySessionId?: string;
+    awaitingApproveCountryGcJid?: string;
+    awaitingPromoteSessionId?: string;
+    awaitingPromoteGcJid?: string;
+    awaitingDemoteSessionId?: string;
+    awaitingDemoteGcJid?: string;
+    awaitingGcSetSessionId?: string;
+    awaitingGcSetField?: string;
+    awaitingGcSetJid?: string;
+    awaitingLeaveGcSessionId?: string;
   };
 }
 
@@ -190,6 +204,47 @@ function helpText(isOwner: boolean): string {
     H.blockquote('Tap the menu buttons for guided controls. Use commands when you need a shortcut.'),
     '',
     H.blockquote(`${H.bold('Command reference')}\n${H.pre(commands, 'text')}`, true),
+  ].join('\n');
+}
+
+// ── Bulk Operation Helpers ────────────────────────────────
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function buildBulkProgressText(op: string, done: number, remaining: number, failed: number): string {
+  return [
+    `<b>${escape(op)}</b>`,
+    `<code>------------------------------</code>`,
+    `⏳ Running…`,
+    ``,
+    `✔ <b>${done}</b> Removed`,
+    `⏳ <b>${remaining}</b> Remaining`,
+    ...(failed > 0 ? [`❌ <b>${failed}</b> Failed`] : []),
+  ].join('\n');
+}
+
+function buildBulkCompleteText(op: string, done: number, failed: number): string {
+  return [
+    `<b>${escape(op)}</b>`,
+    `<code>------------------------------</code>`,
+    `✔ <b>${done}</b> Removed`,
+    ...(failed > 0 ? [`❌ <b>${failed}</b> Failed`] : []),
+    ``,
+    `<i>Operation Complete.</i>`,
+  ].join('\n');
+}
+
+function buildApproveProgressText(approved: number, remaining: number, failed: number): string {
+  return [
+    `<b>✅ Approve Requests</b>`,
+    `<code>------------------------------</code>`,
+    `⏳ Running…`,
+    ``,
+    `✔ <b>${approved}</b> Approved`,
+    `⏳ <b>${remaining}</b> Remaining`,
+    ...(failed > 0 ? [`❌ <b>${failed}</b> Failed`] : []),
   ].join('\n');
 }
 
@@ -595,7 +650,7 @@ export function createBot(): Telegraf<BotContext> {
 
         if (!member) {
           // Check pending join requests first — auto-approve if found
-          const pending = await sock.groupRequestParticipantsList(gcJid).catch(() => []);
+          const pending = await sock.groupRequestParticipantsList(gcJid).catch((): Array<{ jid: string; addedBy?: string; phoneNumber?: string }> => []);
           const pendingMatch = pending.find((r) => {
             const rNum = (r.jid.split('@')[0] ?? '').split(':')[0];
             return rNum === digits;
@@ -658,6 +713,128 @@ export function createBot(): Telegraf<BotContext> {
       } catch (error) {
         await ctx.reply(noticeCard('Demote Failed', String(error), 'error'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${storeGcJid(sessionId, gcJid)}`) });
       }
+      return;
+    }
+
+    // ── Approve by Amount ─────────────────────────────────
+    if (ctx.session?.awaitingApproveAmountSessionId && ctx.session?.awaitingApproveAmountGcJid) {
+      const sessionId = ctx.session.awaitingApproveAmountSessionId;
+      const gcJid = ctx.session.awaitingApproveAmountGcJid;
+      delete ctx.session.awaitingApproveAmountSessionId;
+      delete ctx.session.awaitingApproveAmountGcJid;
+      const gcKey = storeGcJid(sessionId, gcJid);
+      const amount = parseInt(text.trim(), 10);
+      if (isNaN(amount) || amount < 1) {
+        await ctx.reply(noticeCard('Invalid Amount', 'Please enter a positive number.', 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}:approverequests`) });
+        return;
+      }
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) { await ctx.reply(noticeCard('Failed', 'Session not connected.', 'warning'), { parse_mode: 'HTML' }); return; }
+      const sock2 = socket as unknown as {
+        groupRequestParticipantsList(jid: string): Promise<Array<{ jid: string }>>;
+        groupRequestParticipantsUpdate(jid: string, participants: string[], action: 'approve' | 'reject'): Promise<unknown>;
+      };
+      let pending: Array<{ jid: string }> = [];
+      try { pending = await sock2.groupRequestParticipantsList(gcJid); } catch (err) {
+        await ctx.reply(noticeCard('Failed', String(err), 'error'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}:approverequests`) });
+        return;
+      }
+      const toApprove = pending.slice(0, amount);
+      if (toApprove.length === 0) {
+        await ctx.reply(noticeCard('No Pending Requests', 'There are currently no pending join requests.', 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}:approverequests`) });
+        return;
+      }
+      const progressMsg = await ctx.reply(buildApproveProgressText(0, toApprove.length, 0), { parse_mode: 'HTML' });
+      let approved = 0, failed = 0;
+      const BATCH = 10;
+      for (let i = 0; i < toApprove.length; i += BATCH) {
+        const batch = toApprove.slice(i, i + BATCH).map((r) => r.jid);
+        try {
+          await sock2.groupRequestParticipantsUpdate(gcJid, batch, 'approve');
+          approved += batch.length;
+        } catch {
+          for (const jid of batch) {
+            try { await sock2.groupRequestParticipantsUpdate(gcJid, [jid], 'approve'); approved++; }
+            catch { failed++; }
+          }
+        }
+        await ctx.telegram.editMessageText(ctx.chat!.id, progressMsg.message_id, undefined, buildApproveProgressText(approved, toApprove.length - approved - failed, failed), { parse_mode: 'HTML' }).catch(() => {});
+        if (i + BATCH < toApprove.length) await sleep(800);
+      }
+      const remaining = pending.length - toApprove.length;
+      await ctx.telegram.editMessageText(ctx.chat!.id, progressMsg.message_id, undefined, [
+        `<b>✅ Approve by Amount — Complete</b>`,
+        `<code>------------------------------</code>`,
+        `<b>Requested:</b> ${amount}`,
+        ``,
+        `<b>Approved:</b>\n✔ ${approved}`,
+        ...(failed > 0 ? [`<b>Failed:</b> ${failed}`] : []),
+        `<b>Remaining:</b> ${remaining}`,
+      ].join('\n'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}`) }).catch(() => {});
+      return;
+    }
+
+    // ── Approve by Country ────────────────────────────────
+    if (ctx.session?.awaitingApproveCountrySessionId && ctx.session?.awaitingApproveCountryGcJid) {
+      const sessionId = ctx.session.awaitingApproveCountrySessionId;
+      const gcJid = ctx.session.awaitingApproveCountryGcJid;
+      delete ctx.session.awaitingApproveCountrySessionId;
+      delete ctx.session.awaitingApproveCountryGcJid;
+      const gcKey = storeGcJid(sessionId, gcJid);
+      // Normalize country code: strip + and non-digits, keep digits
+      const rawInput = text.trim();
+      const countryDigits = rawInput.replace(/[^0-9]/g, '');
+      if (!countryDigits) {
+        await ctx.reply(noticeCard('Invalid Country Code', 'Enter a code like +234, +1, or +44.', 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}:approverequests`) });
+        return;
+      }
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) { await ctx.reply(noticeCard('Failed', 'Session not connected.', 'warning'), { parse_mode: 'HTML' }); return; }
+      const sock2 = socket as unknown as {
+        groupRequestParticipantsList(jid: string): Promise<Array<{ jid: string; phoneNumber?: string }>>;
+        groupRequestParticipantsUpdate(jid: string, participants: string[], action: 'approve' | 'reject'): Promise<unknown>;
+      };
+      let pending: Array<{ jid: string; phoneNumber?: string }> = [];
+      try { pending = await sock2.groupRequestParticipantsList(gcJid); } catch (err) {
+        await ctx.reply(noticeCard('Failed', String(err), 'error'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}:approverequests`) });
+        return;
+      }
+      const matched = pending.filter((r) => {
+        const num = (r.phoneNumber ?? '').replace(/[^0-9]/g, '') || (r.jid.split('@')[0] ?? '').split(':')[0];
+        return num.startsWith(countryDigits);
+      });
+      if (matched.length === 0) {
+        await ctx.reply(noticeCard('No Matches', `No pending requests found with country code +${countryDigits}.`, 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}:approverequests`) });
+        return;
+      }
+      const progressMsg = await ctx.reply(buildApproveProgressText(0, matched.length, 0), { parse_mode: 'HTML' });
+      let approved = 0, failed = 0;
+      const BATCH = 10;
+      for (let i = 0; i < matched.length; i += BATCH) {
+        const batch = matched.slice(i, i + BATCH).map((r) => r.jid);
+        try {
+          await sock2.groupRequestParticipantsUpdate(gcJid, batch, 'approve');
+          approved += batch.length;
+        } catch {
+          for (const jid of batch) {
+            try { await sock2.groupRequestParticipantsUpdate(gcJid, [jid], 'approve'); approved++; }
+            catch { failed++; }
+          }
+        }
+        await ctx.telegram.editMessageText(ctx.chat!.id, progressMsg.message_id, undefined, buildApproveProgressText(approved, matched.length - approved - failed, failed), { parse_mode: 'HTML' }).catch(() => {});
+        if (i + BATCH < matched.length) await sleep(800);
+      }
+      const remaining = pending.length - matched.length;
+      await ctx.telegram.editMessageText(ctx.chat!.id, progressMsg.message_id, undefined, [
+        `<b>✅ Approve by Country — Complete</b>`,
+        `<code>------------------------------</code>`,
+        `<b>Country:</b> +${countryDigits}`,
+        ``,
+        `<b>Found:</b> ${matched.length} Requests`,
+        `<b>Approved:</b>\n✔ ${approved}`,
+        ...(failed > 0 ? [`<b>Failed:</b> ${failed}`] : []),
+        `<b>Remaining:</b> ${remaining}`,
+      ].join('\n'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}`) }).catch(() => {});
       return;
     }
 
@@ -1439,31 +1616,50 @@ async function routeCallback(
     const socket = getSocket(sessionId);
     if (!socket || isFrozen(sessionId)) { await ctx.answerCbQuery('Session not connected', { show_alert: true }).catch(() => {}); return; }
     const sock = socket as unknown as {
-      groupMetadata(jid: string): Promise<{ subject: string; desc?: string; participants: { id: string; admin?: string | null }[]; creation?: number }>;
+      groupMetadata(jid: string): Promise<{ subject: string; desc?: string; participants: { id: string; admin?: string | null; phoneNumber?: string }[]; creation?: number }>;
       groupSettingUpdate(jid: string, setting: string): Promise<void>;
       groupJoinApprovalMode(jid: string, mode: string): Promise<void>;
       groupMemberAddMode(jid: string, mode: string): Promise<void>;
       groupLeave(id: string): Promise<void>;
       groupParticipantsUpdate(jid: string, p: string[], action: string): Promise<unknown>;
       profilePictureUrl(jid: string, type: string): Promise<string | null>;
+      groupInviteCode(jid: string): Promise<string>;
+      groupRequestParticipantsList(jid: string): Promise<Array<{ jid: string; addedBy?: string; phoneNumber?: string }>>;
+      groupRequestParticipantsUpdate(jid: string, participants: string[], action: 'approve' | 'reject'): Promise<unknown>;
+      user?: { id?: string };
     };
 
     if (!sub2) {
       // Show group settings menu
       const meta = await sock.groupMetadata(gcJid).catch(() => null);
       if (!meta) { await ctx.answerCbQuery('Could not fetch group', { show_alert: true }).catch(() => {}); return; }
-      const admins = meta.participants.filter((p) => p.admin).map((p) => { const phone = (p as unknown as { phoneNumber?: string }).phoneNumber?.replace(/[^0-9]/g, '') || (p.id.split('@')[0] ?? '').split(':')[0]; return `+${phone}`; }).join(', ') || 'None';
+      const admins = meta.participants.filter((p) => p.admin).map((p) => { const phone = p.phoneNumber?.replace(/[^0-9]/g, '') || (p.id.split('@')[0] ?? '').split(':')[0]; return `+${phone}`; }).join(', ') || 'None';
       const metaFull = meta as unknown as { joinApprovalMode?: boolean; memberAddMode?: boolean };
       const joinApproval = metaFull.joinApprovalMode ? '🟢 ON' : '🔴 OFF';
       const memberAdd = metaFull.memberAddMode ? '🟢 All Members' : '🔴 Admins Only';
+      // Fetch invite link (use cache if fresh < 10 min)
+      const cacheKey = `${sessionId}:${gcJid}`;
+      const cached = inviteLinkCache.get(cacheKey);
+      let inviteLink: string | null = null;
+      if (cached && Date.now() - cached.fetchedAt < 10 * 60_000) {
+        inviteLink = cached.link;
+      } else {
+        try {
+          const code = await sock.groupInviteCode(gcJid);
+          inviteLink = `https://chat.whatsapp.com/${code}`;
+          inviteLinkCache.set(cacheKey, { link: inviteLink, fetchedAt: Date.now() });
+        } catch { /* no permission or error — show button to try */ }
+      }
+      const gcKey = storeGcJid(sessionId, gcJid);
       const text = [
-        `<b>Group Settings</b>`,
+        `<b>Group Dashboard</b>`,
         `<code>------------------------------</code>`,
         `<b>Name:</b> ${escape(meta.subject)}`,
         `<b>Members:</b> ${meta.participants.length}`,
         `<b>Admins:</b> ${escape(admins)}`,
         `<b>Join Approval:</b> ${joinApproval}`,
         `<b>Member Add:</b> ${memberAdd}`,
+        inviteLink ? `<b>Invite Link:</b> <code>${escape(inviteLink)}</code>` : `<b>Invite Link:</b> —`,
         meta.desc ? `<b>Desc:</b> <blockquote expandable>${escape(meta.desc)}</blockquote>` : '',
         `<b>JID:</b> <code>${escape(gcJid)}</code>`,
       ].filter(Boolean).join('\n');
@@ -1471,12 +1667,15 @@ async function routeCallback(
         parse_mode: 'HTML',
         reply_markup: {
           inline_keyboard: [
-            [{ text: 'Edit Name', callback_data: `gcset:${sessionId}:${storeGcJid(sessionId, gcJid)}:name` }, { text: 'Edit Desc', callback_data: `gcset:${sessionId}:${storeGcJid(sessionId, gcJid)}:desc` }],
-            [{ text: 'Set PFP', callback_data: `gcset:${sessionId}:${storeGcJid(sessionId, gcJid)}:pfp` }, { text: 'Get PFP', callback_data: `gcset:${sessionId}:${storeGcJid(sessionId, gcJid)}:getpfp` }],
-            [{ text: 'Promote Admin', callback_data: `gcset:${sessionId}:${storeGcJid(sessionId, gcJid)}:promote` }, { text: 'Demote Admin', callback_data: `gcset:${sessionId}:${storeGcJid(sessionId, gcJid)}:demote` }],
-            [{ text: 'Join Approval ON', callback_data: `gcset:${sessionId}:${storeGcJid(sessionId, gcJid)}:approval:on` }, { text: 'Join Approval OFF', callback_data: `gcset:${sessionId}:${storeGcJid(sessionId, gcJid)}:approval:off` }],
-            [{ text: 'Members Add ON', callback_data: `gcset:${sessionId}:${storeGcJid(sessionId, gcJid)}:memberadd:on` }, { text: 'Members Add OFF', callback_data: `gcset:${sessionId}:${storeGcJid(sessionId, gcJid)}:memberadd:off` }],
-            [{ text: 'Leave Group', callback_data: `gcset:${sessionId}:${storeGcJid(sessionId, gcJid)}:leave` }],
+            [{ text: 'Edit Name', callback_data: `gcset:${sessionId}:${gcKey}:name` }, { text: 'Edit Desc', callback_data: `gcset:${sessionId}:${gcKey}:desc` }],
+            [{ text: 'Set PFP', callback_data: `gcset:${sessionId}:${gcKey}:pfp` }, { text: 'Get PFP', callback_data: `gcset:${sessionId}:${gcKey}:getpfp` }],
+            [{ text: '⬆️ Promote Admin', callback_data: `gcset:${sessionId}:${gcKey}:promote` }, { text: '⬇️ Demote Admin', callback_data: `gcset:${sessionId}:${gcKey}:demote` }],
+            [{ text: 'Join Approval ON', callback_data: `gcset:${sessionId}:${gcKey}:approval:on` }, { text: 'Join Approval OFF', callback_data: `gcset:${sessionId}:${gcKey}:approval:off` }],
+            [{ text: 'Members Add ON', callback_data: `gcset:${sessionId}:${gcKey}:memberadd:on` }, { text: 'Members Add OFF', callback_data: `gcset:${sessionId}:${gcKey}:memberadd:off` }],
+            [{ text: '📎 Invite Link', callback_data: `gcset:${sessionId}:${gcKey}:invitelink` }],
+            [{ text: '🦵 Kick All Members', callback_data: `gcset:${sessionId}:${gcKey}:kickall` }, { text: '🦵 Kick All Admins', callback_data: `gcset:${sessionId}:${gcKey}:kickadmins` }],
+            [{ text: '⬇️ Demote All Admins', callback_data: `gcset:${sessionId}:${gcKey}:demoteall` }, { text: '✅ Approve Requests', callback_data: `gcset:${sessionId}:${gcKey}:approverequests` }],
+            [{ text: 'Leave Group', callback_data: `gcset:${sessionId}:${gcKey}:leave` }],
             [{ text: 'Back', callback_data: `session:${sessionId}:mygroups` }],
           ],
         },
@@ -1564,6 +1763,405 @@ async function routeCallback(
       await ctx.editMessageText(noticeCard('Left Group', gcJid, 'success'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:mygroups`) }).catch(() => {});
       return;
     }
+
+    // ── Invite Link ───────────────────────────────────────────
+    if (sub2 === 'invitelink') {
+      const gcKey = storeGcJid(sessionId, gcJid);
+      try {
+        const cacheKey = `${sessionId}:${gcJid}`;
+        let inviteLink: string;
+        const cached = inviteLinkCache.get(cacheKey);
+        if (cached && Date.now() - cached.fetchedAt < 10 * 60_000) {
+          inviteLink = cached.link;
+        } else {
+          const code = await sock.groupInviteCode(gcJid);
+          inviteLink = `https://chat.whatsapp.com/${code}`;
+          inviteLinkCache.set(cacheKey, { link: inviteLink, fetchedAt: Date.now() });
+        }
+        await ctx.editMessageText(
+          [
+            `<b>📎 Group Invite Link</b>`,
+            `<code>------------------------------</code>`,
+            `<code>${escape(inviteLink)}</code>`,
+          ].join('\n'),
+          {
+            parse_mode: 'HTML',
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '📋 Copy Link', copy_text: { text: inviteLink } } as unknown as import('telegraf/types').InlineKeyboardButton],
+                [{ text: '🔙 Back', callback_data: `gcset:${sessionId}:${gcKey}` }],
+              ],
+            },
+          }
+        ).catch(() => {});
+      } catch (err) {
+        await ctx.answerCbQuery(`Failed: ${String(err).slice(0, 60)}`, { show_alert: true }).catch(() => {});
+      }
+      return;
+    }
+
+    // sub3 must be declared before all bulk-operation routing so each branch can guard on it
+    const sub3 = params[3];
+
+    // ── Kick All Members — Confirm ────────────────────────────
+    if (sub2 === 'kickall' && !sub3) {
+      const gcKey = storeGcJid(sessionId, gcJid);
+      const meta = await sock.groupMetadata(gcJid).catch(() => null);
+      if (!meta) { await ctx.answerCbQuery('Could not fetch group', { show_alert: true }).catch(() => {}); return; }
+      const ownJid = (socket as unknown as { user?: { id?: string } }).user?.id ?? '';
+      const selfNum = ownJid.split('@')[0]?.split(':')[0] ?? '';
+      const toKick = meta.participants.filter((p) => {
+        if (p.admin) return false;
+        const pNum = (p.id.split('@')[0] ?? '').split(':')[0];
+        return pNum !== selfNum && p.id !== ownJid && !p.id.startsWith(selfNum + '@') && !p.id.startsWith(selfNum + ':');
+      });
+      await ctx.editMessageText(
+        [
+          `<b>⚠️ Kick All Members</b>`,
+          `<code>------------------------------</code>`,
+          `<b>Eligible to kick:</b> ${toKick.length} members`,
+          ``,
+          `This will remove every non-admin member from the group. Admins and the bot are protected.`,
+          ``,
+          `<b>This action cannot be undone.</b> Continue?`,
+        ].join('\n'),
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '✅ Yes, Kick All', callback_data: `gcset:${sessionId}:${gcKey}:kickall:run` }, { text: '❌ Cancel', callback_data: `gcset:${sessionId}:${gcKey}` }],
+            ],
+          },
+        }
+      ).catch(() => {});
+      return;
+    }
+
+    if (sub2 === 'kickall' && sub3 === 'run') {
+      const gcKey = storeGcJid(sessionId, gcJid);
+      const meta = await sock.groupMetadata(gcJid).catch(() => null);
+      if (!meta) { await ctx.answerCbQuery('Could not fetch group', { show_alert: true }).catch(() => {}); return; }
+      const ownJid = (socket as unknown as { user?: { id?: string } }).user?.id ?? '';
+      const selfNum = ownJid.split('@')[0]?.split(':')[0] ?? '';
+      const toKick = meta.participants.filter((p) => {
+        if (p.admin) return false;
+        const pNum = (p.id.split('@')[0] ?? '').split(':')[0];
+        return pNum !== selfNum && p.id !== ownJid && !p.id.startsWith(selfNum + '@') && !p.id.startsWith(selfNum + ':');
+      });
+      if (toKick.length === 0) {
+        await ctx.editMessageText(noticeCard('No Members to Kick', 'There are no non-admin members to remove.', 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}`) }).catch(() => {});
+        return;
+      }
+      const progressMsg = await ctx.editMessageText(
+        buildBulkProgressText('Kick All Members', 0, toKick.length, 0),
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [] } }
+      ).catch(() => null);
+      let removed = 0, failed = 0;
+      const BATCH = 5;
+      for (let i = 0; i < toKick.length; i += BATCH) {
+        const batch = toKick.slice(i, i + BATCH);
+        await Promise.allSettled(batch.map(async (p) => {
+          try {
+            await sock.groupParticipantsUpdate(gcJid, [p.id], 'remove');
+            removed++;
+          } catch { failed++; }
+        }));
+        const progressText = buildBulkProgressText('Kick All Members', removed, toKick.length - removed - failed, failed);
+        if (progressMsg) {
+          await ctx.telegram.editMessageText(ctx.chat!.id, (progressMsg as unknown as { message_id: number }).message_id, undefined, progressText, { parse_mode: 'HTML' }).catch(() => {});
+        }
+        if (i + BATCH < toKick.length) await sleep(1200);
+      }
+      const finalText = buildBulkCompleteText('Kick All Members', removed, failed);
+      if (progressMsg) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, (progressMsg as unknown as { message_id: number }).message_id, undefined, finalText, { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}`) }).catch(() => {});
+      }
+      return;
+    }
+
+    // ── Kick All Admins — Confirm ──────────────────────────────
+    if (sub2 === 'kickadmins' && !sub3) {
+      const gcKey = storeGcJid(sessionId, gcJid);
+      const meta = await sock.groupMetadata(gcJid).catch(() => null);
+      if (!meta) { await ctx.answerCbQuery('Could not fetch group', { show_alert: true }).catch(() => {}); return; }
+      const ownJid = (socket as unknown as { user?: { id?: string } }).user?.id ?? '';
+      const selfNum = ownJid.split('@')[0]?.split(':')[0] ?? '';
+      const toKick = meta.participants.filter((p) => {
+        if (p.admin !== 'admin') return false; // skip superadmin (group owner)
+        const pNum = (p.id.split('@')[0] ?? '').split(':')[0];
+        return pNum !== selfNum && p.id !== ownJid && !p.id.startsWith(selfNum + '@') && !p.id.startsWith(selfNum + ':');
+      });
+      await ctx.editMessageText(
+        [
+          `<b>⚠️ Kick All Admins</b>`,
+          `<code>------------------------------</code>`,
+          `<b>Eligible to kick:</b> ${toKick.length} admins`,
+          ``,
+          `This removes every removable admin. The group owner and this bot are protected.`,
+          ``,
+          `<b>This action cannot be undone.</b> Continue?`,
+        ].join('\n'),
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '✅ Yes, Kick All Admins', callback_data: `gcset:${sessionId}:${gcKey}:kickadmins:run` }, { text: '❌ Cancel', callback_data: `gcset:${sessionId}:${gcKey}` }],
+            ],
+          },
+        }
+      ).catch(() => {});
+      return;
+    }
+
+    if (sub2 === 'kickadmins' && sub3 === 'run') {
+      const gcKey = storeGcJid(sessionId, gcJid);
+      const meta = await sock.groupMetadata(gcJid).catch(() => null);
+      if (!meta) { await ctx.answerCbQuery('Could not fetch group', { show_alert: true }).catch(() => {}); return; }
+      const ownJid = (socket as unknown as { user?: { id?: string } }).user?.id ?? '';
+      const selfNum = ownJid.split('@')[0]?.split(':')[0] ?? '';
+      const toKick = meta.participants.filter((p) => {
+        if (p.admin !== 'admin') return false;
+        const pNum = (p.id.split('@')[0] ?? '').split(':')[0];
+        return pNum !== selfNum && p.id !== ownJid && !p.id.startsWith(selfNum + '@') && !p.id.startsWith(selfNum + ':');
+      });
+      if (toKick.length === 0) {
+        await ctx.editMessageText(noticeCard('No Admins to Kick', 'No removable admins found (owner and bot are protected).', 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}`) }).catch(() => {});
+        return;
+      }
+      const progressMsg = await ctx.editMessageText(
+        buildBulkProgressText('Kick All Admins', 0, toKick.length, 0),
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [] } }
+      ).catch(() => null);
+      let removed = 0, failed = 0;
+      const BATCH = 5;
+      for (let i = 0; i < toKick.length; i += BATCH) {
+        const batch = toKick.slice(i, i + BATCH);
+        await Promise.allSettled(batch.map(async (p) => {
+          try {
+            await sock.groupParticipantsUpdate(gcJid, [p.id], 'remove');
+            removed++;
+          } catch { failed++; }
+        }));
+        if (progressMsg) {
+          await ctx.telegram.editMessageText(ctx.chat!.id, (progressMsg as unknown as { message_id: number }).message_id, undefined, buildBulkProgressText('Kick All Admins', removed, toKick.length - removed - failed, failed), { parse_mode: 'HTML' }).catch(() => {});
+        }
+        if (i + BATCH < toKick.length) await sleep(1200);
+      }
+      if (progressMsg) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, (progressMsg as unknown as { message_id: number }).message_id, undefined, buildBulkCompleteText('Kick All Admins', removed, failed), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}`) }).catch(() => {});
+      }
+      return;
+    }
+
+    // ── Demote All Admins — Confirm ────────────────────────────
+    if (sub2 === 'demoteall' && !sub3) {
+      const gcKey = storeGcJid(sessionId, gcJid);
+      const meta = await sock.groupMetadata(gcJid).catch(() => null);
+      if (!meta) { await ctx.answerCbQuery('Could not fetch group', { show_alert: true }).catch(() => {}); return; }
+      const ownJid = (socket as unknown as { user?: { id?: string } }).user?.id ?? '';
+      const selfNum = ownJid.split('@')[0]?.split(':')[0] ?? '';
+      const toDemote = meta.participants.filter((p) => {
+        if (p.admin !== 'admin') return false;
+        const pNum = (p.id.split('@')[0] ?? '').split(':')[0];
+        return pNum !== selfNum && p.id !== ownJid && !p.id.startsWith(selfNum + '@') && !p.id.startsWith(selfNum + ':');
+      });
+      await ctx.editMessageText(
+        [
+          `<b>⚠️ Demote All Admins</b>`,
+          `<code>------------------------------</code>`,
+          `<b>Eligible to demote:</b> ${toDemote.length} admins`,
+          ``,
+          `This removes admin privileges from every removable admin. The group owner and this bot are protected.`,
+          ``,
+          `Continue?`,
+        ].join('\n'),
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '✅ Yes, Demote All', callback_data: `gcset:${sessionId}:${gcKey}:demoteall:run` }, { text: '❌ Cancel', callback_data: `gcset:${sessionId}:${gcKey}` }],
+            ],
+          },
+        }
+      ).catch(() => {});
+      return;
+    }
+
+    if (sub2 === 'demoteall' && sub3 === 'run') {
+      const gcKey = storeGcJid(sessionId, gcJid);
+      const meta = await sock.groupMetadata(gcJid).catch(() => null);
+      if (!meta) { await ctx.answerCbQuery('Could not fetch group', { show_alert: true }).catch(() => {}); return; }
+      const ownJid = (socket as unknown as { user?: { id?: string } }).user?.id ?? '';
+      const selfNum = ownJid.split('@')[0]?.split(':')[0] ?? '';
+      const toDemote = meta.participants.filter((p) => {
+        if (p.admin !== 'admin') return false;
+        const pNum = (p.id.split('@')[0] ?? '').split(':')[0];
+        return pNum !== selfNum && p.id !== ownJid && !p.id.startsWith(selfNum + '@') && !p.id.startsWith(selfNum + ':');
+      });
+      if (toDemote.length === 0) {
+        await ctx.editMessageText(noticeCard('No Admins to Demote', 'No removable admins found (owner and bot are protected).', 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}`) }).catch(() => {});
+        return;
+      }
+      const progressMsg = await ctx.editMessageText(
+        buildBulkProgressText('Demote All Admins', 0, toDemote.length, 0),
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [] } }
+      ).catch(() => null);
+      let demoted = 0, failed = 0;
+      const BATCH = 5;
+      for (let i = 0; i < toDemote.length; i += BATCH) {
+        const batch = toDemote.slice(i, i + BATCH);
+        await Promise.allSettled(batch.map(async (p) => {
+          try {
+            await sock.groupParticipantsUpdate(gcJid, [p.id], 'demote');
+            demoted++;
+          } catch { failed++; }
+        }));
+        if (progressMsg) {
+          await ctx.telegram.editMessageText(ctx.chat!.id, (progressMsg as unknown as { message_id: number }).message_id, undefined, buildBulkProgressText('Demote All Admins', demoted, toDemote.length - demoted - failed, failed), { parse_mode: 'HTML' }).catch(() => {});
+        }
+        if (i + BATCH < toDemote.length) await sleep(1200);
+      }
+      if (progressMsg) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, (progressMsg as unknown as { message_id: number }).message_id, undefined, buildBulkCompleteText('Demote All Admins', demoted, failed), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}`) }).catch(() => {});
+      }
+      return;
+    }
+
+    // ── Approve Requests — Submenu ─────────────────────────────
+    if (sub2 === 'approverequests' && !sub3) {
+      const gcKey = storeGcJid(sessionId, gcJid);
+      let pendingCount = 0;
+      try {
+        const pending = await sock.groupRequestParticipantsList(gcJid);
+        pendingCount = pending.length;
+      } catch { /* ignore */ }
+      await ctx.editMessageText(
+        [
+          `<b>✅ Approve Requests</b>`,
+          `<code>------------------------------</code>`,
+          `<b>Pending Requests:</b> ${pendingCount}`,
+          ``,
+          `Choose how you want to approve pending join requests.`,
+        ].join('\n'),
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: `✅ Approve All (${pendingCount})`, callback_data: `gcset:${sessionId}:${gcKey}:approverequests:all` }],
+              [{ text: '🔢 Approve by Amount', callback_data: `gcset:${sessionId}:${gcKey}:approverequests:byamount` }],
+              [{ text: '🌍 Approve by Country', callback_data: `gcset:${sessionId}:${gcKey}:approverequests:bycountry` }],
+              [{ text: '🔙 Back', callback_data: `gcset:${sessionId}:${gcKey}` }],
+            ],
+          },
+        }
+      ).catch(() => {});
+      return;
+    }
+
+    // ── Approve All — Confirm ──────────────────────────────────
+    if (sub2 === 'approverequests' && sub3 === 'all' && !params[4]) {
+      const gcKey = storeGcJid(sessionId, gcJid);
+      let pending: Array<{ jid: string }> = [];
+      try { pending = await sock.groupRequestParticipantsList(gcJid); } catch { /* ignore */ }
+      if (pending.length === 0) {
+        await ctx.editMessageText(noticeCard('No Pending Requests', 'There are currently no pending join requests.', 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}:approverequests`) }).catch(() => {});
+        return;
+      }
+      await ctx.editMessageText(
+        [
+          `<b>⚠️ Approve All Requests</b>`,
+          `<code>------------------------------</code>`,
+          `<b>Pending:</b> ${pending.length}`,
+          ``,
+          `This will approve all ${pending.length} pending join requests. Continue?`,
+        ].join('\n'),
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '✅ Yes, Approve All', callback_data: `gcset:${sessionId}:${gcKey}:approverequests:all:run` }, { text: '❌ Cancel', callback_data: `gcset:${sessionId}:${gcKey}:approverequests` }],
+            ],
+          },
+        }
+      ).catch(() => {});
+      return;
+    }
+
+    // ── Approve All — Run ──────────────────────────────────────
+    if (sub2 === 'approverequests' && sub3 === 'all' && params[4] === 'run') {
+      const gcKey = storeGcJid(sessionId, gcJid);
+      let pending: Array<{ jid: string }> = [];
+      try { pending = await sock.groupRequestParticipantsList(gcJid); } catch (err) {
+        await ctx.editMessageText(noticeCard('Failed', String(err), 'error'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}:approverequests`) }).catch(() => {});
+        return;
+      }
+      if (pending.length === 0) {
+        await ctx.editMessageText(noticeCard('No Pending Requests', 'There are currently no pending join requests.', 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}`) }).catch(() => {});
+        return;
+      }
+      const progressMsg = await ctx.editMessageText(
+        buildApproveProgressText(0, pending.length, 0),
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [] } }
+      ).catch(() => null);
+      let approved = 0, failed = 0;
+      const BATCH = 10;
+      for (let i = 0; i < pending.length; i += BATCH) {
+        const batch = pending.slice(i, i + BATCH).map((r) => r.jid);
+        try {
+          await sock.groupRequestParticipantsUpdate(gcJid, batch, 'approve');
+          approved += batch.length;
+        } catch {
+          // Try one-by-one on batch failure
+          for (const jid of batch) {
+            try { await sock.groupRequestParticipantsUpdate(gcJid, [jid], 'approve'); approved++; }
+            catch { failed++; }
+          }
+        }
+        if (progressMsg) {
+          await ctx.telegram.editMessageText(ctx.chat!.id, (progressMsg as unknown as { message_id: number }).message_id, undefined, buildApproveProgressText(approved, pending.length - approved - failed, failed), { parse_mode: 'HTML' }).catch(() => {});
+        }
+        if (i + BATCH < pending.length) await sleep(800);
+      }
+      const finalText = [
+        `<b>✅ Approve All — Complete</b>`,
+        `<code>------------------------------</code>`,
+        `<b>Pending Requests:</b> ${pending.length}`,
+        ``,
+        `<b>Approved:</b>\n✔ ${approved}`,
+        ...(failed > 0 ? [`<b>Failed:</b> ${failed}`] : []),
+        ``,
+        `<i>Completed.</i>`,
+      ].join('\n');
+      if (progressMsg) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, (progressMsg as unknown as { message_id: number }).message_id, undefined, finalText, { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}`) }).catch(() => {});
+      }
+      return;
+    }
+
+    // ── Approve by Amount — Ask ────────────────────────────────
+    if (sub2 === 'approverequests' && sub3 === 'byamount') {
+      const gcKey = storeGcJid(sessionId, gcJid);
+      ctx.session.awaitingApproveAmountSessionId = sessionId;
+      ctx.session.awaitingApproveAmountGcJid = gcJid;
+      await ctx.editMessageText(
+        card('Approve by Amount', '🔢', [['Group', escape(gcJid)]], 'How many pending requests would you like to approve?\n\nSend a number, e.g. <code>25</code>.'),
+        { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}:approverequests`) }
+      ).catch(() => {});
+      return;
+    }
+
+    // ── Approve by Country — Ask ───────────────────────────────
+    if (sub2 === 'approverequests' && sub3 === 'bycountry') {
+      const gcKey = storeGcJid(sessionId, gcJid);
+      ctx.session.awaitingApproveCountrySessionId = sessionId;
+      ctx.session.awaitingApproveCountryGcJid = gcJid;
+      await ctx.editMessageText(
+        card('Approve by Country', '🌍', [['Group', escape(gcJid)]], 'Enter the country code to approve.\n\nExample: <code>+234</code>, <code>+1</code>, <code>+44</code>'),
+        { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}:approverequests`) }
+      ).catch(() => {});
+      return;
+    }
+
     return;
   }
 
