@@ -1,0 +1,182 @@
+Universal User Targeting & JID Handling Improvements
+
+Implement a complete audit of every command that targets a WhatsApp user.
+
+The goal is to make every command flexible, consistent, and based on real WhatsApp identifiers exposed by @crysnovax/baileys.
+
+---
+
+Universal User Resolution
+
+Any command that targets a user should support all valid input methods.
+
+Supported methods:
+
+- Replying to a user's message.
+- Mentioning the user.
+- Typing the user's WhatsApp phone number.
+- Typing the user's full JID (where applicable).
+
+The bot should automatically resolve the target regardless of which method is used.
+
+Example:
+
+.kick @user
+
+.kick 2348012345678
+
+.kick 2348012345678@s.whatsapp.net
+
+(reply)
+.kick
+
+Every method should produce the exact same result.
+
+No command should require only mentions or only replies.
+
+---
+
+Apply Everywhere
+
+This should be implemented across the entire project.
+
+Examples include (but are not limited to):
+
+- kick
+- promote
+- demote
+- warn
+- unwarn
+- ban
+- unban
+- linkpermit
+- rmlinkpermit
+- botpermit
+- rmbotpermit
+- spampermit
+- rmspampermit
+- mediapermit
+- rmmediapermit
+- vnpermit
+- rmvnpermit
+- all Anti System permit commands
+- sudo management
+- owner management
+- info commands
+- every future command that targets a WhatsApp user
+
+No command should behave differently.
+
+One universal resolver should power every command.
+
+---
+
+Universal Resolver
+
+Create one centralized Target Resolver instead of duplicating logic inside commands.
+
+Priority example:
+
+1. Quoted message
+2. Mention
+3. WhatsApp phone number
+4. WhatsApp JID
+
+Every command should call the same resolver.
+
+This avoids inconsistent behavior.
+
+---
+
+Real JIDs Only
+
+Whenever the bot needs to display or work with a user's WhatsApp identifier, always use the real WhatsApp JID.
+
+Example:
+
+2348012345678@s.whatsapp.net
+
+Do not confuse:
+
+- LID
+- Temporary identifiers
+- Internal IDs
+- Placeholder values
+
+If the actual WhatsApp JID exists, that is what should be used throughout the system.
+
+---
+
+JID vs LID
+
+Several parts of the project currently mix JIDs and LIDs.
+
+Audit the entire codebase.
+
+Ensure every feature clearly understands the difference.
+
+Whenever a feature requires the real WhatsApp account, use the actual WhatsApp JID.
+
+Do not mistakenly display or store a LID where a JID is expected.
+
+The UI should clearly label values when both exist.
+
+Example:
+
+WhatsApp Number:
+2348012345678
+
+WhatsApp JID:
+2348012345678@s.whatsapp.net
+
+LID:
+(if available, display separately)
+
+Never substitute one for the other.
+
+---
+
+Information Commands
+
+Commands like:
+
+- getinfo
+- userinfo
+- diagnostics
+- debug
+
+should clearly show:
+
+- Display Name
+- WhatsApp Number
+- WhatsApp JID
+- LID (only if available and relevant)
+- Profile Picture
+- About/Bio
+- Device information (where available)
+
+The user should immediately know which identifier is which.
+
+---
+
+Future Compatibility
+
+Every new command added to the project should automatically inherit this universal targeting behavior.
+
+Developers should never need to reimplement mention, quote, or number parsing again.
+
+The centralized resolver should be reusable across the entire bot.
+
+---
+
+Final Goal
+
+After implementation:
+
+- ✅ Every user-targeting command accepts replies, mentions, phone numbers, and JIDs.
+- ✅ One universal resolver powers every command.
+- ✅ Real WhatsApp JIDs are always used where required.
+- ✅ LIDs are never mistaken for JIDs.
+- ✅ Information commands clearly distinguish Number, JID, and LID.
+- ✅ No fake identifiers or placeholder values are used.
+- ✅ User targeting remains consistent, reliable, and fully compatible with @crysnovax/baileys.
