@@ -65,7 +65,7 @@ export function mainMenuKeyboard(isOwner: boolean): InlineKeyboardMarkup {
   ];
 
   if (isOwner) {
-    rows.push([btn('👑 Admin Panel', 'admin:panel')]);
+    rows.push([btn('👑 Admin Panel', 'admin:panel', 'primary')]);
   }
 
   return { inline_keyboard: rows };
@@ -91,7 +91,7 @@ export function sessionsListKeyboard(
       banned: '💀',
     }[s.status] ?? '⚪';
 
-    return [btn(`${statusIcon} ${s.label || s.phone}`, `session:${s.id}:menu`)];
+    return [btn(`${statusIcon} ${s.label || s.phone}`, `session:${s.id}:menu`, 'primary')];
   });
 
   // Pagination
@@ -100,7 +100,7 @@ export function sessionsListKeyboard(
   if (start + pageSize < sessions.length) nav.push(btn('Next ▶', `sessions:list:${page + 1}`, 'primary'));
   if (nav.length > 0) rows.push(nav);
 
-  rows.push([btn('➕ New Session', 'session:new', 'success'), btn('🔙 Back', 'menu:main')]);
+  rows.push([btn('➕ New Session', 'session:new', 'success'), btn('🔙 Back', 'menu:main', 'primary')]);
 
   return { inline_keyboard: rows };
 }
@@ -173,7 +173,7 @@ export function bucketMenuKeyboard(filterRunning: boolean): InlineKeyboardMarkup
       [filterRunning ? btn('⏹ Stop Filter', 'bucket:filter:stop', 'danger') : btn('▶️ Start Filter', 'bucket:filter:start', 'success'), btn('🌐 HTTP Validate', 'bucket:filter:http', 'primary')],
       [btn('📤 Export TXT', 'bucket:export:txt', 'primary'), btn('📊 Export CSV', 'bucket:export:csv', 'primary'), btn('🌐 Export HTML', 'bucket:export:html', 'primary')],
       [btn('🗑 Purge Dead', 'bucket:purge:dead', 'danger'), btn('🔀 Merge', 'bucket:merge', 'primary')],
-      [btn('🔙 Back', 'menu:main')],
+      [btn('🔙 Back', 'menu:main', 'primary')],
     ],
   };
 }
@@ -217,7 +217,7 @@ export function adminPanelKeyboard(paused = false, maintenance = false): InlineK
       ],
       [btn('🔄 Update Bot', 'admin:update', 'success'), btn('🔗 Menu URL', 'admin:menuurl', 'primary')],
       [btn('🔁 Restart Bot', 'admin:restart', 'danger'), btn('📋 Logs', 'admin:logs', 'primary')],
-      [btn('🔙 Back', 'menu:main')],
+      [btn('🔙 Back', 'menu:main', 'primary')],
     ],
   };
 }
@@ -238,8 +238,8 @@ export function adminUsersKeyboard(
   });
 
   const nav: IKB[] = [];
-  if (page > 0) nav.push(btn('◀ Prev', `admin:users:${page - 1}`));
-  if (start + pageSize < users.length) nav.push(btn('Next ▶', `admin:users:${page + 1}`));
+  if (page > 0) nav.push(btn('◀ Prev', `admin:users:${page - 1}`, 'primary'));
+  if (start + pageSize < users.length) nav.push(btn('Next ▶', `admin:users:${page + 1}`, 'primary'));
   if (nav.length > 0) rows.push(nav);
 
   rows.push([btn('🔙 Back', 'admin:panel', 'primary')]);
