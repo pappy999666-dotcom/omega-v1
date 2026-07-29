@@ -66,6 +66,7 @@ import {
 import {
   mainMenuKeyboard,
   helpKeyboard,
+  helpCategoryKeyboard,
   statusKeyboard,
   stickerMacrosKeyboard,
   backKeyboard,
@@ -1333,16 +1334,135 @@ async function routeCallback(
 
   // ── Help and Status ──
   if (action === 'help') {
-    const stickerHelp = params[0] === 'stickers';
-    await ctx.editMessageText(
-      stickerHelp
-        ? `${header('Sticker Macro Help', '🎭')}\n\nUnbound stickers stay silent. Reply directly to the sticker with ${H.code('.setcmd [command]')} to bind it.`
-        : helpText(ctx.isOwner),
-      {
-        parse_mode: 'HTML',
-        reply_markup: stickerHelp ? backKeyboard('settings:macros') : helpKeyboard(),
+    const sub = params[0];
+
+    if (sub === 'stickers') {
+      await ctx.editMessageText(
+        `${header('Sticker Macro Help', '🎭')}\n\nUnbound stickers stay silent. Reply directly to the sticker with ${H.code('.setcmd [command]')} to bind it.`,
+        { parse_mode: 'HTML', reply_markup: backKeyboard('settings:macros') }
+      );
+      return;
+    }
+
+    if (sub === 'cat') {
+      const cat = params[1] ?? '';
+      const cfg = loadConfig(ctx.telegramId);
+      const p = escape(cfg.prefix || '.');
+      type CmdRow = [string, string];
+      const categories: Record<string, { title: string; emoji: string; rows: CmdRow[] }> = {
+        groupmod: {
+          title: 'Group Moderation', emoji: '🛡',
+          rows: [
+            [`${p}kick`, 'Kick — reply / @mention / number'],
+            [`${p}ban / ${p}unban`, 'Ban or unban a member'],
+            [`${p}banlist`, 'View ban list for this group'],
+            [`${p}promote / ${p}demote`, 'Grant or remove admin status'],
+            [`${p}warn / ${p}unwarn`, 'Issue or clear a warning'],
+            [`${p}warns`, 'Check warning count'],
+            [`${p}poll Q|A|B`, 'Create a group poll'],
+            [`${p}welcome / ${p}goodbye`, 'Welcome & goodbye messages'],
+            [`${p}kickmsg / ${p}warnmsg / ${p}banmsg`, 'Customise action responses'],
+            [`${p}eventstatus`, 'Group event config overview'],
+            [`${p}userinfo`, 'Show user JID, number & LID'],
+          ] as CmdRow[],
+        },
+        antisystem: {
+          title: 'Anti System', emoji: '🚨',
+          rows: [
+            [`${p}antistatus`, 'Overview of all anti modules'],
+            [`${p}antilink <kick|warn|delete>`, 'Block links'],
+            [`${p}antibot`, 'Remove automation clients'],
+            [`${p}antispam`, 'Rate-limit spammers'],
+            [`${p}spamlimit <n> <sec>`, 'Adjust spam window'],
+            [`${p}antipic / ${p}antivid / ${p}antiaud`, 'Block media types'],
+            [`${p}antivn / ${p}antitxt`, 'Block voice notes / plain text'],
+            [`${p}antiemoji / ${p}antisticker`, 'Block emoji / stickers'],
+            [`${p}antigroupcall`, 'Block group calls'],
+            [`${p}antinsfw`, 'NSFW detection (needs ANTI_NSFW_API_URL)'],
+            [`${p}antigroupmention`, 'Block @group / channel mentions'],
+            [`${p}antiwords`, 'Block custom word list'],
+            [`${p}antiaddword / ${p}antirmword`, 'Add / remove blocked words'],
+            [`${p}antiwordlist`, 'Show blocked word list'],
+            [`${p}antipoll / ${p}antiforward`, 'Block polls / forwards'],
+            [`${p}antichannel`, 'Block channel reposts'],
+            [`${p}antipromote / ${p}antidemote <mode>`, 'Guard admin changes'],
+            [`${p}<module>permit / ${p}rm<module>permit`, 'Exempt / un-exempt a user'],
+            [`${p}<module>msg <text>`, 'Custom violation response'],
+          ] as CmdRow[],
+        },
+        status: {
+          title: 'Status Engine', emoji: '📡',
+          rows: [
+            [`${p}godcast / ${p}statusdesign`, 'Designed status for current GC'],
+            [`${p}settheme <theme>`, 'Set status design theme'],
+            [`${p}smedia`, 'Post media status'],
+            [`${p}gstatus <msg>`, 'Post to current group status'],
+            [`${p}tochat <jid> <msg>`, 'Send message to a target group'],
+            [`${p}togstatus <jid> <msg>`, 'Post to a target group status'],
+            [`${p}tochatx <jid> <n> <msg>`, 'Repeat send to a target chat'],
+            [`${p}togstatusx <n> <jid> <msg>`, 'Repeat group status post'],
+            [`${p}sstatus <msg>`, 'Run status loop until stopspam'],
+            [`${p}stopspam`, 'Stop the active status loop'],
+          ] as CmdRow[],
+        },
+        broadcast: {
+          title: 'Broadcast Network', emoji: '📣',
+          rows: [
+            [`${p}allstatus <msg>`, 'Post to all group statuses'],
+            [`${p}allstatusx <n> <msg>`, 'Repeat allstatus n times'],
+            [`${p}allchat <msg>`, 'Send to all groups with hidetag'],
+            [`${p}stopspam`, 'Cancel any active broadcast'],
+          ] as CmdRow[],
+        },
+        lifecycle: {
+          title: 'Lifecycle Module', emoji: '🔗',
+          rows: [
+            [`${p}join <link>`, 'Join a group via invite link'],
+            [`${p}joinall`, 'Join all active bucket links'],
+            [`${p}left`, 'Leave the current group'],
+            [`${p}leave <jid/link>`, 'Leave a specific group'],
+            [`${p}leaveall`, 'Leave all joined groups'],
+            [`${p}tag`, 'Hidetag all group members'],
+            [`${p}mtag`, 'Visible mention all members'],
+            [`${p}pair <phone>`, 'Pair a new WA number from WhatsApp'],
+          ] as CmdRow[],
+        },
+        settings: {
+          title: 'System & Config', emoji: '⚙️',
+          rows: [
+            [`${p}setprefix <p>`, 'Change command prefix'],
+            [`${p}setcmd <cmd>`, 'Bind quoted sticker to a command'],
+            [`${p}delcmd`, 'Remove a sticker binding'],
+            [`${p}setsudo <number>`, 'Grant command access'],
+            [`${p}delsudo <number>`, 'Revoke command access'],
+            [`${p}sudo`, 'List sudo numbers'],
+            [`${p}info`, 'Session status information'],
+            [`${p}groups`, 'List all joined groups'],
+            [`${p}jid <link>`, 'Resolve a group invite to JID'],
+            [`${p}ping`, 'Measure connection latency'],
+          ] as CmdRow[],
+        },
+      };
+
+      const entry = categories[cat];
+      if (!entry) {
+        await ctx.answerCbQuery('Unknown category').catch(() => {});
+        return;
       }
-    );
+
+      const lines = entry.rows.map(([cmd, desc]) => `${H.code(cmd)} — ${escape(desc)}`).join('\n');
+      await ctx.editMessageText(
+        `${header(entry.title, entry.emoji)}\n\n${lines}`,
+        { parse_mode: 'HTML', reply_markup: helpCategoryKeyboard() }
+      );
+      return;
+    }
+
+    // Default: help:main
+    await ctx.editMessageText(helpText(ctx.isOwner), {
+      parse_mode: 'HTML',
+      reply_markup: helpKeyboard(),
+    });
     return;
   }
 

@@ -41,7 +41,22 @@ export function groupBridgeActiveKeyboard(sessionId: string, gcKey: string): Inl
 }
 
 export function helpKeyboard(): InlineKeyboardMarkup {
-  return backKeyboard('menu:main');
+  return {
+    inline_keyboard: [
+      [btn('◈ Group Moderation', 'help:cat:groupmod', 'primary'), btn('◈ Anti System', 'help:cat:antisystem', 'primary')],
+      [btn('◈ Status Engine', 'help:cat:status', 'primary'), btn('◈ Broadcast', 'help:cat:broadcast', 'primary')],
+      [btn('◈ Lifecycle', 'help:cat:lifecycle', 'primary'), btn('◈ Settings', 'help:cat:settings', 'primary')],
+      [btn('🔙 Back', 'menu:main', 'primary')],
+    ],
+  };
+}
+
+export function helpCategoryKeyboard(): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [btn('🔙 Back to Commands', 'help:main', 'primary')],
+    ],
+  };
 }
 
 export function statusKeyboard(): InlineKeyboardMarkup {
