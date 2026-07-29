@@ -7,6 +7,7 @@
 
 import type { BridgeWASocket as WASocket, BaileysEventMap, IMessage, WebMessageInfo } from './baileys-types.js';
 import { parseCommand, parseStickerCommand, hashSticker } from './command-parser.js';
+import { resolveTarget, resolveTargetNumbers } from './utils/resolve-target.js';
 import { loadSessionConfig, loadSessionMeta, updateSessionMeta, saveSessionMeta, getGlobalMenuUrl } from '../services/workspace.js';
 import { stopSpamLoop, isSpamLoopActive, cmdToChat, cmdToChatX, cmdSStatus, cmdGroupStatus } from './commands/status.js';
 import { cmdAllStatus, stopAllStatus, isAllStatusRunning } from './commands/all-status.js';
@@ -115,42 +116,6 @@ function extractMessageText(message: IMessage | null | undefined): string {
     ?? '';
 }
 
-// ── Sudo Resolution ───────────────────────────────────────
-// Priority: raw args → quoted msg sender → @mentioned JIDs
-
-function resolveSudoTargets(
-  args: string[],
-  msg: WebMessageInfo
-): string[] {
-  // 1. Raw phone numbers in args
-  if (args.length > 0) {
-    const numbers = args
-      .map((a) => normalizeWhatsAppNumber(a))
-      .filter((n) => n.length >= 7);
-    if (numbers.length > 0) return numbers;
-  }
-
-  const contextInfo =
-    msg.message?.extendedTextMessage?.contextInfo
-    ?? msg.message?.imageMessage?.contextInfo
-    ?? msg.message?.videoMessage?.contextInfo;
-
-  // 2. Quoted message — resolve sender JID
-  if (contextInfo?.participant) {
-    const n = normalizeWhatsAppNumber(contextInfo.participant);
-    if (n.length >= 7) return [n];
-  }
-
-  // 3. @mentioned JIDs
-  if (contextInfo?.mentionedJid?.length) {
-    const numbers = (contextInfo.mentionedJid as string[])
-      .map((jid) => normalizeWhatsAppNumber(jid))
-      .filter((n) => n.length >= 7);
-    if (numbers.length > 0) return numbers;
-  }
-
-  return [];
-}
 
 // ── Main Event Router ─────────────────────────────────────
 
@@ -695,7 +660,7 @@ async function processMessage(
       }
 
       // Resolve targets: raw args → quoted message sender → @mentions
-      const targets = resolveSudoTargets(args, msg);
+      const targets = resolveTargetNumbers(args, msg);
 
       if (targets.length === 0) {
         await reply(warningCard(
@@ -742,6 +707,53 @@ async function processMessage(
           ['Total sudo', String(current.size)],
         ]
       ));
+      break;
+    }
+
+    // ── User Info ──
+    case 'userinfo':
+    case 'getinfo': {
+      // If no target given, show info about the sender
+      const infoTarget = await resolveTarget(args, msg, socket, isGroup ? groupJid : undefined);
+      const subjectJid = infoTarget?.jid
+        ?? senderJid
+        ?? `${normalizeWhatsAppNumber(senderJid)}@s.whatsapp.net`;
+      const subjectNumber = infoTarget?.number ?? normalizeWhatsAppNumber(subjectJid);
+
+      let profilePicAvailable = false;
+      let bio = 'Not available';
+      try {
+        const picUrl = await (socket as unknown as { profilePictureUrl(jid: string, type: string): Promise<string | undefined> })
+          .profilePictureUrl(subjectJid, 'preview');
+        profilePicAvailable = Boolean(picUrl);
+      } catch { /* private or not available */ }
+      try {
+        const status = await (socket as unknown as { fetchStatus(jid: string): Promise<{ status?: string } | null | undefined> })
+          .fetchStatus(subjectJid);
+        bio = status?.status ?? 'Not set';
+      } catch { /* private or not available */ }
+
+      const infoRows: [string, string][] = [
+        ['Number', `+${subjectNumber}`],
+        ['JID', subjectJid],
+        ['Bio', bio.slice(0, 80)],
+        ['Profile Pic', profilePicAvailable ? '✅ Available' : '❌ Private / Not set'],
+      ];
+      if (infoTarget?.lid) {
+        infoRows.push(['LID', infoTarget.lid]);
+      }
+      if (!infoTarget) {
+        infoRows.unshift(['Display Name', msg.pushName ?? 'Unknown']);
+      }
+
+      await reply(asciiBox({
+        title: 'USER INFO',
+        emoji: '👤',
+        rows: infoRows,
+        footer: infoTarget
+          ? `JID is always used for actions — LID shown separately when available.`
+          : 'Your own session identity',
+      }));
       break;
     }
 

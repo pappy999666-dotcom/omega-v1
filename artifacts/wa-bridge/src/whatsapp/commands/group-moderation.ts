@@ -3,10 +3,12 @@
 // kick, ban, unban, promote, demote, warn, unwarn, poll
 // welcomemsg, goodbyemsg, kickmsg, warnmsg, banmsg, unbanmsg
 // All commands require groupJid.endsWith('@g.us')
+// User targeting via resolveTarget / resolveTargetNumber:
+//   accepts reply · @mention · phone number · full JID
 // ============================================================
 
 import type { BridgeWASocket as WASocket, WebMessageInfo } from '../baileys-types.js';
-import { normalizeWhatsAppNumber } from '../event-handlers.js';
+import { resolveTarget, resolveTargetNumber } from '../utils/resolve-target.js';
 import { bold, italic, successCard, warningCard, errorCard, asciiBox } from '../../utils/ascii-art.js';
 import { renderTemplate } from '../../utils/response-engine.js';
 import {
@@ -24,67 +26,6 @@ import {
   incrementWarn,
   resetWarn,
 } from '../anti-system/config.js';
-
-// ── Participant Resolution ────────────────────────────────
-
-interface ResolvedTarget {
-  jid: string;
-  number: string;
-}
-
-export async function resolveParticipant(
-  args: string[],
-  msg: WebMessageInfo,
-  socket: WASocket,
-  groupJid: string
-): Promise<ResolvedTarget | null> {
-  const contextInfo =
-    msg.message?.extendedTextMessage?.contextInfo ??
-    msg.message?.imageMessage?.contextInfo ??
-    msg.message?.videoMessage?.contextInfo;
-
-  let rawTarget = args[0] ?? '';
-
-  // Prefer quoted message sender
-  if (!rawTarget && contextInfo?.participant) {
-    rawTarget = contextInfo.participant;
-  }
-
-  // Fallback to @mentioned JID
-  if (!rawTarget && contextInfo?.mentionedJid?.length) {
-    rawTarget = (contextInfo.mentionedJid as string[])[0] ?? '';
-  }
-
-  if (!rawTarget) return null;
-
-  const number = normalizeWhatsAppNumber(rawTarget);
-  if (!number || number.length < 7) return null;
-
-  // If we already have a full JID
-  if (rawTarget.includes('@')) {
-    return { jid: rawTarget, number };
-  }
-
-  // Resolve full JID from group participant list
-  try {
-    const meta = await (socket as unknown as {
-      groupMetadata(jid: string): Promise<{
-        participants: { id: string; phoneNumber?: string }[];
-      }>;
-    }).groupMetadata(groupJid);
-
-    const member = meta.participants.find((p) => {
-      const pNum = (p.id.split('@')[0] ?? '').split(':')[0];
-      const pPhone = (p.phoneNumber ?? '').replace(/[^0-9]/g, '');
-      return pNum === number || pPhone === number;
-    });
-
-    const jid = member?.id ?? `${number}@s.whatsapp.net`;
-    return { jid, number };
-  } catch {
-    return { jid: `${number}@s.whatsapp.net`, number };
-  }
-}
 
 // ── Shared group name fetcher ─────────────────────────────
 
@@ -132,7 +73,7 @@ export async function cmdKick(
     return errorCard('Kick', 'This command must be used inside a WhatsApp group.');
   }
 
-  const target = await resolveParticipant(args, msg, socket, groupJid);
+  const target = await resolveTarget(args, msg, socket, groupJid);
   if (!target) {
     return warningCard('Kick', `Provide a phone number, reply to a message, or @mention someone.\nUsage: ${prefix}kick @user`);
   }
@@ -170,7 +111,7 @@ export async function cmdBan(
     return errorCard('Ban', 'This command must be used inside a WhatsApp group.');
   }
 
-  const target = await resolveParticipant(args, msg, socket, groupJid);
+  const target = await resolveTarget(args, msg, socket, groupJid);
   if (!target) {
     return warningCard('Ban', `Provide a phone number, reply to a message, or @mention someone.\nUsage: ${prefix}ban @user`);
   }
@@ -207,15 +148,10 @@ export function cmdUnban(
     return errorCard('Unban', 'This command must be used inside a WhatsApp group.');
   }
 
-  const contextInfo =
-    msg.message?.extendedTextMessage?.contextInfo ??
-    msg.message?.imageMessage?.contextInfo;
-
-  const rawTarget = args[0] ?? contextInfo?.participant ?? '';
-  const number = normalizeWhatsAppNumber(rawTarget);
+  const number = resolveTargetNumber(args, msg);
 
   if (!number || number.length < 7) {
-    return warningCard('Unban', `Provide the number to unban.\nUsage: ${prefix}unban +2348012345678`);
+    return warningCard('Unban', `Provide the number to unban, @mention them, or reply to their message.\nUsage: ${prefix}unban +2348012345678`);
   }
 
   removeBannedNumber(telegramId, sessionId, groupJid, number);
@@ -261,7 +197,7 @@ export async function cmdPromote(
     return errorCard('Promote', 'This command must be used inside a WhatsApp group.');
   }
 
-  const target = await resolveParticipant(args, msg, socket, groupJid);
+  const target = await resolveTarget(args, msg, socket, groupJid);
   if (!target) {
     return warningCard('Promote', `Provide a phone number, reply to a message, or @mention someone.\nUsage: ${prefix}promote @user`);
   }
@@ -292,7 +228,7 @@ export async function cmdDemote(
     return errorCard('Demote', 'This command must be used inside a WhatsApp group.');
   }
 
-  const target = await resolveParticipant(args, msg, socket, groupJid);
+  const target = await resolveTarget(args, msg, socket, groupJid);
   if (!target) {
     return warningCard('Demote', `Provide a phone number, reply to a message, or @mention someone.\nUsage: ${prefix}demote @user`);
   }
@@ -323,7 +259,7 @@ export async function cmdWarn(
     return errorCard('Warn', 'This command must be used inside a WhatsApp group.');
   }
 
-  const target = await resolveParticipant(args, msg, socket, groupJid);
+  const target = await resolveTarget(args, msg, socket, groupJid);
   if (!target) {
     return warningCard('Warn', `Provide a phone number, reply to a message, or @mention someone.\nUsage: ${prefix}warn @user`);
   }
@@ -373,15 +309,10 @@ export function cmdUnwarn(
     return errorCard('Unwarn', 'This command must be used inside a WhatsApp group.');
   }
 
-  const contextInfo =
-    msg.message?.extendedTextMessage?.contextInfo ??
-    msg.message?.imageMessage?.contextInfo;
-
-  const rawTarget = args[0] ?? contextInfo?.participant ?? '';
-  const number = normalizeWhatsAppNumber(rawTarget);
+  const number = resolveTargetNumber(args, msg);
 
   if (!number || number.length < 7) {
-    return warningCard('Unwarn', `Provide the number to reset warnings for.\nUsage: ${prefix}unwarn +2348012345678`);
+    return warningCard('Unwarn', `Provide the number, @mention them, or reply to their message.\nUsage: ${prefix}unwarn +2348012345678`);
   }
 
   resetWarn(sessionId, groupJid, number, 'manual');
@@ -401,15 +332,10 @@ export function cmdWarnCount(
     return errorCard('Warns', 'This command must be used inside a WhatsApp group.');
   }
 
-  const contextInfo =
-    msg.message?.extendedTextMessage?.contextInfo ??
-    msg.message?.imageMessage?.contextInfo;
-
-  const rawTarget = args[0] ?? contextInfo?.participant ?? '';
-  const number = normalizeWhatsAppNumber(rawTarget);
+  const number = resolveTargetNumber(args, msg);
 
   if (!number || number.length < 7) {
-    return warningCard('Warns', `Provide the number to check.\nUsage: ${prefix}warns +2348012345678`);
+    return warningCard('Warns', `Provide the number, @mention them, or reply to their message.\nUsage: ${prefix}warns +2348012345678`);
   }
 
   const count = getWarnCount(sessionId, groupJid, number, 'manual');

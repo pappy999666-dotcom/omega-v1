@@ -5,7 +5,7 @@
 
 import type { WebMessageInfo } from '../baileys-types.js';
 import { bold, italic, successCard, warningCard, errorCard, asciiBox } from '../../utils/ascii-art.js';
-import { normalizeWhatsAppNumber } from '../event-handlers.js';
+import { resolveTargetNumber } from '../utils/resolve-target.js';
 import {
   loadGroupAntiConfig,
   saveGroupAntiConfig,
@@ -38,28 +38,6 @@ function parseAction(arg: string): AntiAction | null {
   return null;
 }
 
-function resolveTargetNumber(args: string[], msg: WebMessageInfo): string | null {
-  // 1. Explicit number/JID in args
-  if (args[0]) {
-    const n = normalizeWhatsAppNumber(args[0]);
-    if (n.length >= 7) return n;
-  }
-  // 2. Quoted message sender
-  const ci =
-    msg.message?.extendedTextMessage?.contextInfo ??
-    msg.message?.imageMessage?.contextInfo ??
-    msg.message?.videoMessage?.contextInfo;
-  if (ci?.participant) {
-    const n = normalizeWhatsAppNumber(ci.participant);
-    if (n.length >= 7) return n;
-  }
-  // 3. @mentioned JID
-  if (ci?.mentionedJid?.length) {
-    const n = normalizeWhatsAppNumber((ci.mentionedJid as string[])[0] ?? '');
-    if (n.length >= 7) return n;
-  }
-  return null;
-}
 
 function moduleLabel(key: string): string {
   const labels: Record<string, string> = {

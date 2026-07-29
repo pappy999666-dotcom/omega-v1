@@ -127,9 +127,18 @@ export const ALL_COMMANDS = [
   // Settings
   'setprefix', 'setcmd', 'delcmd', 'setsudo', 'delsudo', 'sudo', 'prefix',
   // Info
-  'menu', 'help', 'ping', 'info', 'groups', 'jid',
+  'menu', 'help', 'ping', 'info', 'groups', 'jid', 'userinfo', 'getinfo',
   // Bucket
   'addlink',
+  // Group Moderation
+  'kick', 'remove', 'ban', 'unban', 'banlist',
+  'promote', 'demote',
+  'warn', 'unwarn', 'resetwarn', 'warns',
+  'poll',
+  'setwelcome', 'welcomemsg', 'welcome',
+  'setgoodbye', 'goodbyemsg', 'goodbye',
+  'kickmsg', 'warnmsg', 'banmsg', 'unbanmsg',
+  'eventstatus',
   // Pairing from WhatsApp
   'pair',
   // ── Anti System ──
