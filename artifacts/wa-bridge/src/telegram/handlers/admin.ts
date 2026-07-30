@@ -413,7 +413,7 @@ export async function handleLogStream(ctx: Context & { telegramId: string }): Pr
   };
 
   const { spawn } = await import('child_process');
-  const proc = spawn('pm2', ['logs', 'wa-bridge', '--lines', '30', '--nocolor'], { env: process.env });
+  const proc = spawn('pm2', ['logs', 'wa-bridge', '--lines', '30', '--no-color'], { env: process.env });
   let buf = '';
 
   const onData = (d: Buffer) => {
