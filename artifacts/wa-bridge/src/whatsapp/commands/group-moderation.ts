@@ -24,6 +24,7 @@ import {
   numericId,
   stripDeviceSuffix,
 } from '../utils/group-permissions.js';
+import { runRemoveModerationPipeline } from '../utils/moderation-pipeline.js';
 import { logger } from '../../utils/logger.js';
 import { bold, italic, successCard, warningCard, errorCard, asciiBox } from '../../utils/ascii-art.js';
 import { renderTemplate } from '../../utils/response-engine.js';
@@ -58,11 +59,6 @@ async function getGroupName(socket: WASocket, groupJid: string): Promise<string>
 
 // ── Low-level participant update ──────────────────────────
 
-/**
- * Execute a Baileys participant update.
- * Returns null on success, or a human-readable error string on failure.
- * Never throws.
- */
 async function participantUpdate(
   socket: WASocket,
   groupJid: string,
@@ -73,8 +69,9 @@ async function participantUpdate(
     await (socket as unknown as {
       groupParticipantsUpdate(jid: string, p: string[], a: string): Promise<unknown>;
     }).groupParticipantsUpdate(groupJid, [participantJid], action);
-    return null; // success
+    return null;
   } catch (err) {
+    logger.warn('[GroupModeration] participantUpdate failed', { err, groupJid, participantJid, action });
     const msg = err instanceof Error ? err.message : String(err);
     return msg || 'Unknown error from WhatsApp';
   }
@@ -91,53 +88,18 @@ export async function cmdKick(
   groupJid: string,
   prefix: string
 ): Promise<string> {
-  if (!groupJid.endsWith('@g.us')) {
-    return errorCard('Kick', 'This command must be used inside a WhatsApp group.');
-  }
-
-  // Permission gate: bot must be admin
-  const meta = await fetchGroupMeta(socket, groupJid);
-  if (!meta?.botIsAdmin) {
-    return errorCard('Kick', BOT_NOT_ADMIN_MSG);
-  }
-
-  const target = await resolveTarget(args, msg, socket, groupJid);
-  if (!target) {
-    return warningCard('Kick', `Provide a phone number, reply to a message, or @mention someone.\nUsage: ${prefix}kick @user`);
-  }
-
-  // Refuse to kick admins
-  if (isAdminJid(meta.participants, target.jid)) {
-    return warningCard('Kick', `@${target.number} is a group admin and cannot be kicked directly.\nUse ${prefix}dnkick to demote then remove them.`);
-  }
-
-  // Verify target is still in the group
-  const memberInGroup = meta.participants.some((p) => {
-    const pNum = (p.id.split('@')[0] ?? '').split(':')[0];
-    return pNum === target.number || p.id === target.jid;
-  });
-  if (!memberInGroup) {
-    return warningCard('Kick', `@${target.number} is not in this group (they may have already left).`);
-  }
-
-  const gcName = meta.subject;
-  const kickErr = await participantUpdate(socket, groupJid, target.jid, 'remove');
-  if (kickErr !== null) {
-    return errorCard('Kick Failed', `Could not remove @${target.number}.\n\nReason: ${kickErr}`);
-  }
-
-  const template = getGroupMessage(telegramId, sessionId, groupJid, 'kick')
-    ?? `🚫 @${target.number} has been kicked from *${gcName}*.`;
-
-  const rendered = await renderTemplate(template, {
-    senderJid: target.jid,
-    gcName,
+  const template = getGroupMessage(telegramId, sessionId, groupJid, 'kick') ?? undefined;
+  const result = await runRemoveModerationPipeline({
+    action: 'kick',
+    args,
+    msg,
     socket,
     groupJid,
+    prefix,
+    template,
   });
-
-  await socket.sendMessage(groupJid, { text: rendered, mentions: [target.jid] });
-  return successCard('Kick', `@${target.number} was removed from the group.`);
+  if (!result.ok) return result.reply;
+  return successCard('Kick', `@${result.targetNumber} was removed from the group.`);
 }
 
 // ── Ban ──────────────────────────────────────────────────
@@ -151,45 +113,19 @@ export async function cmdBan(
   groupJid: string,
   prefix: string
 ): Promise<string> {
-  if (!groupJid.endsWith('@g.us')) {
-    return errorCard('Ban', 'This command must be used inside a WhatsApp group.');
-  }
-
-  // Permission gate: bot must be admin
-  const meta = await fetchGroupMeta(socket, groupJid);
-  if (!meta?.botIsAdmin) {
-    return errorCard('Ban', BOT_NOT_ADMIN_MSG);
-  }
-
-  const target = await resolveTarget(args, msg, socket, groupJid);
-  if (!target) {
-    return warningCard('Ban', `Provide a phone number, reply to a message, or @mention someone.\nUsage: ${prefix}ban @user`);
-  }
-
-  // Refuse to ban admins
-  if (isAdminJid(meta.participants, target.jid)) {
-    return warningCard('Ban', `@${target.number} is a group admin and cannot be banned directly.\nUse ${prefix}dnkick to demote then remove them.`);
-  }
-
-  const gcName = meta.subject;
-  const banErr = await participantUpdate(socket, groupJid, target.jid, 'remove');
-  if (banErr !== null) {
-    return errorCard('Ban Failed', `Could not remove @${target.number}.\n\nReason: ${banErr}`);
-  }
-  addBannedNumber(telegramId, sessionId, groupJid, target.number);
-
-  const template = getGroupMessage(telegramId, sessionId, groupJid, 'ban')
-    ?? `🔨 @${target.number} has been banned from *${gcName}*.`;
-
-  const rendered = await renderTemplate(template, {
-    senderJid: target.jid,
-    gcName,
+  const template = getGroupMessage(telegramId, sessionId, groupJid, 'ban') ?? undefined;
+  const result = await runRemoveModerationPipeline({
+    action: 'ban',
+    args,
+    msg,
     socket,
     groupJid,
+    prefix,
+    template,
+    onSuccess: (number) => addBannedNumber(telegramId, sessionId, groupJid, number),
   });
-
-  await socket.sendMessage(groupJid, { text: rendered, mentions: [target.jid] });
-  return successCard('Ban', `@${target.number} was banned and removed.`, [['Number', target.number]]);
+  if (!result.ok) return result.reply;
+  return successCard('Ban', `@${result.targetNumber} was banned and removed.`, [['Number', result.targetNumber]]);
 }
 
 // ── Unban ────────────────────────────────────────────────

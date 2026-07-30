@@ -74,6 +74,9 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
   prefix:       { section: '◈ SYSTEM CONFIG',    syntax: 'prefix',                    desc: 'Show the current prefix',                    target: 'main', hidden: true },
   setcmd:       { section: '◈ SYSTEM CONFIG',    syntax: 'setcmd [cmd]',              desc: 'Bind a quoted sticker to a command',         target: 'main' },
   delcmd:       { section: '◈ SYSTEM CONFIG',    syntax: 'delcmd',                    desc: 'Remove a sticker binding',                   target: 'main' },
+  setmenupic:   { section: '◈ SYSTEM CONFIG',    syntax: 'setmenupic',                desc: 'Set replied image as menu media',             target: 'main' },
+  setmenuvideo: { section: '◈ SYSTEM CONFIG',    syntax: 'setmenuvideo',              desc: 'Set replied video as menu media',             target: 'main' },
+  delmenumedia: { section: '◈ SYSTEM CONFIG',    syntax: 'delmenumedia',              desc: 'Restore default text-only menus',             target: 'main' },
   setsudo:      { section: '◈ SYSTEM CONFIG',    syntax: 'setsudo [number]',          desc: 'Grant command access (or reply to msg)',      target: 'main' },
   delsudo:      { section: '◈ SYSTEM CONFIG',    syntax: 'delsudo [number]',          desc: 'Revoke command access',                      target: 'main' },
   sudo:         { section: '◈ SYSTEM CONFIG',    syntax: 'sudo',                      desc: 'List all sudo numbers',                      target: 'main' },
@@ -178,6 +181,7 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
 
   // AntiGroupMention
   antigroupmention: { section: '◈ ANTI SYSTEM',  syntax: 'antigroupmention <kick|warn N|delete|off>', desc: 'Block @group / channel mention blasts', target: 'group' },
+  antigm: { section: '◈ ANTI SYSTEM', syntax: 'antigm <kick|warn N|delete|off>', desc: 'Handle WhatsApp Status group mentions', target: 'group' },
   mentionpermit:    { section: '◈ ANTI SYSTEM',  syntax: 'mentionpermit @user',       desc: 'Exempt from AntiGroupMention',               target: 'group', hidden: true },
   rmmentionpermit:  { section: '◈ ANTI SYSTEM',  syntax: 'rmmentionpermit @user',     desc: 'Remove AntiGroupMention exemption',          target: 'group', hidden: true },
 

@@ -10,6 +10,7 @@
 // ============================================================
 
 import type { BridgeWASocket as WASocket, WebMessageInfo, MessageContextInfo } from '../baileys-types.js';
+import type { ResolvedGroupMeta, GroupParticipant } from './group-permissions.js';
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -23,6 +24,8 @@ export interface ResolvedTarget {
    * Displayed separately — never used in place of the real JID.
    */
   lid?: string;
+  /** Matching live group participant, when group metadata was available. */
+  participant?: GroupParticipant;
 }
 
 // ── Internal helpers ──────────────────────────────────────
@@ -36,7 +39,10 @@ export interface ResolvedTarget {
 export function normalizeNumber(value: string | null | undefined): string {
   if (!value) return '';
   const user = value.split('@')[0]!.split(':')[0]!;
-  return user.replace(/\D/g, '');
+  const digits = user.replace(/\D/g, '');
+  // Nigerian local format requested by users: 090xxxxxxxx -> 23490xxxxxxxx.
+  if (/^0\d{9,14}$/.test(digits)) return `234${digits.slice(1)}`;
+  return digits;
 }
 
 /** Extract contextInfo from all supported message types. */
@@ -85,6 +91,7 @@ export async function resolveTarget(
   msg: WebMessageInfo,
   socket?: WASocket,
   groupJid?: string,
+  existingMeta?: ResolvedGroupMeta | null,
 ): Promise<ResolvedTarget | null> {
   const ci = extractContextInfo(msg);
 
@@ -108,55 +115,39 @@ export async function resolveTarget(
   const number = normalizeNumber(rawTarget);
   if (!number || number.length < 7) return null;
 
-  // rawTarget is already a full JID — strip device suffix and return
-  if (rawTarget.includes('@') && !isLid(rawTarget)) {
-    return { jid: stripDeviceSuffix(rawTarget), number };
-  }
-
-  // If given a LID, still try to resolve against the participant list
   const isLidInput = rawTarget.includes('@') && isLid(rawTarget);
 
-  // Resolve real JID from the live group participant list
-  if (socket && groupJid?.endsWith('@g.us')) {
+  // Resolve from the live group participant list before returning a constructed
+  // JID. This prevents +234/234/090 inputs from being reported as absent when
+  // Baileys exposes participants with device suffixes or phoneNumber fields.
+  if (groupJid?.endsWith('@g.us')) {
     try {
-      const meta = await (socket as unknown as {
-        groupMetadata(jid: string): Promise<{
-          participants: { id: string; phoneNumber?: string }[];
-        }>;
-      }).groupMetadata(groupJid);
+      const meta = existingMeta ?? (socket ? await (socket as unknown as {
+        groupMetadata(jid: string): Promise<{ participants: GroupParticipant[] }>;
+      }).groupMetadata(groupJid) as ResolvedGroupMeta : null);
 
-      const member = meta.participants.find((p) => {
-        if (isLidInput) {
-          // Match by LID directly
-          return p.id === rawTarget || isLid(p.id);
-        }
-        const pNum = (p.id.split('@')[0] ?? '').split(':')[0];
-        const pPhone = (p.phoneNumber ?? '').replace(/\D/g, '');
+      const participants = meta?.participants ?? [];
+      const member = participants.find((p) => {
+        const pId = stripDeviceSuffix(p.id);
+        if (isLidInput) return pId === stripDeviceSuffix(rawTarget);
+        if (rawTarget.includes('@') && pId === stripDeviceSuffix(rawTarget)) return true;
+        const pNum = normalizeNumber(p.id);
+        const pPhone = normalizeNumber(p.phoneNumber);
         return pNum === number || pPhone === number;
       });
 
       if (member) {
-        // Distinguish between real JID and LID
-        const isRealJid = !isLid(member.id);
-        const lid = isLid(member.id) ? member.id : undefined;
-
-        // Try to find the real JID if the matched entry was a LID
-        if (!isRealJid) {
-          const realMember = meta.participants.find((p) => !isLid(p.id) && normalizeNumber(p.id) === number);
-          const jid = realMember
-            ? stripDeviceSuffix(realMember.id)
-            : `${number}@s.whatsapp.net`;
-          return { jid, number, lid };
-        }
-
-        const jid = stripDeviceSuffix(member.id);
-        return { jid, number };
+        const lid = isLid(member.id) ? stripDeviceSuffix(member.id) : undefined;
+        return { jid: stripDeviceSuffix(member.id), number: normalizeNumber(member.phoneNumber) || number, lid, participant: member };
       }
     } catch {
-      // Fall through to plain JID construction
+      // Fall through to plain JID construction for non-moderation callers.
     }
   }
 
+  if (rawTarget.includes('@') && !isLid(rawTarget)) {
+    return { jid: stripDeviceSuffix(rawTarget), number };
+  }
   return { jid: `${number}@s.whatsapp.net`, number };
 }
 

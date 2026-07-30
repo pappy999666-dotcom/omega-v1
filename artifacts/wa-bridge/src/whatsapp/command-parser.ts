@@ -125,7 +125,7 @@ export const ALL_COMMANDS = [
   // Stop
   'stop', 'stopspam', 'spam',
   // Settings
-  'setprefix', 'setcmd', 'delcmd', 'setsudo', 'delsudo', 'sudo', 'prefix',
+  'setprefix', 'setcmd', 'delcmd', 'setmenupic', 'setmenuvideo', 'delmenumedia', 'setsudo', 'delsudo', 'sudo', 'prefix',
   // Info
   'menu', 'help', 'gmenu', 'ping', 'info', 'groups', 'jid', 'userinfo', 'getinfo',
   // Bucket
@@ -171,6 +171,7 @@ export const ALL_COMMANDS = [
   'antinsfw', 'nsfwpermit', 'rmnsfwpermit',
   // AntiGroupMention
   'antigroupmention', 'mentionpermit', 'rmmentionpermit',
+  'antigm', 'gmpermit', 'rmgmpermit',
   // AntiWords
   'antiwords', 'antiaddword', 'antirmword', 'antiwordlist', 'antiwordsmsg',
   // AntiPoll
