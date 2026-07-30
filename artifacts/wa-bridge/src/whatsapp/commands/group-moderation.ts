@@ -21,7 +21,10 @@ import {
   isAdminJid,
   isProtectedJid,
   BOT_NOT_ADMIN_MSG,
+  numericId,
+  stripDeviceSuffix,
 } from '../utils/group-permissions.js';
+import { logger } from '../../utils/logger.js';
 import { bold, italic, successCard, warningCard, errorCard, asciiBox } from '../../utils/ascii-art.js';
 import { renderTemplate } from '../../utils/response-engine.js';
 import {
@@ -531,7 +534,56 @@ export async function cmdPoll(
 // ── BlockAll ──────────────────────────────────────────────
 //
 // Blocks every regular member of the group (skips admins, bot, sudo).
-// Provides live progress updates via the onProgress callback.
+//
+// Strategy: build multiple candidate JIDs for each participant and
+// try them in sequence until one succeeds.  This handles every
+// account type WhatsApp may expose:
+//   1. Stripped @s.whatsapp.net  (most common)
+//   2. Legacy @c.us domain       (fallback — some older accounts)
+//   3. Raw LID (@lid)            (Baileys sometimes accepts it)
+//   4. Phone-derived JID when participant entry only has phoneNumber
+//
+// "Already blocked" errors are counted separately — not as failures.
+
+/** Return true when the error message signals the contact is already blocked. */
+function isAlreadyBlockedError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return (
+    msg.includes('already') ||
+    msg.includes('conflict') ||
+    msg.includes('409') ||
+    msg.includes('blocked')
+  );
+}
+
+/** Build the ordered list of JID forms to attempt for a participant. */
+function blockCandidates(p: { id: string; phoneNumber?: string }): string[] {
+  const candidates: string[] = [];
+  const num = numericId(p.id);
+  const phone = (p.phoneNumber ?? '').replace(/\D/g, '');
+
+  if (!p.id.endsWith('@lid')) {
+    // Standard JID — try both domain variants
+    if (num) {
+      candidates.push(`${num}@s.whatsapp.net`);
+      candidates.push(`${num}@c.us`);
+    }
+    // Also try the exact stripped form in case num extraction differs
+    const stripped = stripDeviceSuffix(p.id);
+    if (!candidates.includes(stripped)) candidates.push(stripped);
+  } else {
+    // LID participant — prefer phone → s.whatsapp.net, then c.us, then raw LID
+    if (phone) {
+      candidates.push(`${phone}@s.whatsapp.net`);
+      candidates.push(`${phone}@c.us`);
+    }
+    // Always include the raw LID — Baileys accepts it for some operations
+    candidates.push(p.id);
+  }
+
+  // Deduplicate while preserving order
+  return [...new Set(candidates)];
+}
 
 export async function cmdBlockAll(
   socket: WASocket,
@@ -561,49 +613,72 @@ export async function cmdBlockAll(
     return warningCard('BlockAll', 'No eligible members to block (all members are protected).');
   }
 
-  let done = 0;
-  let failed = 0;
-  let skippedLid = 0;
-
   const sock = socket as unknown as {
     updateBlockStatus(jid: string, action: string): Promise<unknown>;
   };
 
+  let done = 0;
+  let alreadyBlocked = 0;
+  let failed = 0;
+
   for (const p of eligible) {
-    // ── Resolve @lid → @s.whatsapp.net ───────────────────────────────────
-    // updateBlockStatus requires a real @s.whatsapp.net JID.
-    // @lid participants must be converted using their phoneNumber field;
-    // if no phone number is available, we cannot block them this way.
-    let targetJid = p.id;
-    if (p.id.endsWith('@lid')) {
-      const phone = (p.phoneNumber ?? '').replace(/\D/g, '');
-      if (!phone) { skippedLid++; continue; }
-      targetJid = `${phone}@s.whatsapp.net`;
+    const candidates = blockCandidates(p);
+
+    let succeeded = false;
+    let lastErr: unknown = null;
+
+    for (const jid of candidates) {
+      try {
+        await sock.updateBlockStatus(jid, 'block');
+        succeeded = true;
+        logger.debug('[BlockAll] Blocked via JID', { jid, participantId: p.id });
+        break;
+      } catch (err) {
+        if (isAlreadyBlockedError(err)) {
+          // Count separately — this is not a failure
+          alreadyBlocked++;
+          succeeded = true;
+          logger.debug('[BlockAll] Already blocked', { jid, participantId: p.id });
+          break;
+        }
+        lastErr = err;
+        logger.debug('[BlockAll] Attempt failed, trying next form', {
+          jid,
+          err: String(err),
+          participantId: p.id,
+        });
+      }
     }
 
-    try {
-      await sock.updateBlockStatus(targetJid, 'block');
+    if (succeeded) {
       done++;
-    } catch {
+    } else {
       failed++;
+      logger.warn('[BlockAll] All JID forms failed', {
+        participantId: p.id,
+        candidates,
+        err: String(lastErr),
+      });
     }
 
-    // Respect rate limits — 300 ms between calls
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    // Respect rate limits — 350 ms between calls
+    await new Promise((resolve) => setTimeout(resolve, 350));
   }
 
+  const protected_ = meta.participants.length - eligible.length;
   const rows: [string, string][] = [
-    ['Blocked', String(done)],
-    ['Failed', String(failed)],
-    ['Skipped (protected)', String(meta.participants.length - eligible.length)],
+    ['✅ Blocked', String(done - alreadyBlocked)],
+    ['⏩ Already blocked', String(alreadyBlocked)],
+    ['❌ Failed', String(failed)],
+    ['🛡️ Skipped (protected)', String(protected_)],
+    ['Total members', String(meta.participants.length)],
   ];
-  if (skippedLid > 0) rows.push(['Skipped (no phone)', String(skippedLid)]);
 
   return asciiBox({
     title: 'BlockAll — Complete',
-    emoji: '✅',
+    emoji: '🚫',
     rows,
-    footer: `Group: ${meta.subject}`,
+    footer: `Group: ${meta.subject}${failed > 0 ? ' | Check LOG_LEVEL=debug for details' : ''}`,
   });
 }
 
