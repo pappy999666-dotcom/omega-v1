@@ -245,7 +245,7 @@ export async function cmdGroupStatus(
   sessionId: string,
   groupJid: string,
   text: string,
-  opts: { mediaBuffer?: Buffer; mediaType?: string; caption?: string; theme?: string; skipDesign?: boolean; existingPreview?: PartialLinkMeta; sourceMsg?: { message?: import('../baileys-types.js').IMessage | null } } = {}
+  opts: { mediaBuffer?: Buffer; mediaType?: string; caption?: string; mimeType?: string; ptt?: boolean; theme?: string; skipDesign?: boolean; existingPreview?: PartialLinkMeta; sourceMsg?: { message?: import('../baileys-types.js').IMessage | null } } = {}
 ): Promise<boolean> {
   if (isFrozen(sessionId)) return false;
 
@@ -255,6 +255,8 @@ export async function cmdGroupStatus(
       mediaBuffer: opts.mediaBuffer,
       mediaType: opts.mediaType as 'image' | 'video' | 'audio' | undefined,
       caption: opts.caption ?? designedText,
+      mimeType: opts.mimeType,
+      ptt: opts.ptt,
       existingPreview: opts.existingPreview,
       sourceMsg: opts.sourceMsg,
     });

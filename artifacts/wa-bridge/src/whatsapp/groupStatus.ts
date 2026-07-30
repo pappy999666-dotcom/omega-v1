@@ -39,6 +39,8 @@ export interface GroupStatusOptions {
   mediaBuffer?: Buffer;
   mediaType?: 'image' | 'video' | 'audio';
   caption?: string;
+  mimeType?: string;
+  ptt?: boolean;
   likeThis?: boolean;
   existingPreview?: PartialLinkMeta;
   /** Raw source message for as-is relay (PATH 0) */
@@ -116,10 +118,10 @@ export async function sendGroupStatus(
     if (options.mediaBuffer) {
       await sock.sendMessage(groupJid, {
         ...(options.mediaType === 'video'
-          ? { video: options.mediaBuffer, caption: options.caption ?? text, gifPlayback: false }
+          ? { video: options.mediaBuffer, caption: options.caption ?? text, mimetype: options.mimeType ?? 'video/mp4', gifPlayback: false }
           : options.mediaType === 'audio'
-          ? { audio: options.mediaBuffer, mimetype: 'audio/mp4', ptt: false }
-          : { image: options.mediaBuffer, caption: options.caption ?? text }),
+          ? { audio: options.mediaBuffer, mimetype: options.mimeType ?? 'audio/mp4', ptt: Boolean(options.ptt) }
+          : { image: options.mediaBuffer, caption: options.caption ?? text, mimetype: options.mimeType ?? 'image/jpeg' }),
         groupStatus: true,
         ...(options.likeThis ? { likeThis: true } : {}),
       });

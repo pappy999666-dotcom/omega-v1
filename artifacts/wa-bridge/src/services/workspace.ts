@@ -424,6 +424,7 @@ const PLATFORM_CONFIG_PATH = path.join(WORKSPACE_ROOT, '_platform', 'config.json
 
 interface PlatformConfig {
   globalMenuUrl?: string;
+  globalMenuUrls?: string[];
 }
 
 function loadPlatformConfig(): PlatformConfig {
@@ -442,14 +443,15 @@ function savePlatformConfig(config: PlatformConfig): void {
 
 /** Get the platform-wide global menu URL, or null if unset. */
 export function getGlobalMenuUrl(): string | null {
-  return loadPlatformConfig().globalMenuUrl ?? null;
+  const config = loadPlatformConfig();
+  return config.globalMenuUrls?.join('\n') ?? config.globalMenuUrl ?? null;
 }
 
 /** Set the platform-wide global menu URL. */
 export function setGlobalMenuUrl(url: string): void {
   // Strip query params so Baileys never appends ?update= to the stored URL
-  const clean = url.split('?')[0]!.trim();
-  savePlatformConfig({ ...loadPlatformConfig(), globalMenuUrl: clean });
+  const urls = url.split(/[\n,]+/u).map((u) => u.trim()).filter(Boolean).slice(0, 3);
+  savePlatformConfig({ ...loadPlatformConfig(), globalMenuUrl: urls[0], globalMenuUrls: urls });
   logger.info('[Platform] Global menu URL updated');
 }
 
@@ -457,6 +459,7 @@ export function setGlobalMenuUrl(url: string): void {
 export function clearGlobalMenuUrl(): void {
   const config = loadPlatformConfig();
   delete config.globalMenuUrl;
+  delete config.globalMenuUrls;
   savePlatformConfig(config);
   logger.info('[Platform] Global menu URL cleared');
 }

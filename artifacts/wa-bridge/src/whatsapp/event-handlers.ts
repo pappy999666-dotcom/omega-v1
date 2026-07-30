@@ -77,6 +77,10 @@ import {
 } from './commands/group-moderation.js';
 import { setAutoblockConfig } from '../services/group-config.js';
 import { fetchGroupMeta } from './utils/group-permissions.js';
+import { parseUrlButtons, sendWithUrlButtons } from './utils/url-buttons.js';
+import fs from 'fs';
+import path from 'path';
+import { sessionDir } from '../services/workspace.js';
 
 // Map from sessionId → telegramId (populated at init)
 const sessionOwnerMap = new Map<string, string>();
@@ -349,101 +353,26 @@ async function processMessage(
   };
 
   // ── Enriched WhatsApp reply ───────────────────────────────
-  // Replies with a global menu URL use Baileys native nativeFlowMessage
-  // (cta_url button) so the URL appears as a real clickable CTA button
-  // at the bottom of the message instead of an ad-reply preview card.
+  // Central URL button attachment for all normal bot responses.
   const baseWhatsAppReply = async (replyText: string): Promise<void> => {
-    const globalMenuUrl = getGlobalMenuUrl();
     const mentions = await getGroupParticipants();
-
     let visibleText = replyText;
-
-    if (globalMenuUrl) {
-      const isJid = globalMenuUrl.includes('@g.us') || globalMenuUrl.includes('@newsletter') || globalMenuUrl.includes('@s.whatsapp.net');
-      if (!isJid) {
-        const cleanUrl = globalMenuUrl.split('?')[0]!;
-
-        // Strip the raw URL from visible text if it's embedded
-        if (visibleText.includes(cleanUrl)) {
-          visibleText = visibleText.replace(cleanUrl, '').replace(/\n\s*\n/g, '\n').trim();
-        }
-
-        // Resolve display title (cached)
-        if (!menuAdReplyCache.has(cleanUrl)) {
-          let title = '';
-          let body = '';
-          let thumbnailUrl: string | undefined;
-          // WA channel link
-          const channelMatch = cleanUrl.match(/whatsapp\.com\/channel\/([A-Za-z0-9_-]+)/);
-          if (channelMatch) {
-            try {
-              const sock = socket as unknown as { newsletterMetadata: (type: string, key: string) => Promise<{ name?: string; description?: string; picture?: string }> };
-              const meta = await sock.newsletterMetadata('invite', channelMatch[1]!);
-              title = meta?.name || 'Join Channel';
-              body = meta?.description || '';
-              thumbnailUrl = meta?.picture || undefined;
-            } catch { /* non-critical */ }
-          } else if (cleanUrl.includes('chat.whatsapp.com')) {
-            // WA group link
-            try {
-              const code = cleanUrl.split('chat.whatsapp.com/')[1]?.split(/[?#]/)[0]!;
-              const sock = socket as unknown as { groupGetInviteInfo: (c: string) => Promise<{ id: string; subject?: string }>; profilePictureUrl: (jid: string, t: string) => Promise<string> };
-              const info = await sock.groupGetInviteInfo(code);
-              title = info?.subject || 'Join Group';
-              thumbnailUrl = info?.id ? await sock.profilePictureUrl(info.id, 'image').catch(() => undefined) : undefined;
-            } catch { /* non-critical */ }
-          } else {
-            // Regular URL — fetch OG metadata
-            try {
-              const meta = await PreviewManager.fetchLinkMeta(cleanUrl);
-              title = meta?.title || '';
-              body = meta?.description || '';
-              thumbnailUrl = meta?.imageUrl || undefined;
-            } catch { /* non-critical */ }
-          }
-          menuAdReplyCache.set(cleanUrl, { title, body, thumbnailUrl });
-        }
-
-        const cached = menuAdReplyCache.get(cleanUrl)!;
-        const displayText = cached.title || '🔗 Open Menu';
-
-        // ── Native nativeFlowMessage URL button (Baileys native flow) ──
-        try {
-          const sock = socket as unknown as {
-            sendMessage(jid: string, content: Record<string, unknown>, opts?: Record<string, unknown>): Promise<unknown>;
-          };
-          await sock.sendMessage(
-            groupJid,
-            {
-              interactiveMessage: {
-                body: { text: visibleText },
-                footer: { text: '' },
-                header: { hasMediaAttachment: false },
-                nativeFlowMessage: {
-                  buttons: [{
-                    name: 'cta_url',
-                    buttonParamsJson: JSON.stringify({
-                      display_text: displayText,
-                      url: cleanUrl,
-                      merchant_url: cleanUrl,
-                    }),
-                  }],
-                  messageParamsJson: '',
-                },
-              },
-              ...(mentions.length > 0 ? { mentions } : {}),
-            } as Record<string, unknown>,
-            { quoted: msg }
-          );
-          return;
-        } catch (err) {
-          // Non-critical: fall through to plain reply below
-          logger.warn('[EventHandler] Native URL button send failed, falling back to plain reply', { err: String(err) });
-        }
+    const buttons = parseUrlButtons(getGlobalMenuUrl());
+    for (const button of buttons) {
+      if (visibleText.includes(button.url)) {
+        visibleText = visibleText.replace(button.url, '').replace(/\n\s*\n/g, '\n').trim();
       }
     }
 
-    // Plain reply — no menu URL configured (or JID-based menu, or button failed)
+    const sentWithButtons = await sendWithUrlButtons(
+      socket,
+      groupJid,
+      { text: visibleText, ...(mentions.length > 0 ? { mentions } : {}) },
+      buttons,
+      { quoted: msg }
+    );
+    if (sentWithButtons) return;
+
     await PreviewManager.send(socket as any, groupJid, visibleText, {
       quoted: msg,
       extra: mentions.length > 0 ? { mentions } : undefined,
@@ -451,6 +380,73 @@ async function processMessage(
   };
 
   const reply = replyOverride ?? baseWhatsAppReply;
+
+  type MediaKind = 'image' | 'video' | 'audio';
+  type ExtractedMedia = { buffer: Buffer; type: MediaKind; mimeType: string; ptt?: boolean; caption?: string };
+  const anyMessage = (msg.message ?? {}) as Record<string, any>;
+  const getContextInfo = (): any => anyMessage.extendedTextMessage?.contextInfo
+    ?? anyMessage.imageMessage?.contextInfo
+    ?? anyMessage.videoMessage?.contextInfo
+    ?? anyMessage.stickerMessage?.contextInfo
+    ?? anyMessage.audioMessage?.contextInfo
+    ?? null;
+  const unwrapMessage = (message: any): any => message?.ephemeralMessage?.message
+    ?? message?.viewOnceMessage?.message
+    ?? message?.viewOnceMessageV2?.message
+    ?? message?.documentWithCaptionMessage?.message
+    ?? message;
+  const extractStickerId = (): string | null => {
+    const quoted = unwrapMessage(getContextInfo()?.quotedMessage);
+    const sticker = quoted?.stickerMessage ?? anyMessage.stickerMessage;
+    const sha = sticker?.fileSha256;
+    return sha ? hashSticker(Buffer.from(sha as Uint8Array)) : null;
+  };
+  const downloadMessageMedia = async (source: WebMessageInfo): Promise<Buffer | null> => {
+    try {
+      const baileys = await import('@crysnovax/baileys') as Record<string, any>;
+      const fn = baileys.downloadMediaMessage as ((m: unknown, type: string, opts: unknown) => Promise<Buffer>) | undefined;
+      if (!fn) return null;
+      return await fn(source, 'buffer', {});
+    } catch (err) {
+      logger.warn('[Media] download failed', { err: String(err) });
+      return null;
+    }
+  };
+  const extractMedia = async (): Promise<ExtractedMedia | null> => {
+    const direct = unwrapMessage(msg.message as any);
+    const quoted = unwrapMessage(getContextInfo()?.quotedMessage);
+    const sourceMessage = quoted ? ({ key: msg.key, message: quoted } as WebMessageInfo) : msg;
+    const m = quoted ?? direct;
+    const mediaNode = m?.imageMessage ? { type: 'image' as const, node: m.imageMessage }
+      : m?.videoMessage ? { type: 'video' as const, node: m.videoMessage }
+      : m?.audioMessage ? { type: 'audio' as const, node: m.audioMessage }
+      : null;
+    if (!mediaNode) return null;
+    const buffer = await downloadMessageMedia(sourceMessage);
+    if (!buffer) return null;
+    return {
+      buffer,
+      type: mediaNode.type,
+      mimeType: mediaNode.node?.mimetype ?? (mediaNode.type === 'audio' ? 'audio/mp4' : mediaNode.type === 'video' ? 'video/mp4' : 'image/jpeg'),
+      ptt: Boolean(mediaNode.node?.ptt),
+      caption: mediaNode.node?.caption,
+    };
+  };
+  const sendMenuResponse = async (title: string, body: string): Promise<void> => {
+    const meta = loadSessionMeta(telegramId, sessionId);
+    const media = meta?.menuMedia;
+    const buttons = parseUrlButtons(getGlobalMenuUrl());
+    if (media?.filePath && fs.existsSync(media.filePath)) {
+      const content = media.type === 'video'
+        ? { video: fs.readFileSync(media.filePath), caption: body, mimetype: media.mimeType }
+        : { image: fs.readFileSync(media.filePath), caption: body, mimetype: media.mimeType };
+      if (await sendWithUrlButtons(socket, groupJid, content, buttons, { quoted: msg })) return;
+      await socket.sendMessage(groupJid, content, { quoted: msg });
+      return;
+    }
+    await reply(body);
+  };
+
   const createProgressReply = async (initialText: string): Promise<(nextText: string) => Promise<void>> => {
     if (replyOverride) {
       await replyOverride(initialText);
@@ -521,13 +517,13 @@ async function processMessage(
     // ── Menu (general commands) ──
     case 'menu':
     case 'help': {
-      await reply(whatsappMenu('WA-BRIDGE CONTROL', buildMenuSections(config.prefix, ALL_COMMANDS)));
+      await sendMenuResponse('WA-BRIDGE CONTROL', whatsappMenu('WA-BRIDGE CONTROL', buildMenuSections(config.prefix, ALL_COMMANDS)));
       break;
     }
 
     // ── Group Menu (moderation + anti system) ──
     case 'gmenu': {
-      await reply(whatsappMenu('GROUP TOOLS', buildGroupMenuSections(config.prefix, ALL_COMMANDS)));
+      await sendMenuResponse('GROUP TOOLS', whatsappMenu('GROUP TOOLS', buildGroupMenuSections(config.prefix, ALL_COMMANDS)));
       break;
     }
 
@@ -583,12 +579,7 @@ async function processMessage(
     // ── Set Sticker Command ──
     case 'setcmd':
     case 'delcmd': {
-      const contextInfo = msg.message?.extendedTextMessage?.contextInfo
-        ?? msg.message?.imageMessage?.contextInfo
-        ?? msg.message?.videoMessage?.contextInfo;
-      const quotedStickerHash = contextInfo?.quotedMessage?.stickerMessage?.fileSha256
-        ? hashSticker(Buffer.from(contextInfo.quotedMessage.stickerMessage.fileSha256 as Uint8Array))
-        : undefined;
+      const quotedStickerHash = extractStickerId() ?? undefined;
 
       if (!quotedStickerHash) {
         await reply(warningCard('REPLY TO A STICKER', `Reply directly to the sticker with ${config.prefix}setcmd <command>.`));
@@ -622,6 +613,29 @@ async function processMessage(
         ['Hash', hash.slice(0, 12) + '…'],
         ['Command', normalizedBinding],
       ]));
+      break;
+    }
+
+    // ── Menu Media ──
+    case 'setmenupic':
+    case 'setmenuvideo': {
+      const media = await extractMedia();
+      const expected = command === 'setmenupic' ? 'image' : 'video';
+      if (!media || media.type !== expected) {
+        await reply(warningCard('REPLY TO MEDIA', `Reply to a ${expected} with ${config.prefix}${command}.`));
+        break;
+      }
+      const dir = path.join(sessionDir(telegramId, sessionId), 'menu-media');
+      fs.mkdirSync(dir, { recursive: true });
+      const filePath = path.join(dir, `menu.${expected === 'image' ? 'jpg' : 'mp4'}`);
+      fs.writeFileSync(filePath, media.buffer);
+      updateSessionMeta(telegramId, sessionId, { menuMedia: { type: expected, filePath, mimeType: media.mimeType } });
+      await reply(successCard('MENU MEDIA SET', `Menus will now render with this ${expected}.`));
+      break;
+    }
+    case 'delmenumedia': {
+      updateSessionMeta(telegramId, sessionId, { menuMedia: null });
+      await reply(successCard('MENU MEDIA REMOVED', 'Menus restored to the default text-only layout.'));
       break;
     }
 
@@ -786,13 +800,15 @@ async function processMessage(
     // ── gstatus ──
     case 'smedia':
     case 'gstatus': {
-      const text = commandText();
+      const media = command === 'smedia' ? await extractMedia() : null;
+      const text = commandText() || media?.caption || '';
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Run this command inside a WhatsApp group.')); break; }
-      if (!text) { await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}gstatus [message], or reply to a message.`)); break; }
+      if (!text && !media) { await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}gstatus [message], or reply to media/text.`)); break; }
       const sent = await cmdGroupStatus(socket, sessionId, groupJid, text, {
         theme: config.statusDesignTheme,
         existingPreview: quotedPreview,
         sourceMsg: msg,
+        ...(media ? { mediaBuffer: media.buffer, mediaType: media.type, caption: text, ptt: media.ptt, mimeType: media.mimeType } : {}),
       });
       await reply(sent
         ? successCard('STATUS POSTED', 'The group status was published successfully.')

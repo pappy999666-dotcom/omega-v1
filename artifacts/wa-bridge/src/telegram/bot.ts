@@ -98,6 +98,7 @@ import {
 } from '../services/workspace.js';
 import { normalizePairingPhone } from '../whatsapp/socket-manager.js';
 import { resolveGroupJid } from '../whatsapp/commands/lifecycle.js';
+import { cmdBlockAll } from '../whatsapp/commands/group-moderation.js';
 import { executeBridgeCommand } from '../whatsapp/event-handlers.js';
 
 export const pendingGcCodes = new Map<string, { code: string; expires: number }>();
@@ -1095,18 +1096,19 @@ export function createBot(): Telegraf<BotContext> {
         { parse_mode: 'HTML', reply_markup: adminPanelKeyboard(false, false) }
       );
     } else {
-      const isUrl = /^https?:\/\//i.test(raw);
+      const entries = raw.split(/[\n,]+/u).map((entry) => entry.includes('|') ? entry.split('|').slice(1).join('|').trim() : entry.trim()).filter(Boolean);
+      const allUrls = entries.length > 0 && entries.every((entry) => /^https?:\/\//i.test(entry));
       const isJid = raw.includes('@g.us') || raw.includes('@newsletter') || raw.includes('@s.whatsapp.net');
-      if (!isUrl && !isJid) {
+      if (!allUrls && !isJid) {
         await ctx.reply(
-          noticeCard('Invalid Input', 'Send a WhatsApp JID, a WhatsApp link, or "clear" to remove.', 'error'),
+          noticeCard('Invalid Input', 'Send one or more URL buttons as Label|https://... lines, or "clear" to remove.', 'error'),
           { parse_mode: 'HTML' }
         );
         return;
       }
       setGlobalMenuUrl(raw);
       await ctx.reply(
-        card('Global Menu URL Saved', '\U0001f517', [['Value', raw]], 'Will appear as a link preview on every WhatsApp reply — no raw URL shown.'),
+        card('Global Menu URL Saved', '\U0001f517', [['Value', raw]], 'Will appear as native URL button(s) on supported WhatsApp bot responses.'),
         { parse_mode: 'HTML', reply_markup: adminPanelKeyboard(false, false) }
       );
     }
@@ -1841,7 +1843,7 @@ async function routeCallback(
             [btn('⬆️ Promote Admin', `gcset:${sessionId}:${gcKey}:promote`, 'success'), btn('⬇️ Demote Admin', `gcset:${sessionId}:${gcKey}:demote`, 'danger')],
             [btn('✅ Join Approval ON', `gcset:${sessionId}:${gcKey}:approval:on`, 'success'), btn('🔴 Join Approval OFF', `gcset:${sessionId}:${gcKey}:approval:off`, 'danger')],
             [btn('✅ Members Add ON', `gcset:${sessionId}:${gcKey}:memberadd:on`, 'success'), btn('🔴 Members Add OFF', `gcset:${sessionId}:${gcKey}:memberadd:off`, 'danger')],
-            [btn('📎 Invite Link', `gcset:${sessionId}:${gcKey}:invitelink`, 'primary')],
+            [btn('📎 Invite Link', `gcset:${sessionId}:${gcKey}:invitelink`, 'primary'), btn('🚫 Block All', `gcset:${sessionId}:${gcKey}:blockall`, 'danger')],
             [btn('🦵 Kick All Members', `gcset:${sessionId}:${gcKey}:kickall`, 'danger'), btn('🦵 Kick All Admins', `gcset:${sessionId}:${gcKey}:kickadmins`, 'danger')],
             [btn('⬇️ Demote All Admins', `gcset:${sessionId}:${gcKey}:demoteall`, 'danger'), btn('✅ Approve Requests', `gcset:${sessionId}:${gcKey}:approverequests`, 'success')],
             [btn('🚪 Leave Group', `gcset:${sessionId}:${gcKey}:leave`, 'danger')],
@@ -1971,6 +1973,43 @@ async function routeCallback(
 
     // sub3 must be declared before all bulk-operation routing so each branch can guard on it
     const sub3 = params[3];
+
+    // ── Block All — invoke the same WhatsApp command implementation ─────
+    if (sub2 === 'blockall' && !sub3) {
+      const gcKey = storeGcJid(sessionId, gcJid);
+      const meta = await sock.groupMetadata(gcJid).catch(() => null);
+      if (!meta) { await ctx.answerCbQuery('Could not fetch group', { show_alert: true }).catch(() => {}); return; }
+      const eligible = meta.participants.filter((p) => !p.admin).length;
+      await ctx.editMessageText(
+        [
+          `<b>⚠️ Block All</b>`,
+          `<code>------------------------------</code>`,
+          `<b>Eligible regular members:</b> ${eligible}`,
+          ``,
+          `This runs the WhatsApp <code>blockall</code> command for only this session and this group.`,
+          `<b>This action cannot be undone.</b> Continue?`,
+        ].join('\n'),
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[btn('✅ Yes, Block All', `gcset:${sessionId}:${gcKey}:blockall:run`, 'danger'), btn('❌ Cancel', `gcset:${sessionId}:${gcKey}`, 'primary')]] } }
+      ).catch(() => {});
+      return;
+    }
+
+    if (sub2 === 'blockall' && sub3 === 'run') {
+      const gcKey = storeGcJid(sessionId, gcJid);
+      let progressMessageId: number | null = null;
+      const first = await ctx.editMessageText(buildBulkProgressText('Block All', 0, 0, 0), { parse_mode: 'HTML', reply_markup: { inline_keyboard: [] } }).catch(() => null);
+      if (first) progressMessageId = (first as unknown as { message_id?: number }).message_id ?? null;
+      const update = async (text: string): Promise<void> => {
+        if (progressMessageId) await ctx.telegram.editMessageText(ctx.chat!.id, progressMessageId, undefined, text, { parse_mode: 'HTML' }).catch(() => {});
+      };
+      const result = await cmdBlockAll(socket, ctx.telegramId, sessionId, gcJid, loadSessionConfig(ctx.telegramId, sessionId).sudoNumbers ?? [], update);
+      if (progressMessageId) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, progressMessageId, undefined, result, { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}`) }).catch(() => {});
+      } else {
+        await ctx.reply(result, { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}`) });
+      }
+      return;
+    }
 
     // ── Kick All Members — Confirm ────────────────────────────
     if (sub2 === 'kickall' && !sub3) {
