@@ -55,19 +55,25 @@ async function getGroupName(socket: WASocket, groupJid: string): Promise<string>
 
 // ── Low-level participant update ──────────────────────────
 
+/**
+ * Execute a Baileys participant update.
+ * Returns null on success, or a human-readable error string on failure.
+ * Never throws.
+ */
 async function participantUpdate(
   socket: WASocket,
   groupJid: string,
   participantJid: string,
   action: 'remove' | 'promote' | 'demote'
-): Promise<boolean> {
+): Promise<string | null> {
   try {
     await (socket as unknown as {
       groupParticipantsUpdate(jid: string, p: string[], a: string): Promise<unknown>;
     }).groupParticipantsUpdate(groupJid, [participantJid], action);
-    return true;
-  } catch {
-    return false;
+    return null; // success
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return msg || 'Unknown error from WhatsApp';
   }
 }
 
@@ -102,9 +108,20 @@ export async function cmdKick(
     return warningCard('Kick', `@${target.number} is a group admin and cannot be kicked directly.\nUse ${prefix}dnkick to demote then remove them.`);
   }
 
+  // Verify target is still in the group
+  const memberInGroup = meta.participants.some((p) => {
+    const pNum = (p.id.split('@')[0] ?? '').split(':')[0];
+    return pNum === target.number || p.id === target.jid;
+  });
+  if (!memberInGroup) {
+    return warningCard('Kick', `@${target.number} is not in this group (they may have already left).`);
+  }
+
   const gcName = meta.subject;
-  const ok = await participantUpdate(socket, groupJid, target.jid, 'remove');
-  if (!ok) return errorCard('Kick', `Could not remove @${target.number} from the group.`);
+  const kickErr = await participantUpdate(socket, groupJid, target.jid, 'remove');
+  if (kickErr !== null) {
+    return errorCard('Kick Failed', `Could not remove @${target.number}.\n\nReason: ${kickErr}`);
+  }
 
   const template = getGroupMessage(telegramId, sessionId, groupJid, 'kick')
     ?? `🚫 @${target.number} has been kicked from *${gcName}*.`;
@@ -152,7 +169,10 @@ export async function cmdBan(
   }
 
   const gcName = meta.subject;
-  await participantUpdate(socket, groupJid, target.jid, 'remove');
+  const banErr = await participantUpdate(socket, groupJid, target.jid, 'remove');
+  if (banErr !== null) {
+    return errorCard('Ban Failed', `Could not remove @${target.number}.\n\nReason: ${banErr}`);
+  }
   addBannedNumber(telegramId, sessionId, groupJid, target.number);
 
   const template = getGroupMessage(telegramId, sessionId, groupJid, 'ban')
@@ -242,8 +262,8 @@ export async function cmdPromote(
     return warningCard('Promote', `Provide a phone number, reply to a message, or @mention someone.\nUsage: ${prefix}promote @user`);
   }
 
-  const ok = await participantUpdate(socket, groupJid, target.jid, 'promote');
-  if (!ok) return errorCard('Promote', `Could not promote @${target.number}.`);
+  const promErr = await participantUpdate(socket, groupJid, target.jid, 'promote');
+  if (promErr !== null) return errorCard('Promote', `Could not promote @${target.number}.\n\nReason: ${promErr}`);
 
   await socket.sendMessage(groupJid, {
     text: `✅ @${target.number} has been promoted to admin in *${meta.subject}*.`,
@@ -277,8 +297,8 @@ export async function cmdDemote(
     return warningCard('Demote', `Provide a phone number, reply to a message, or @mention someone.\nUsage: ${prefix}demote @user`);
   }
 
-  const ok = await participantUpdate(socket, groupJid, target.jid, 'demote');
-  if (!ok) return errorCard('Demote', `Could not demote @${target.number}.`);
+  const demErr = await participantUpdate(socket, groupJid, target.jid, 'demote');
+  if (demErr !== null) return errorCard('Demote', `Could not demote @${target.number}.\n\nReason: ${demErr}`);
 
   await socket.sendMessage(groupJid, {
     text: `⬇️ @${target.number} has been demoted from admin in *${meta.subject}*.`,
@@ -331,18 +351,18 @@ export async function cmdDnKick(
     mentions: [target.jid],
   });
 
-  const demoted = await participantUpdate(socket, groupJid, target.jid, 'demote');
-  if (!demoted) {
-    return errorCard('DnKick', `Failed to demote @${target.number}. Kick aborted — permissions may be insufficient.`);
+  const dnDemErr = await participantUpdate(socket, groupJid, target.jid, 'demote');
+  if (dnDemErr !== null) {
+    return errorCard('DnKick', `Failed to demote @${target.number}. Kick aborted.\n\nReason: ${dnDemErr}`);
   }
 
   // Brief pause to let WhatsApp propagate the demotion
   await new Promise((resolve) => setTimeout(resolve, 1200));
 
   // Step 2: Remove
-  const kicked = await participantUpdate(socket, groupJid, target.jid, 'remove');
-  if (!kicked) {
-    return errorCard('DnKick', `@${target.number} was demoted but the removal failed. You may need to kick them manually.`);
+  const dnKickErr = await participantUpdate(socket, groupJid, target.jid, 'remove');
+  if (dnKickErr !== null) {
+    return errorCard('DnKick', `@${target.number} was demoted but the removal failed. You may need to kick them manually.\n\nReason: ${dnKickErr}`);
   }
 
   await socket.sendMessage(groupJid, {
@@ -396,7 +416,7 @@ export async function cmdWarn(
     resetWarn(sessionId, groupJid, target.number, 'manual');
     // Only attempt kick if bot is admin
     if (meta?.botIsAdmin) {
-      await participantUpdate(socket, groupJid, target.jid, 'remove');
+      await participantUpdate(socket, groupJid, target.jid, 'remove'); // best-effort
     }
     await socket.sendMessage(groupJid, {
       text: `${rendered}\n\n${italic(`Warning ${count}/${threshold} — kicked.`)}`,
@@ -716,6 +736,69 @@ export function cmdSetModerationMsg(
 
   setGroupMessage(telegramId, sessionId, groupJid, key, message);
   return successCard(`${label} Template Saved`, `Custom response will be used for ${label} actions.\n${italic('Variables: @mention, &gcname, &desc, &membercount, &admincount, &date, &time')}`, [['Preview', message.slice(0, 60)]]);
+}
+
+// ── Mute / Unmute ────────────────────────────────────────
+//
+// .mute  → sets group to announcement mode (only admins can send)
+// .unmute → opens group back to all participants
+
+export async function cmdMute(
+  socket: WASocket,
+  groupJid: string,
+  prefix: string
+): Promise<string> {
+  if (!groupJid.endsWith('@g.us')) {
+    return errorCard('Mute', 'This command must be used inside a WhatsApp group.');
+  }
+
+  const meta = await fetchGroupMeta(socket, groupJid);
+  if (!meta?.botIsAdmin) {
+    return errorCard('Mute', BOT_NOT_ADMIN_MSG);
+  }
+
+  try {
+    await (socket as unknown as {
+      groupSettingUpdate(jid: string, setting: string): Promise<unknown>;
+    }).groupSettingUpdate(groupJid, 'announcement');
+
+    await socket.sendMessage(groupJid, {
+      text: `🔇 Group has been *muted*. Only admins can send messages.\n_Use ${prefix}unmute to allow all members to send._`,
+    });
+    return successCard('Group Muted', 'Only admins can now send messages in this group.', [['Group', meta.subject]]);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    return errorCard('Mute Failed', `Could not mute the group.\n\nReason: ${reason}`);
+  }
+}
+
+export async function cmdUnmute(
+  socket: WASocket,
+  groupJid: string,
+  prefix: string
+): Promise<string> {
+  if (!groupJid.endsWith('@g.us')) {
+    return errorCard('Unmute', 'This command must be used inside a WhatsApp group.');
+  }
+
+  const meta = await fetchGroupMeta(socket, groupJid);
+  if (!meta?.botIsAdmin) {
+    return errorCard('Unmute', BOT_NOT_ADMIN_MSG);
+  }
+
+  try {
+    await (socket as unknown as {
+      groupSettingUpdate(jid: string, setting: string): Promise<unknown>;
+    }).groupSettingUpdate(groupJid, 'not_announcement');
+
+    await socket.sendMessage(groupJid, {
+      text: `🔊 Group has been *unmuted*. Everyone can now send messages.\n_Use ${prefix}mute to restrict to admins only._`,
+    });
+    return successCard('Group Unmuted', 'All members can now send messages in this group.', [['Group', meta.subject]]);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    return errorCard('Unmute Failed', `Could not unmute the group.\n\nReason: ${reason}`);
+  }
 }
 
 // ── Group Event Status ────────────────────────────────────

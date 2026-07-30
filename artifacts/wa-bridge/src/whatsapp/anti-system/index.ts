@@ -147,6 +147,13 @@ export async function runAntiChecks(
   const violations: Promise<void>[] = [];
   let triggered = false;
 
+  logger.debug('[AntiSystem] runAntiChecks starting', {
+    sessionId,
+    groupJid,
+    senderJid,
+    senderNumber,
+  });
+
   // ── Helper: run a synchronous check ──────────────────────────────
   function tryModule(
     key: ModuleKey,
@@ -156,9 +163,17 @@ export async function runAntiChecks(
   ): void {
     try {
       const mod = gc[key] as AntiModuleConfig | undefined;
-      if (!mod?.enabled) return;
-      if (isPermitted(mod, senderNumber)) return;
-      if (!check()) return;
+      if (!mod?.enabled) {
+        logger.debug(`[AntiSystem] ${name} skipped (disabled)`, { sessionId, groupJid });
+        return;
+      }
+      if (isPermitted(mod, senderNumber)) {
+        logger.debug(`[AntiSystem] ${name} skipped (permitted)`, { sessionId, groupJid, senderNumber });
+        return;
+      }
+      const detected = check();
+      logger.debug(`[AntiSystem] ${name} check result`, { detected, sessionId, groupJid });
+      if (!detected) return;
       triggered = true;
       violations.push(triggerViolation(socket, msg, sessionId, telegramId, groupJid, senderJid, senderNumber, key, name, mod, msgKey));
     } catch (err) {

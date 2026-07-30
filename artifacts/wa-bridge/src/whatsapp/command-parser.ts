@@ -135,6 +135,7 @@ export const ALL_COMMANDS = [
   'promote', 'demote', 'dnkick',
   'warn', 'unwarn', 'resetwarn', 'warns',
   'poll',
+  'mute', 'unmute',
   'blockall', 'autoblock',
   'setwelcome', 'welcomemsg', 'welcome',
   'setgoodbye', 'goodbyemsg', 'goodbye',

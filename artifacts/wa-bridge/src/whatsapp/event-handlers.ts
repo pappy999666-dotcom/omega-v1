@@ -66,6 +66,8 @@ import {
   cmdWarnCount,
   cmdPoll,
   cmdBlockAll,
+  cmdMute,
+  cmdUnmute,
   cmdSetWelcome,
   cmdWelcomeToggle,
   cmdSetGoodbye,
@@ -699,12 +701,11 @@ async function processMessage(
         ?? `${normalizeWhatsAppNumber(senderJid)}@s.whatsapp.net`;
       const subjectNumber = infoTarget?.number ?? normalizeWhatsAppNumber(subjectJid);
 
-      let profilePicAvailable = false;
-      let bio = 'Not available';
+      let profilePicUrl: string | undefined;
+      let bio = 'Not set';
       try {
-        const picUrl = await (socket as unknown as { profilePictureUrl(jid: string, type: string): Promise<string | undefined> })
-          .profilePictureUrl(subjectJid, 'preview');
-        profilePicAvailable = Boolean(picUrl);
+        profilePicUrl = await (socket as unknown as { profilePictureUrl(jid: string, type: string): Promise<string | undefined> })
+          .profilePictureUrl(subjectJid, 'image');
       } catch { /* private or not available */ }
       try {
         const status = await (socket as unknown as { fetchStatus(jid: string): Promise<{ status?: string } | null | undefined> })
@@ -716,7 +717,7 @@ async function processMessage(
         ['Number', `+${subjectNumber}`],
         ['JID', subjectJid],
         ['Bio', bio.slice(0, 80)],
-        ['Profile Pic', profilePicAvailable ? '✅ Available' : '❌ Private / Not set'],
+        ['Profile Pic', profilePicUrl ? '✅ Attached below' : '❌ Private / Not set'],
       ];
       if (infoTarget?.lid) {
         infoRows.push(['LID', infoTarget.lid]);
@@ -733,6 +734,20 @@ async function processMessage(
           ? `JID is always used for actions — LID shown separately when available.`
           : 'Your own session identity',
       }));
+
+      // Send profile picture as image if available
+      if (profilePicUrl) {
+        try {
+          await (socket as unknown as {
+            sendMessage(jid: string, content: Record<string, unknown>, opts?: Record<string, unknown>): Promise<unknown>;
+          }).sendMessage(groupJid, {
+            image: { url: profilePicUrl },
+            caption: `📸 Profile picture for +${subjectNumber}`,
+          });
+        } catch (picErr) {
+          logger.warn('[GetInfo] Failed to send profile picture', { err: String(picErr), subjectJid });
+        }
+      }
       break;
     }
 
@@ -1418,6 +1433,19 @@ async function processMessage(
       break;
     }
 
+    // ── Mute / Unmute ──
+    case 'mute': {
+      if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
+      await reply(await cmdMute(socket, groupJid, config.prefix));
+      break;
+    }
+
+    case 'unmute': {
+      if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
+      await reply(await cmdUnmute(socket, groupJid, config.prefix));
+      break;
+    }
+
     // ── BlockAll ──
     case 'blockall': {
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
@@ -1666,12 +1694,21 @@ async function processMessage(
           groupRequestParticipantsUpdate(jid: string, p: string[], action: 'approve' | 'reject'): Promise<unknown>;
         };
         const all_ac = await sock.groupRequestParticipantsList(groupJid);
+        logger.info('[ApproveCountry] Pending requests fetched', { groupJid, total: all_ac.length });
+        if (all_ac.length === 0) {
+          await reply(warningCard('NO PENDING REQUESTS', 'There are no pending join requests in this group right now.'));
+          break;
+        }
         const matched_ac = all_ac.filter((r) => {
-          const num = (r.phoneNumber ?? '').replace(/[^0-9]/g, '') || (r.jid.split('@')[0] ?? '').split(':')[0];
+          // Prefer explicit phoneNumber field (most reliable), fall back to JID user part
+          const rawPhone = (r.phoneNumber ?? '').replace(/[^0-9]/g, '');
+          const jidUser = (r.jid.split('@')[0] ?? '').split(':')[0] ?? '';
+          const num = rawPhone || jidUser;
           return num.startsWith(countryDigits);
         });
+        logger.info('[ApproveCountry] Filter result', { countryDigits, matched: matched_ac.length, total: all_ac.length });
         if (matched_ac.length === 0) {
-          await reply(warningCard('NO MATCHES', `No pending requests with country code +${countryDigits}.\nTotal pending: ${all_ac.length}`));
+          await reply(warningCard('NO MATCHES', `No pending requests with country code +${countryDigits}.\nTotal pending: ${all_ac.length}\n\nTip: check the exact digits — Nigeria is 234, USA is 1.`));
           break;
         }
         const updateProgress_ac = await createProgressReply(asciiBox({
