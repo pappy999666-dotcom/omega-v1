@@ -96,8 +96,14 @@ export function handleAntiCommand(
     : 3;
 
   const gc = loadGroupAntiConfig(telegramId, sessionId, groupJid);
-  const existing = (gc[moduleKey] as AntiModuleConfig | undefined)
-    ?? (moduleKey === 'antispam' ? defaultSpamConfig() : defaultModuleConfig());
+  const persisted = gc[moduleKey] as AntiModuleConfig | undefined;
+  // For antispam, merge defaultSpamConfig() *beneath* the persisted config so that
+  // legacy configs missing messageLimit/windowSeconds always have those fields defined.
+  // Existing configured values remain authoritative; defaults only fill gaps.
+  const existing =
+    moduleKey === 'antispam'
+      ? { ...defaultSpamConfig(), ...(persisted ?? {}) }
+      : (persisted ?? defaultModuleConfig());
   (gc as unknown as Record<string, unknown>)[moduleKey] = {
     ...existing,
     enabled: true,

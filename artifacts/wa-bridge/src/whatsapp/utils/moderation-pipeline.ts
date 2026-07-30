@@ -9,7 +9,10 @@ import { logger } from '../../utils/logger.js';
 import { errorCard, warningCard } from '../../utils/ascii-art.js';
 import { renderTemplate } from '../../utils/response-engine.js';
 import { resolveTarget } from './resolve-target.js';
-import { BOT_NOT_ADMIN_MSG, fetchGroupMeta, isAdminJid, numericId, stripDeviceSuffix, type GroupParticipant } from './group-permissions.js';
+import { BOT_NOT_ADMIN_MSG, fetchGroupMeta, isAdminJid, stripDeviceSuffix } from './group-permissions.js';
+
+// findParticipant and numericId removed: resolveTarget already returns target.participant
+// directly from the live group participant list — no second lookup needed.
 
 export type ModerationAction = 'kick' | 'ban';
 
@@ -43,36 +46,105 @@ function title(action: ModerationAction): string {
   return action === 'ban' ? 'Ban' : 'Kick';
 }
 
-function findParticipant(participants: GroupParticipant[], jid: string, number: string): GroupParticipant | null {
-  const targetNum = number || numericId(jid);
-  return participants.find((p) => {
-    const pNum = numericId(p.id);
-    const pPhone = (p.phoneNumber ?? '').replace(/\D/g, '');
-    return stripDeviceSuffix(p.id) === stripDeviceSuffix(jid) || (!!targetNum && (pNum === targetNum || pPhone === targetNum));
-  }) ?? null;
+/** Mask a phone number for safe logging: show first 4 + last 2 digits only. */
+function maskNumber(num: string): string {
+  if (num.length <= 6) return '***';
+  return `${num.slice(0, 4)}***${num.slice(-2)}`;
 }
 
+/**
+ * Detect genuinely transient WhatsApp errors that warrant a retry.
+ *
+ * Each pattern is anchored to a standalone word boundary so that JIDs,
+ * phone numbers, or unrelated words (e.g. "separate", "unrecoverable")
+ * cannot accidentally trigger a retry.
+ */
 function isTransientParticipantError(err: unknown): boolean {
   const text = String(err instanceof Error ? err.message : err).toLowerCase();
-  return /timed?\s*out|timeout|rate|too many|temporar|again|unavailable|internal-server-error|500|503|429/.test(text);
+  return (
+    /\btimed?\s*out\b/.test(text) ||
+    /\btimeout\b/.test(text) ||
+    /\brate\b/.test(text) ||
+    /\btoo\s+many\b/.test(text) ||
+    /\btemporar/.test(text) ||
+    /\bagain\b/.test(text) ||
+    /\bunavailable\b/.test(text) ||
+    /\binternal[-\s]server[-\s]error\b/.test(text) ||
+    /\b500\b/.test(text) ||
+    /\b503\b/.test(text) ||
+    /\b429\b/.test(text)
+  );
 }
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function removeParticipantWithRetry(socket: WASocket, groupJid: string, participantJid: string): Promise<void> {
+interface ParticipantStatusEntry {
+  jid?: string;
+  status: number;
+}
+
+/**
+ * Remove a participant with up to 3 attempts.
+ *
+ * Inspects the returned status array from groupParticipantsUpdate — a resolved
+ * promise does NOT imply success.  Only status 200 is accepted.  Non-200
+ * results are treated as errors and fed through the transient-retry decision:
+ *   • transient codes (429, 503, 500, timeout, …) → retry
+ *   • permanent codes (403, 404, etc.) → throw immediately
+ */
+async function removeParticipantWithRetry(
+  socket: WASocket,
+  groupJid: string,
+  participantJid: string,
+): Promise<void> {
   const sock = socket as unknown as {
-    groupParticipantsUpdate(jid: string, participants: string[], action: 'remove'): Promise<unknown>;
+    groupParticipantsUpdate(
+      jid: string,
+      participants: string[],
+      action: 'remove',
+    ): Promise<ParticipantStatusEntry[]>;
   };
   let lastErr: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      await sock.groupParticipantsUpdate(groupJid, [participantJid], 'remove');
-      return;
+      const results = await sock.groupParticipantsUpdate(groupJid, [participantJid], 'remove');
+
+      // Validate the per-participant status returned by Baileys.
+      // When the array is absent or the JID is not listed, assume success
+      // (older Baileys builds may return an empty array for successful ops).
+      if (Array.isArray(results) && results.length > 0) {
+        const entry = results.find(
+          (r) => !r.jid || r.jid === participantJid,
+        );
+        if (entry && entry.status !== 200) {
+          const statusErr = new Error(
+            `groupParticipantsUpdate returned status ${entry.status} for participant`,
+          );
+          logger.warn('[Moderation] participant remove non-200', {
+            groupJid,
+            participantJid: maskNumber(participantJid.split('@')[0] ?? ''),
+            status: entry.status,
+            attempt,
+          });
+          // Only retry genuinely transient status codes.
+          if (!isTransientParticipantError(String(entry.status))) throw statusErr;
+          lastErr = statusErr;
+          if (attempt < 3) await sleep(300 * attempt);
+          continue;
+        }
+      }
+
+      return; // confirmed success
     } catch (err) {
       lastErr = err;
-      logger.warn('[Moderation] participant remove failed', { groupJid, participantJid, attempt, err });
+      logger.warn('[Moderation] participant remove failed', {
+        groupJid,
+        participantJid: maskNumber(participantJid.split('@')[0] ?? ''),
+        attempt,
+        err,
+      });
       if (attempt === 3 || !isTransientParticipantError(err)) break;
       await sleep(300 * attempt);
     }
@@ -80,7 +152,9 @@ async function removeParticipantWithRetry(socket: WASocket, groupJid: string, pa
   throw lastErr;
 }
 
-export async function runRemoveModerationPipeline(options: ModerationPipelineOptions): Promise<ModerationPipelineResult> {
+export async function runRemoveModerationPipeline(
+  options: ModerationPipelineOptions,
+): Promise<ModerationPipelineResult> {
   const { action, args, msg, socket, groupJid, prefix, template, onSuccess } = options;
   const label = title(action);
 
@@ -100,35 +174,84 @@ export async function runRemoveModerationPipeline(options: ModerationPipelineOpt
 
   const target = await resolveTarget(args, msg, socket, groupJid, meta);
   if (!target?.participant) {
-    logger.warn('[Moderation] target not in group or unresolved', { action, groupJid, args, resolved: target });
-    return { ok: false, reply: warningCard(label, `Provide a group member phone number, reply to a message, or @mention someone.\nUsage: ${prefix}${action} @user`) };
+    // Do not log raw args — they may contain phone numbers or personal identifiers.
+    logger.warn('[Moderation] target not in group or unresolved', { action, groupJid });
+    return {
+      ok: false,
+      reply: warningCard(
+        label,
+        `Provide a group member phone number, reply to a message, or @mention someone.\nUsage: ${prefix}${action} @user`,
+      ),
+    };
   }
 
-  const participant = findParticipant(meta.participants, target.jid, target.number);
-  if (!participant) {
-    logger.warn('[Moderation] target not present in participants', { action, groupJid, target });
-    return { ok: false, reply: warningCard(label, `@${target.number} is not in this group (they may have already left).`) };
-  }
+  // Use the participant already returned by resolveTarget — no second lookup.
+  const participant = target.participant;
 
   if (isAdminJid(meta.participants, participant.id)) {
-    logger.warn('[Moderation] refused to remove admin/owner', { action, groupJid, targetJid: participant.id });
-    return { ok: false, reply: warningCard(label, `@${target.number} is a group admin and cannot be ${action === 'ban' ? 'banned' : 'kicked'} directly.\nUse ${prefix}dnkick to demote then remove them.`) };
+    logger.warn('[Moderation] refused to remove admin/owner', {
+      action,
+      groupJid,
+      targetNumber: maskNumber(target.number),
+    });
+    return {
+      ok: false,
+      reply: warningCard(
+        label,
+        `@${target.number} is a group admin and cannot be ${action === 'ban' ? 'banned' : 'kicked'} directly.\nUse ${prefix}dnkick to demote then remove them.`,
+      ),
+    };
   }
 
   const targetJid = stripDeviceSuffix(participant.id);
   try {
     await removeParticipantWithRetry(socket, groupJid, targetJid);
   } catch (err) {
-    logger.error('[Moderation] participant remove permanently failed', { action, groupJid, targetJid, targetNumber: target.number, err });
-    return { ok: false, reply: errorCard(`${label} Failed`, `Could not ${action === 'ban' ? 'ban' : 'remove'} @${target.number}. Please try again or check my admin permissions.`) };
+    logger.error('[Moderation] participant remove permanently failed', {
+      action,
+      groupJid,
+      targetNumber: maskNumber(target.number),
+      err,
+    });
+    return {
+      ok: false,
+      reply: errorCard(
+        `${label} Failed`,
+        `Could not ${action === 'ban' ? 'ban' : 'remove'} @${target.number}. Please try again or check my admin permissions.`,
+      ),
+    };
   }
 
+  // Member has been successfully removed.
+  // onSuccess, announcement rendering, and sendMessage are all best-effort:
+  // failures in this section must NOT invalidate the completed moderation action.
   onSuccess?.(target.number);
-  const defaultText = action === 'ban'
-    ? `🔨 @${target.number} has been banned from *${meta.subject}*.`
-    : `🚫 @${target.number} has been kicked from *${meta.subject}*.`;
-  const rendered = await renderTemplate(template ?? defaultText, { senderJid: targetJid, gcName: meta.subject, socket, groupJid });
-  await socket.sendMessage(groupJid, { text: rendered, mentions: [targetJid] });
-  logger.info('[Moderation] participant removed', { action, groupJid, targetJid, targetNumber: target.number });
+  try {
+    const defaultText =
+      action === 'ban'
+        ? `🔨 @${target.number} has been banned from *${meta.subject}*.`
+        : `🚫 @${target.number} has been kicked from *${meta.subject}*.`;
+    const rendered = await renderTemplate(template ?? defaultText, {
+      senderJid: targetJid,
+      gcName: meta.subject,
+      socket,
+      groupJid,
+    });
+    await socket.sendMessage(groupJid, { text: rendered, mentions: [targetJid] });
+  } catch (announceErr) {
+    // Announcement failed — the member was already removed. Log and continue.
+    logger.warn('[Moderation] announcement failed after successful removal', {
+      action,
+      groupJid,
+      targetNumber: maskNumber(target.number),
+      err: announceErr,
+    });
+  }
+
+  logger.info('[Moderation] participant removed', {
+    action,
+    groupJid,
+    targetNumber: maskNumber(target.number),
+  });
   return { ok: true, targetJid, targetNumber: target.number, groupName: meta.subject, reply: '' };
 }

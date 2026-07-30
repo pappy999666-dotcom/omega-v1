@@ -25,6 +25,7 @@ import {
   stripDeviceSuffix,
 } from '../utils/group-permissions.js';
 import { runRemoveModerationPipeline } from '../utils/moderation-pipeline.js';
+import { loadSessionConfig } from '../../services/workspace.js';
 import { logger } from '../../utils/logger.js';
 import { bold, italic, successCard, warningCard, errorCard, asciiBox } from '../../utils/ascii-art.js';
 import { renderTemplate } from '../../utils/response-engine.js';
@@ -77,6 +78,39 @@ async function participantUpdate(
   }
 }
 
+// ── Shared requester permission check ────────────────────
+//
+// Verifies that the person issuing a moderation command is
+// authorised to do so: owner (fromMe), group admin, or sudo user.
+// Returns an error reply string when rejected, null when allowed.
+
+async function checkRequesterPermission(
+  msg: WebMessageInfo,
+  socket: WASocket,
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  label: string,
+): Promise<string | null> {
+  // Bridge / owner messages always pass.
+  if (msg.key.fromMe === true) return null;
+
+  const requesterJid = msg.key.participant ?? msg.key.remoteJid ?? '';
+  const permMeta = await fetchGroupMeta(socket, groupJid);
+  if (!permMeta) return null; // can't verify — let the pipeline handle it
+
+  // Group admin check
+  if (isAdminJid(permMeta.participants, requesterJid)) return null;
+
+  // Sudo number check
+  const sessionCfg = loadSessionConfig(telegramId, sessionId);
+  const sudoNumbers: string[] = sessionCfg.sudoNumbers ?? [];
+  const requesterNum = (requesterJid.split('@')[0] ?? '').split(':')[0]!.replace(/\D/g, '');
+  if (sudoNumbers.some((n) => n.replace(/\D/g, '') === requesterNum)) return null;
+
+  return warningCard(label, 'Only group admins or authorised users can use this command.');
+}
+
 // ── Kick ─────────────────────────────────────────────────
 
 export async function cmdKick(
@@ -88,6 +122,9 @@ export async function cmdKick(
   groupJid: string,
   prefix: string
 ): Promise<string> {
+  const permErr = await checkRequesterPermission(msg, socket, telegramId, sessionId, groupJid, 'Kick');
+  if (permErr) return permErr;
+
   const template = getGroupMessage(telegramId, sessionId, groupJid, 'kick') ?? undefined;
   const result = await runRemoveModerationPipeline({
     action: 'kick',
@@ -99,7 +136,9 @@ export async function cmdKick(
     template,
   });
   if (!result.ok) return result.reply;
-  return successCard('Kick', `@${result.targetNumber} was removed from the group.`);
+  // The pipeline already sent the group announcement — return result.reply (empty string)
+  // so the caller does not post a second success message to the group.
+  return result.reply;
 }
 
 // ── Ban ──────────────────────────────────────────────────
@@ -113,6 +152,9 @@ export async function cmdBan(
   groupJid: string,
   prefix: string
 ): Promise<string> {
+  const permErr = await checkRequesterPermission(msg, socket, telegramId, sessionId, groupJid, 'Ban');
+  if (permErr) return permErr;
+
   const template = getGroupMessage(telegramId, sessionId, groupJid, 'ban') ?? undefined;
   const result = await runRemoveModerationPipeline({
     action: 'ban',
@@ -125,7 +167,9 @@ export async function cmdBan(
     onSuccess: (number) => addBannedNumber(telegramId, sessionId, groupJid, number),
   });
   if (!result.ok) return result.reply;
-  return successCard('Ban', `@${result.targetNumber} was banned and removed.`, [['Number', result.targetNumber]]);
+  // The pipeline already sent the group announcement — return result.reply (empty string)
+  // so the caller does not post a second success message to the group.
+  return result.reply;
 }
 
 // ── Unban ────────────────────────────────────────────────
@@ -266,6 +310,9 @@ export async function cmdDnKick(
   if (!groupJid.endsWith('@g.us')) {
     return errorCard('DnKick', 'This command must be used inside a WhatsApp group.');
   }
+
+  const permErr = await checkRequesterPermission(msg, socket, telegramId, sessionId, groupJid, 'DnKick');
+  if (permErr) return permErr;
 
   const meta = await fetchGroupMeta(socket, groupJid);
   if (!meta?.botIsAdmin) {

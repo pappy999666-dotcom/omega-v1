@@ -40,8 +40,9 @@ export function normalizeNumber(value: string | null | undefined): string {
   if (!value) return '';
   const user = value.split('@')[0]!.split(':')[0]!;
   const digits = user.replace(/\D/g, '');
-  // Nigerian local format requested by users: 090xxxxxxxx -> 23490xxxxxxxx.
-  if (/^0\d{9,14}$/.test(digits)) return `234${digits.slice(1)}`;
+  // Nigerian local format: exactly 11 digits starting with 0 (0XXXXXXXXXX → 234XXXXXXXXX).
+  // Restricted to 11 digits only — do not rewrite local numbers from other countries.
+  if (/^0\d{10}$/.test(digits)) return `234${digits.slice(1)}`;
   return digits;
 }
 
@@ -131,6 +132,8 @@ export async function resolveTarget(
         const pId = stripDeviceSuffix(p.id);
         if (isLidInput) return pId === stripDeviceSuffix(rawTarget);
         if (rawTarget.includes('@') && pId === stripDeviceSuffix(rawTarget)) return true;
+        // Never treat LID digits as a phone number — only compare real participants.
+        if (p.id.endsWith('@lid')) return false;
         const pNum = normalizeNumber(p.id);
         const pPhone = normalizeNumber(p.phoneNumber);
         return pNum === number || pPhone === number;
@@ -140,12 +143,21 @@ export async function resolveTarget(
         const lid = isLid(member.id) ? stripDeviceSuffix(member.id) : undefined;
         return { jid: stripDeviceSuffix(member.id), number: normalizeNumber(member.phoneNumber) || number, lid, participant: member };
       }
-    } catch {
+    } catch (err) {
+      // Log resolution errors so live-lookup failures are observable.
       // Fall through to plain JID construction for non-moderation callers.
+      const resolveErr = err instanceof Error ? err.message : String(err);
+      // Use console to avoid circular import risk with the logger at this layer.
+      // eslint-disable-next-line no-console
+      console.warn('[resolveTarget] groupMetadata lookup failed:', resolveErr);
     }
   }
 
-  if (rawTarget.includes('@') && !isLid(rawTarget)) {
+  // A LID input that was not resolved to a real participant must not have a phone JID
+  // fabricated from its digits — LID digits are NOT phone numbers.
+  if (isLidInput) return null;
+
+  if (rawTarget.includes('@')) {
     return { jid: stripDeviceSuffix(rawTarget), number };
   }
   return { jid: `${number}@s.whatsapp.net`, number };
