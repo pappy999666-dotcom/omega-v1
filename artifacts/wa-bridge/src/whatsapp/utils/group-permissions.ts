@@ -63,6 +63,66 @@ export function bustGroupMetaCache(socket: WASocket, groupJid: string): void {
   _getPerSocket(socket).delete(groupJid);
 }
 
+/**
+ * Surgically patch the in-memory cache when a group-participants.update
+ * event arrives.  This avoids a full network refetch — admin changes are
+ * visible to the very next message check with zero latency.
+ *
+ * Actions:
+ *  promote → set admin = 'admin' for each JID, update botIsAdmin
+ *  demote  → set admin = null for each JID, update botIsAdmin
+ *  add     → insert new participants as regular members
+ *  remove  → delete participants from the list
+ *
+ * If no cache entry exists for the group, this is a no-op (the next
+ * fetchGroupMeta will build a fresh entry from the server).
+ */
+export function patchGroupMetaCache(
+  socket: WASocket,
+  groupJid: string,
+  action: 'promote' | 'demote' | 'add' | 'remove',
+  participants: string[],
+): void {
+  const perSocket = _getPerSocket(socket);
+  const hit = perSocket.get(groupJid);
+  if (!hit) return; // no cache entry — no-op
+
+  const meta = hit.meta;
+  const botNum = numericId(meta.botJid);
+
+  if (action === 'promote') {
+    const promoteNums = new Set(participants.map(numericId));
+    for (const p of meta.participants) {
+      if (promoteNums.has(numericId(p.id))) p.admin = 'admin';
+    }
+    if (botNum && promoteNums.has(botNum)) meta.botIsAdmin = true;
+
+  } else if (action === 'demote') {
+    const demoteNums = new Set(participants.map(numericId));
+    for (const p of meta.participants) {
+      if (demoteNums.has(numericId(p.id))) p.admin = null;
+    }
+    if (botNum && demoteNums.has(botNum)) meta.botIsAdmin = false;
+
+  } else if (action === 'add') {
+    const existingNums = new Set(meta.participants.map((p) => numericId(p.id)));
+    for (const jid of participants) {
+      if (!existingNums.has(numericId(jid))) {
+        meta.participants.push({ id: jid, admin: null });
+      }
+    }
+
+  } else if (action === 'remove') {
+    const removeNums = new Set(participants.map(numericId));
+    meta.participants = meta.participants.filter(
+      (p) => !removeNums.has(numericId(p.id))
+    );
+  }
+
+  // Preserve the existing timestamp — cache is still valid, just patched
+  perSocket.set(groupJid, { meta, ts: hit.ts });
+}
+
 // ── Internal helpers ───────────────────────────────────────
 
 export function stripDeviceSuffix(jid: string): string {

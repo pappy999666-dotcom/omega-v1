@@ -1449,8 +1449,14 @@ async function processMessage(
     // ── BlockAll ──
     case 'blockall': {
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
-      const result = await cmdBlockAll(socket, telegramId, sessionId, groupJid, config.sudoNumbers ?? []);
-      await reply(result);
+      const updateBlockProgress = await createProgressReply(
+        asciiBox({ title: '🚫 BlockAll — Starting…', emoji: '⏳', rows: [['Status', 'Fetching group members…']] })
+      );
+      const result = await cmdBlockAll(
+        socket, telegramId, sessionId, groupJid, config.sudoNumbers ?? [],
+        updateBlockProgress,
+      );
+      await updateBlockProgress(result);
       break;
     }
 

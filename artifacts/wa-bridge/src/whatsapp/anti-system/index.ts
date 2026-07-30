@@ -25,6 +25,7 @@ import {
   isProtectedJid,
   bestRealJid,
   bustGroupMetaCache,
+  patchGroupMetaCache,
 } from '../utils/group-permissions.js';
 
 // Modules
@@ -298,9 +299,15 @@ export async function handleParticipantUpdate(
   const { id: groupJid, participants, action, author } = update;
   if (!groupJid.endsWith('@g.us')) return;
 
-  // Participant roles changed — bust the metadata cache so the next
-  // fetchGroupMeta call sees the updated admin list.
-  bustGroupMetaCache(socket, groupJid);
+  // Surgically patch the in-memory metadata cache for this action.
+  // promote/demote flip admin flags instantly — no network round-trip on
+  // the next anti-check.  add/remove keep the participant list in sync.
+  // bustGroupMetaCache is kept as a hard fallback for unexpected actions.
+  if (action === 'promote' || action === 'demote' || action === 'add' || action === 'remove') {
+    patchGroupMetaCache(socket, groupJid, action, participants);
+  } else {
+    bustGroupMetaCache(socket, groupJid);
+  }
 
   const gc = loadGroupAntiConfig(telegramId, sessionId, groupJid);
 

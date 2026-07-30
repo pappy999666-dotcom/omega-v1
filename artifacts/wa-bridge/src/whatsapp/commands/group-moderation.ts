@@ -591,6 +591,7 @@ export async function cmdBlockAll(
   sessionId: string,
   groupJid: string,
   sudoNumbers: string[],
+  onProgress?: (text: string) => Promise<void>,
 ): Promise<string> {
   if (!groupJid.endsWith('@g.us')) {
     return errorCard('BlockAll', 'This command must be used inside a WhatsApp group.');
@@ -620,8 +621,35 @@ export async function cmdBlockAll(
   let done = 0;
   let alreadyBlocked = 0;
   let failed = 0;
+  const total = eligible.length;
+  const protected_ = meta.participants.length - total;
 
-  for (const p of eligible) {
+  // ── Live progress helper ─────────────────────────────────
+  const progressCard = (status: 'RUNNING' | 'DONE') =>
+    asciiBox({
+      title: status === 'RUNNING' ? '🚫 BlockAll — Running…' : '✅ BlockAll — Complete',
+      emoji: status === 'RUNNING' ? '⏳' : '🚫',
+      rows: [
+        ['Progress', `${done}/${total}`],
+        ['✅ Newly blocked', String(done - alreadyBlocked)],
+        ['⏩ Already blocked', String(alreadyBlocked)],
+        ['❌ Failed', String(failed)],
+        ['🛡️ Protected (skipped)', String(protected_)],
+        ['Total members', String(meta.participants.length)],
+      ],
+      footer: status === 'DONE'
+        ? `Group: ${meta.subject}${failed > 0 ? ' | Set LOG_LEVEL=debug for details' : ''}`
+        : 'Blocking in progress — do not run again…',
+    });
+
+  // Send the initial "RUNNING" card immediately so the user sees feedback
+  if (onProgress) await onProgress(progressCard('RUNNING'));
+
+  // ── Progress update every N members ─────────────────────
+  const PROGRESS_INTERVAL = 10;
+
+  for (let i = 0; i < eligible.length; i++) {
+    const p = eligible[i]!;
     const candidates = blockCandidates(p);
 
     let succeeded = false;
@@ -635,7 +663,6 @@ export async function cmdBlockAll(
         break;
       } catch (err) {
         if (isAlreadyBlockedError(err)) {
-          // Count separately — this is not a failure
           alreadyBlocked++;
           succeeded = true;
           logger.debug('[BlockAll] Already blocked', { jid, participantId: p.id });
@@ -661,25 +688,16 @@ export async function cmdBlockAll(
       });
     }
 
-    // Respect rate limits — 350 ms between calls
+    // Emit live progress every N members
+    if (onProgress && (i + 1) % PROGRESS_INTERVAL === 0 && i + 1 < total) {
+      await onProgress(progressCard('RUNNING')).catch(() => { /* non-critical */ });
+    }
+
+    // Rate-limit: 350 ms between calls
     await new Promise((resolve) => setTimeout(resolve, 350));
   }
 
-  const protected_ = meta.participants.length - eligible.length;
-  const rows: [string, string][] = [
-    ['✅ Blocked', String(done - alreadyBlocked)],
-    ['⏩ Already blocked', String(alreadyBlocked)],
-    ['❌ Failed', String(failed)],
-    ['🛡️ Skipped (protected)', String(protected_)],
-    ['Total members', String(meta.participants.length)],
-  ];
-
-  return asciiBox({
-    title: 'BlockAll — Complete',
-    emoji: '🚫',
-    rows,
-    footer: `Group: ${meta.subject}${failed > 0 ? ' | Check LOG_LEVEL=debug for details' : ''}`,
-  });
+  return progressCard('DONE');
 }
 
 // ── Welcome Message ───────────────────────────────────────
