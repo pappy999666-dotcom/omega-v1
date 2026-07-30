@@ -139,6 +139,7 @@ export const ALL_COMMANDS = [
   'kick', 'remove', 'ban', 'unban', 'banlist',
   'promote', 'demote', 'dnkick',
   'warn', 'unwarn', 'resetwarn', 'warns',
+  'block', 'deleteall',
   'poll',
   'mute', 'unmute',
   'blockall', 'autoblock',

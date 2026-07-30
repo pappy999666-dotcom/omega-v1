@@ -609,8 +609,11 @@ async function processMessage(
       }
 
       const boundCmd = args.join(' ').trim();
-      const parsedBinding = boundCmd ? parseCommand(`${config.prefix}${boundCmd}`, {
+      // Use a temporary dot prefix for validation so empty-prefix sessions still work
+      const testPrefix = config.prefix || '.';
+      const parsedBinding = boundCmd ? parseCommand(`${testPrefix}${boundCmd}`, {
         ...config,
+        prefix: testPrefix,
         nullPrefix: false,
       }) : null;
 

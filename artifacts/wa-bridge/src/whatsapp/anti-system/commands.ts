@@ -190,8 +190,8 @@ export function handleAntiMsg(
     return errorCard('Anti System', 'This command must be used inside a WhatsApp group.');
   }
   // Use raw message text after the command word to preserve newlines
-  const raw = msg.message?.conversation ?? msg.message?.extendedTextMessage?.text ?? '';
-  const firstSpace = raw.search(/\s/);
+  const raw = msg.message?.extendedTextMessage?.text ?? msg.message?.conversation ?? '';
+  const firstSpace = raw.search(/[ \t\n]/);
   const rawArgs = firstSpace !== -1 ? raw.slice(firstSpace + 1) : '';
   const quotedText =
     msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.conversation ??

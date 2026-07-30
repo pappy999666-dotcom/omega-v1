@@ -22,12 +22,14 @@ import { resolveTarget, resolveTargetNumber } from '../utils/resolve-target.js';
  * preserving newlines and original formatting.
  */
 function extractRawArgs(msg: WebMessageInfo): string {
-  const raw = msg.message?.conversation
-    ?? msg.message?.extendedTextMessage?.text
+  // Multiline messages come as extendedTextMessage.text; single-line as conversation
+  const raw = msg.message?.extendedTextMessage?.text
+    ?? msg.message?.conversation
     ?? '';
-  const firstSpace = raw.search(/\s/);
-  if (firstSpace === -1) return '';
-  return raw.slice(firstSpace + 1);
+  const firstWs = raw.search(/[ \t\n]/);
+  if (firstWs === -1) return '';
+  // Skip the whitespace character itself, then return the rest preserving all formatting
+  return raw.slice(firstWs + 1);
 }
 import {
   fetchGroupMeta,

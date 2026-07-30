@@ -26,25 +26,37 @@ function flatContainsJid(value: unknown, groupJid: string): boolean {
 
 /** Returns true only for Baileys-exposed status mention metadata for this group. */
 export function messageIsGroupStatusMention(msg: WebMessageInfo, groupJid: string): boolean {
-  const anyMsg = msg as unknown as AnyRecord;
+  // Check both the top-level message object AND msg.message (Baileys wraps differently per version)
+  const targets: unknown[] = [msg, (msg as unknown as AnyRecord)['message']];
 
-  // 1. groupStatusMentionMessage — check direct JID fields only (no recursive scan).
-  //    Its presence already signals a status-mention event; confirm it names this group.
-  const gmm = anyMsg['groupStatusMentionMessage'];
-  if (gmm && typeof gmm === 'object' && !Array.isArray(gmm)) {
-    const rec = gmm as AnyRecord;
-    if (rec['groupJid'] === groupJid) return true;
-    if (rec['jid'] === groupJid) return true;
-    if (rec['id'] === groupJid) return true;
-  } else if (typeof gmm === 'string' && gmm === groupJid) {
-    return true;
+  for (const target of targets) {
+    if (!target || typeof target !== 'object') continue;
+    const anyTarget = target as AnyRecord;
+
+    // 1. groupStatusMentionMessage field
+    const gmm = anyTarget['groupStatusMentionMessage'];
+    if (gmm && typeof gmm === 'object' && !Array.isArray(gmm)) {
+      const rec = gmm as AnyRecord;
+      if (rec['groupJid'] === groupJid) return true;
+      if (rec['jid'] === groupJid) return true;
+      if (rec['id'] === groupJid) return true;
+      // Also check if the message remoteJid matches — some builds omit the inner JID
+      if (Object.keys(rec).length > 0) return true; // presence alone = this group was mentioned
+    } else if (typeof gmm === 'string' && gmm === groupJid) {
+      return true;
+    }
+
+    // 2. statusMentions
+    if (flatContainsJid(anyTarget['statusMentions'], groupJid)) return true;
+
+    // 3. statusMentionSources
+    if (flatContainsJid(anyTarget['statusMentionSources'], groupJid)) return true;
   }
 
-  // 2. statusMentions — flat string array of mentioned group JIDs.
-  if (flatContainsJid(anyMsg['statusMentions'], groupJid)) return true;
-
-  // 3. statusMentionSources — flat string array of source group JIDs.
-  if (flatContainsJid(anyMsg['statusMentionSources'], groupJid)) return true;
+  // 4. The message remoteJid IS the group and message type is groupStatusMentionMessage
+  //    — Baileys routes these directly to the group chat
+  const msgObj = (msg as unknown as AnyRecord)['message'] as AnyRecord | undefined;
+  if (msgObj && 'groupStatusMentionMessage' in msgObj) return true;
 
   return false;
 }
