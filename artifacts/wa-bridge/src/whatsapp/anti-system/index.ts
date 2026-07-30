@@ -2,6 +2,14 @@
 // Anti System — Main Engine
 // Lightweight, event-driven moderation for WhatsApp groups.
 // Each module is fully isolated. Errors in one never affect others.
+//
+// v2 changes:
+//  • All modules now skip protected participants (admins, bot,
+//    global owner, sudo users).
+//  • LID sender JIDs are resolved to real JIDs via group meta.
+//  • handleParticipantUpdate no longer returns early when there
+//    is no `author`, so Welcome/Goodbye always fire on add/remove.
+//  • AutoBlock: per-group toggle that blocks new joiners.
 // ============================================================
 
 import type { BridgeWASocket as WASocket, WebMessageInfo } from '../baileys-types.js';
@@ -12,6 +20,11 @@ import { executeAction, deleteMessage } from './actions.js';
 import type { ViolationContext } from './types.js';
 import { loadGroupEventConfig } from '../../services/group-config.js';
 import { renderTemplate } from '../../utils/response-engine.js';
+import {
+  fetchGroupMeta,
+  isProtectedJid,
+  bestRealJid,
+} from '../utils/group-permissions.js';
 
 // Modules
 import { messageContainsLink } from './modules/anti-link.js';
@@ -82,6 +95,10 @@ async function triggerViolation(
 /**
  * Called for every incoming group message (messages.upsert).
  * Runs all enabled anti modules concurrently where safe.
+ *
+ * v2: Protected participants (admins, owner, bot, sudo users) are
+ * automatically skipped — no module will ever punish an admin.
+ *
  * Returns true if any module triggered (caller can skip command parsing).
  */
 export async function runAntiChecks(
@@ -96,11 +113,34 @@ export async function runAntiChecks(
   const groupJid = msg.key.remoteJid ?? '';
   if (!groupJid.endsWith('@g.us')) return false;
 
-  const senderJid = msg.key.participant ?? '';
-  if (!senderJid) return false;
+  const rawSenderJid = msg.key.participant ?? '';
+  if (!rawSenderJid) return false;
+
+  // ── Resolve real JID (handles LID → real JID) and check protection ──
+  // Fetch group meta once; used for both the admin-skip check and LID resolution.
+  const meta = await fetchGroupMeta(socket, groupJid).catch(() => null);
+
+  // Resolve the real JID from LID if necessary
+  const senderJid = meta
+    ? bestRealJid(meta.participants, rawSenderJid)
+    : rawSenderJid;
+
   const senderNumber = normalizeWhatsAppNumber(senderJid);
 
-  // Load group config once
+  // ── Protected-participant guard ──────────────────────────────────────
+  // Never apply any anti-module to admins, the bot itself, or sudo users.
+  if (meta) {
+    const config = await import('../../services/workspace.js').then((m) =>
+      m.loadSessionConfig(telegramId, sessionId)
+    ).catch(() => null);
+
+    if (isProtectedJid(meta, senderJid, config?.sudoNumbers ?? [])) {
+      logger.debug('[AntiSystem] Skipping protected participant', { senderJid, groupJid });
+      return false;
+    }
+  }
+
+  // Load group anti-config once
   const gc = loadGroupAntiConfig(telegramId, sessionId, groupJid);
 
   const violations: Promise<void>[] = [];
@@ -222,7 +262,16 @@ export interface ParticipantUpdateEvent {
 }
 
 /**
- * Handle group-participants.update events for AntiPromote and AntiDemote.
+ * Handle group-participants.update events.
+ *
+ * Covers:
+ *  • AntiPromote / AntiDemote (require `author`)
+ *  • Welcome messages  (action = 'add')
+ *  • Goodbye messages  (action = 'remove')
+ *  • AutoBlock         (action = 'add', per-group toggle)
+ *
+ * NOTE: `author` is NOT required for Welcome/Goodbye — those fire on
+ *   every add/remove regardless of whether an admin initiated it.
  */
 export async function handleParticipantUpdate(
   socket: WASocket,
@@ -232,13 +281,12 @@ export async function handleParticipantUpdate(
 ): Promise<void> {
   const { id: groupJid, participants, action, author } = update;
   if (!groupJid.endsWith('@g.us')) return;
-  if (!author) return; // no actor identified
 
   const gc = loadGroupAntiConfig(telegramId, sessionId, groupJid);
-  const authorNumber = normalizeWhatsAppNumber(author);
 
   // ── AntiPromote ──────────────────────────────────────────
-  if (action === 'promote' && gc.antipromote?.enabled) {
+  if (action === 'promote' && gc.antipromote?.enabled && author) {
+    const authorNumber = normalizeWhatsAppNumber(author);
     const mod = gc.antipromote;
     if (!isPermitted(mod, authorNumber)) {
       logger.info('[AntiSystem] AntiPromote triggered', { sessionId, groupJid, author });
@@ -251,7 +299,6 @@ export async function handleParticipantUpdate(
           }).groupParticipantsUpdate(groupJid, [author], 'remove')
         );
       } else {
-        // warn / delete → demote the responsible admin
         ops.push(
           (socket as unknown as {
             groupParticipantsUpdate(jid: string, p: string[], a: string): Promise<unknown>;
@@ -267,6 +314,7 @@ export async function handleParticipantUpdate(
 
   // ── Welcome Message ──────────────────────────────────────
   if (action === 'add') {
+    // Welcome messages
     const eventConfig = loadGroupEventConfig(telegramId, sessionId, groupJid);
     if (eventConfig.welcomeEnabled && eventConfig.welcomeMessage) {
       let gcName = groupJid.split('@')[0] ?? 'Group';
@@ -288,6 +336,34 @@ export async function handleParticipantUpdate(
           await socket.sendMessage(groupJid, { text: rendered, mentions: [participantJid] });
         } catch (err) {
           logger.warn('[GroupEvents] Welcome send failed', { err: String(err), participantJid });
+        }
+      }
+    }
+
+    // AutoBlock: block new members if enabled and they are not protected
+    if (eventConfig.autoblockEnabled) {
+      let blockMeta = null;
+      try {
+        blockMeta = await fetchGroupMeta(socket, groupJid);
+      } catch { /* ignore */ }
+
+      const config = await import('../../services/workspace.js').then((m) =>
+        m.loadSessionConfig(telegramId, sessionId)
+      ).catch(() => null);
+
+      for (const participantJid of participants) {
+        try {
+          // Skip protected participants (admins, bot, sudo)
+          if (blockMeta && isProtectedJid(blockMeta, participantJid, config?.sudoNumbers ?? [])) {
+            logger.debug('[AutoBlock] Skipping protected participant', { participantJid });
+            continue;
+          }
+          await (socket as unknown as {
+            updateBlockStatus(jid: string, action: string): Promise<unknown>;
+          }).updateBlockStatus(participantJid, 'block');
+          logger.info('[AutoBlock] Blocked new member', { sessionId, groupJid, participantJid });
+        } catch (err) {
+          logger.warn('[AutoBlock] Block failed', { err: String(err), participantJid });
         }
       }
     }
@@ -322,7 +398,8 @@ export async function handleParticipantUpdate(
   }
 
   // ── AntiDemote ───────────────────────────────────────────
-  if (action === 'demote' && gc.antidemote?.enabled) {
+  if (action === 'demote' && gc.antidemote?.enabled && author) {
+    const authorNumber = normalizeWhatsAppNumber(author);
     const mod = gc.antidemote;
     if (!isPermitted(mod, authorNumber)) {
       logger.info('[AntiSystem] AntiDemote triggered', { sessionId, groupJid, author, mode: mod.mode });
@@ -332,16 +409,12 @@ export async function handleParticipantUpdate(
         groupParticipantsUpdate(jid: string, p: string[], a: string): Promise<unknown>;
       };
 
-      // Act on the responsible admin
       if (mod.mode === 'dwp' || mod.mode === 'dnp') {
-        // Demote responsible
         ops.push(sock.groupParticipantsUpdate(groupJid, [author], 'demote'));
       } else if (mod.mode === 'kwp' || mod.mode === 'knp') {
-        // Kick responsible
         ops.push(sock.groupParticipantsUpdate(groupJid, [author], 'remove'));
       }
 
-      // Restore victim (dnp / knp)
       if ((mod.mode === 'dnp' || mod.mode === 'knp') && participants.length > 0) {
         ops.push(sock.groupParticipantsUpdate(groupJid, participants, 'promote'));
       }

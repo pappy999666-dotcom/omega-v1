@@ -16,6 +16,11 @@ export interface GroupEventConfig {
   welcomeMessage?: string;
   goodbyeEnabled?: boolean;
   goodbyeMessage?: string;
+  /**
+   * When true, every new member who joins the group is automatically
+   * blocked by the bot (protected participants are always exempt).
+   */
+  autoblockEnabled?: boolean;
   /** Per-action response templates: kick, warn, ban, unban, etc. */
   messages?: Record<string, string>;
   /** Soft-ban list (numbers kicked and blocked from rejoining) */
@@ -128,6 +133,18 @@ export function setGoodbyeConfig(
   if (!all[groupJid]) all[groupJid] = { groupJid };
   all[groupJid].goodbyeEnabled = enabled;
   if (message !== undefined) all[groupJid].goodbyeMessage = message;
+  saveSessionGroupEventConfig(telegramId, sessionId, all);
+}
+
+export function setAutoblockConfig(
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  enabled: boolean
+): void {
+  const all = loadSessionGroupEventConfig(telegramId, sessionId);
+  if (!all[groupJid]) all[groupJid] = { groupJid };
+  all[groupJid].autoblockEnabled = enabled;
   saveSessionGroupEventConfig(telegramId, sessionId, all);
 }
 

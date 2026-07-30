@@ -132,9 +132,10 @@ export const ALL_COMMANDS = [
   'addlink',
   // Group Moderation
   'kick', 'remove', 'ban', 'unban', 'banlist',
-  'promote', 'demote',
+  'promote', 'demote', 'dnkick',
   'warn', 'unwarn', 'resetwarn', 'warns',
   'poll',
+  'blockall', 'autoblock',
   'setwelcome', 'welcomemsg', 'welcome',
   'setgoodbye', 'goodbyemsg', 'goodbye',
   'kickmsg', 'warnmsg', 'banmsg', 'unbanmsg',

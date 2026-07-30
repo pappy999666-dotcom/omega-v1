@@ -2,13 +2,26 @@
 // WA-Bridge — Group Moderation Commands
 // kick, ban, unban, promote, demote, warn, unwarn, poll
 // welcomemsg, goodbyemsg, kickmsg, warnmsg, banmsg, unbanmsg
+// dnkick (demote + kick), blockall
+//
 // All commands require groupJid.endsWith('@g.us')
-// User targeting via resolveTarget / resolveTargetNumber:
-//   accepts reply · @mention · phone number · full JID
+// User targeting via resolveTarget / resolveTargetNumber
+//
+// v2 changes:
+//  • Bot admin status verified before every destructive command.
+//  • kick / ban / warn refuse to act on admins.
+//  • dnkick: demote then remove (safe admin removal).
+//  • blockall: batch-block all regular members with live progress.
 // ============================================================
 
 import type { BridgeWASocket as WASocket, WebMessageInfo } from '../baileys-types.js';
 import { resolveTarget, resolveTargetNumber } from '../utils/resolve-target.js';
+import {
+  fetchGroupMeta,
+  isAdminJid,
+  isProtectedJid,
+  BOT_NOT_ADMIN_MSG,
+} from '../utils/group-permissions.js';
 import { bold, italic, successCard, warningCard, errorCard, asciiBox } from '../../utils/ascii-art.js';
 import { renderTemplate } from '../../utils/response-engine.js';
 import {
@@ -73,12 +86,23 @@ export async function cmdKick(
     return errorCard('Kick', 'This command must be used inside a WhatsApp group.');
   }
 
+  // Permission gate: bot must be admin
+  const meta = await fetchGroupMeta(socket, groupJid);
+  if (!meta?.botIsAdmin) {
+    return errorCard('Kick', BOT_NOT_ADMIN_MSG);
+  }
+
   const target = await resolveTarget(args, msg, socket, groupJid);
   if (!target) {
     return warningCard('Kick', `Provide a phone number, reply to a message, or @mention someone.\nUsage: ${prefix}kick @user`);
   }
 
-  const gcName = await getGroupName(socket, groupJid);
+  // Refuse to kick admins
+  if (isAdminJid(meta.participants, target.jid)) {
+    return warningCard('Kick', `@${target.number} is a group admin and cannot be kicked directly.\nUse ${prefix}dnkick to demote then remove them.`);
+  }
+
+  const gcName = meta.subject;
   const ok = await participantUpdate(socket, groupJid, target.jid, 'remove');
   if (!ok) return errorCard('Kick', `Could not remove @${target.number} from the group.`);
 
@@ -111,12 +135,23 @@ export async function cmdBan(
     return errorCard('Ban', 'This command must be used inside a WhatsApp group.');
   }
 
+  // Permission gate: bot must be admin
+  const meta = await fetchGroupMeta(socket, groupJid);
+  if (!meta?.botIsAdmin) {
+    return errorCard('Ban', BOT_NOT_ADMIN_MSG);
+  }
+
   const target = await resolveTarget(args, msg, socket, groupJid);
   if (!target) {
     return warningCard('Ban', `Provide a phone number, reply to a message, or @mention someone.\nUsage: ${prefix}ban @user`);
   }
 
-  const gcName = await getGroupName(socket, groupJid);
+  // Refuse to ban admins
+  if (isAdminJid(meta.participants, target.jid)) {
+    return warningCard('Ban', `@${target.number} is a group admin and cannot be banned directly.\nUse ${prefix}dnkick to demote then remove them.`);
+  }
+
+  const gcName = meta.subject;
   await participantUpdate(socket, groupJid, target.jid, 'remove');
   addBannedNumber(telegramId, sessionId, groupJid, target.number);
 
@@ -197,6 +232,11 @@ export async function cmdPromote(
     return errorCard('Promote', 'This command must be used inside a WhatsApp group.');
   }
 
+  const meta = await fetchGroupMeta(socket, groupJid);
+  if (!meta?.botIsAdmin) {
+    return errorCard('Promote', BOT_NOT_ADMIN_MSG);
+  }
+
   const target = await resolveTarget(args, msg, socket, groupJid);
   if (!target) {
     return warningCard('Promote', `Provide a phone number, reply to a message, or @mention someone.\nUsage: ${prefix}promote @user`);
@@ -205,9 +245,8 @@ export async function cmdPromote(
   const ok = await participantUpdate(socket, groupJid, target.jid, 'promote');
   if (!ok) return errorCard('Promote', `Could not promote @${target.number}.`);
 
-  const gcName = await getGroupName(socket, groupJid);
   await socket.sendMessage(groupJid, {
-    text: `✅ @${target.number} has been promoted to admin in *${gcName}*.`,
+    text: `✅ @${target.number} has been promoted to admin in *${meta.subject}*.`,
     mentions: [target.jid],
   });
   return successCard('Promote', `@${target.number} is now an admin.`);
@@ -228,6 +267,11 @@ export async function cmdDemote(
     return errorCard('Demote', 'This command must be used inside a WhatsApp group.');
   }
 
+  const meta = await fetchGroupMeta(socket, groupJid);
+  if (!meta?.botIsAdmin) {
+    return errorCard('Demote', BOT_NOT_ADMIN_MSG);
+  }
+
   const target = await resolveTarget(args, msg, socket, groupJid);
   if (!target) {
     return warningCard('Demote', `Provide a phone number, reply to a message, or @mention someone.\nUsage: ${prefix}demote @user`);
@@ -236,12 +280,76 @@ export async function cmdDemote(
   const ok = await participantUpdate(socket, groupJid, target.jid, 'demote');
   if (!ok) return errorCard('Demote', `Could not demote @${target.number}.`);
 
-  const gcName = await getGroupName(socket, groupJid);
   await socket.sendMessage(groupJid, {
-    text: `⬇️ @${target.number} has been demoted from admin in *${gcName}*.`,
+    text: `⬇️ @${target.number} has been demoted from admin in *${meta.subject}*.`,
     mentions: [target.jid],
   });
   return successCard('Demote', `@${target.number} is no longer an admin.`);
+}
+
+// ── DnKick — Demote then Kick ─────────────────────────────
+//
+// Safely removes an admin:
+//   1. Verify target is an admin.
+//   2. Demote them first.
+//   3. Wait for confirmation, then remove.
+// If demotion fails, the kick is aborted.
+
+export async function cmdDnKick(
+  args: string[],
+  msg: WebMessageInfo,
+  socket: WASocket,
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  prefix: string
+): Promise<string> {
+  if (!groupJid.endsWith('@g.us')) {
+    return errorCard('DnKick', 'This command must be used inside a WhatsApp group.');
+  }
+
+  const meta = await fetchGroupMeta(socket, groupJid);
+  if (!meta?.botIsAdmin) {
+    return errorCard('DnKick', BOT_NOT_ADMIN_MSG);
+  }
+
+  const target = await resolveTarget(args, msg, socket, groupJid);
+  if (!target) {
+    return warningCard('DnKick', `Provide a phone number, reply to a message, or @mention someone.\nUsage: ${prefix}dnkick @admin`);
+  }
+
+  // Target must be an admin for dnkick to make sense
+  if (!isAdminJid(meta.participants, target.jid)) {
+    return warningCard('DnKick', `@${target.number} is not an admin. Use ${prefix}kick to remove regular members.`);
+  }
+
+  const gcName = meta.subject;
+
+  // Step 1: Demote
+  await socket.sendMessage(groupJid, {
+    text: `🔄 Demoting @${target.number} before removal…`,
+    mentions: [target.jid],
+  });
+
+  const demoted = await participantUpdate(socket, groupJid, target.jid, 'demote');
+  if (!demoted) {
+    return errorCard('DnKick', `Failed to demote @${target.number}. Kick aborted — permissions may be insufficient.`);
+  }
+
+  // Brief pause to let WhatsApp propagate the demotion
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+
+  // Step 2: Remove
+  const kicked = await participantUpdate(socket, groupJid, target.jid, 'remove');
+  if (!kicked) {
+    return errorCard('DnKick', `@${target.number} was demoted but the removal failed. You may need to kick them manually.`);
+  }
+
+  await socket.sendMessage(groupJid, {
+    text: `✅ @${target.number} has been demoted and removed from *${gcName}*.`,
+    mentions: [target.jid],
+  });
+  return successCard('DnKick', `@${target.number} was demoted then kicked.`, [['Number', target.number]]);
 }
 
 // ── Warn ─────────────────────────────────────────────────
@@ -264,7 +372,13 @@ export async function cmdWarn(
     return warningCard('Warn', `Provide a phone number, reply to a message, or @mention someone.\nUsage: ${prefix}warn @user`);
   }
 
-  const gcName = await getGroupName(socket, groupJid);
+  // Refuse to warn admins
+  const meta = await fetchGroupMeta(socket, groupJid);
+  if (meta && isAdminJid(meta.participants, target.jid)) {
+    return warningCard('Warn', `@${target.number} is a group admin. Admins cannot be warned.`);
+  }
+
+  const gcName = meta?.subject ?? await getGroupName(socket, groupJid);
   const count = incrementWarn(sessionId, groupJid, target.number, 'manual');
   const threshold = 3;
 
@@ -280,7 +394,10 @@ export async function cmdWarn(
 
   if (count >= threshold) {
     resetWarn(sessionId, groupJid, target.number, 'manual');
-    await participantUpdate(socket, groupJid, target.jid, 'remove');
+    // Only attempt kick if bot is admin
+    if (meta?.botIsAdmin) {
+      await participantUpdate(socket, groupJid, target.jid, 'remove');
+    }
     await socket.sendMessage(groupJid, {
       text: `${rendered}\n\n${italic(`Warning ${count}/${threshold} — kicked.`)}`,
       mentions: [target.jid],
@@ -360,12 +477,11 @@ export async function cmdPoll(
     return errorCard('Poll', 'This command must be used inside a WhatsApp group.');
   }
 
-  // Format: .poll Question | Option1 | Option2 | Option3
   const fullText = [args.join(' '), msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.conversation ?? '']
     .join(' ').trim();
 
   if (!fullText) {
-    return warningCard('Poll', `Usage: ${prefix}poll Question | Option A | Option B | Option C\nSeparate question and options with |`);
+    return warningCard('Poll', `Usage: ${prefix}poll Question | Option1 | Option2 | Option3\nSeparate question and options with |`);
   }
 
   const parts = fullText.split('|').map((s) => s.trim()).filter(Boolean);
@@ -390,6 +506,100 @@ export async function cmdPoll(
   } catch (err) {
     return errorCard('Poll Failed', 'WhatsApp rejected the poll.', String(err));
   }
+}
+
+// ── BlockAll ──────────────────────────────────────────────
+//
+// Blocks every regular member of the group (skips admins, bot, sudo).
+// Provides live progress updates via the onProgress callback.
+
+export async function cmdBlockAll(
+  socket: WASocket,
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  sudoNumbers: string[],
+  onProgress: (text: string) => Promise<void>
+): Promise<string> {
+  if (!groupJid.endsWith('@g.us')) {
+    return errorCard('BlockAll', 'This command must be used inside a WhatsApp group.');
+  }
+
+  const meta = await fetchGroupMeta(socket, groupJid);
+  if (!meta) {
+    return errorCard('BlockAll', 'Could not fetch group participants. Try again.');
+  }
+  if (!meta.botIsAdmin) {
+    return errorCard('BlockAll', BOT_NOT_ADMIN_MSG);
+  }
+
+  // Filter to eligible members only
+  const eligible = meta.participants.filter(
+    (p) => !isProtectedJid(meta, p.id, sudoNumbers)
+  );
+
+  if (eligible.length === 0) {
+    return warningCard('BlockAll', 'No eligible members to block (all members are protected).');
+  }
+
+  let done = 0;
+  let failed = 0;
+  const total = eligible.length;
+
+  await onProgress(
+    asciiBox({
+      title: 'BlockAll — Running',
+      emoji: '🚫',
+      rows: [
+        ['Total eligible', String(total)],
+        ['Blocked', '0'],
+        ['Failed', '0'],
+      ],
+      footer: 'Processing…',
+    })
+  );
+
+  for (const p of eligible) {
+    try {
+      await (socket as unknown as {
+        updateBlockStatus(jid: string, action: string): Promise<unknown>;
+      }).updateBlockStatus(p.id, 'block');
+      done++;
+    } catch {
+      failed++;
+    }
+
+    // Progress update every 5 members
+    if ((done + failed) % 5 === 0 || done + failed === total) {
+      await onProgress(
+        asciiBox({
+          title: 'BlockAll — Running',
+          emoji: '🚫',
+          rows: [
+            ['Total eligible', String(total)],
+            ['Blocked', String(done)],
+            ['Failed', String(failed)],
+            ['Remaining', String(total - done - failed)],
+          ],
+          footer: 'Processing…',
+        })
+      ).catch(() => {});
+    }
+
+    // Respect rate limits
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+
+  return asciiBox({
+    title: 'BlockAll — Complete',
+    emoji: '✅',
+    rows: [
+      ['Blocked', String(done)],
+      ['Failed', String(failed)],
+      ['Skipped (protected)', String(meta.participants.length - total)],
+    ],
+    footer: `Group: ${meta.subject}`,
+  });
 }
 
 // ── Welcome Message ───────────────────────────────────────
@@ -543,6 +753,7 @@ export function cmdEventStatus(
     rows: [
       ['Welcome', gc.welcomeEnabled ? '✅ ON' : '❌ OFF'],
       ['Goodbye', gc.goodbyeEnabled ? '✅ ON' : '❌ OFF'],
+      ['AutoBlock', gc.autoblockEnabled ? '✅ ON' : '❌ OFF'],
       ['Kick Msg', msgs.kick ? '✅ Custom' : '↩ Default'],
       ['Warn Msg', msgs.warn ? '✅ Custom' : '↩ Default'],
       ['Ban Msg', msgs.ban ? '✅ Custom' : '↩ Default'],

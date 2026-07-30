@@ -57,10 +57,12 @@ import {
   cmdBanList,
   cmdPromote,
   cmdDemote,
+  cmdDnKick,
   cmdWarn,
   cmdUnwarn,
   cmdWarnCount,
   cmdPoll,
+  cmdBlockAll,
   cmdSetWelcome,
   cmdWelcomeToggle,
   cmdSetGoodbye,
@@ -68,6 +70,8 @@ import {
   cmdSetModerationMsg,
   cmdEventStatus,
 } from './commands/group-moderation.js';
+import { setAutoblockConfig } from '../services/group-config.js';
+import { fetchGroupMeta } from './utils/group-permissions.js';
 
 // Map from sessionId → telegramId (populated at init)
 const sessionOwnerMap = new Map<string, string>();
@@ -453,7 +457,23 @@ async function processMessage(
   };
   const commandText = (fallback = ''): string => args.join(' ').trim() || quotedText.trim() || fallback;
 
-  const senderJid = msg.key.participant ?? (msg.key.fromMe ? (socket as { user?: { id?: string } }).user?.id : msg.key.remoteJid);
+  // ── Resolve sender JID — fix LID → real JID so sudo matching works ──
+  // If the participant JID ends with @lid (linked-device ID), attempt to
+  // resolve the underlying real JID from the group participant list.
+  // This ensures sudo authorization works correctly on secondary devices.
+  let rawSenderJid = msg.key.participant ?? (msg.key.fromMe ? (socket as { user?: { id?: string } }).user?.id : msg.key.remoteJid);
+  if (rawSenderJid?.endsWith('@lid') && isGroup) {
+    try {
+      const { fetchGroupMeta: _fgm } = await import('./utils/group-permissions.js');
+      const _meta = await _fgm(socket, groupJid);
+      if (_meta) {
+        const { bestRealJid: _brj } = await import('./utils/group-permissions.js');
+        rawSenderJid = _brj(_meta.participants, rawSenderJid);
+      }
+    } catch { /* non-critical — fall back to raw LID */ }
+  }
+  const senderJid = rawSenderJid;
+
   const isOwnerSender = Boolean(msg.key.fromMe);
   if (!replyOverride && !isAuthorizedCommandSender(isOwnerSender, senderJid, config.sudoNumbers)) {
     logger.warn('[EventHandler] Silently ignored unauthorized WhatsApp command', {
@@ -1377,6 +1397,11 @@ async function processMessage(
       break;
     }
 
+    case 'dnkick': {
+      await reply(await cmdDnKick(args, msg, socket, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+
     case 'unban': {
       await reply(cmdUnban(args, msg, telegramId, sessionId, groupJid, config.prefix));
       break;
@@ -1470,6 +1495,60 @@ async function processMessage(
 
     case 'eventstatus': {
       await reply(cmdEventStatus(telegramId, sessionId, groupJid));
+      break;
+    }
+
+    // ── BlockAll ──
+    case 'blockall': {
+      if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
+      const updateProgress = await createProgressReply(asciiBox({
+        title: 'BLOCKALL STARTED',
+        emoji: '🚫',
+        rows: [['Status', 'FETCHING MEMBERS']],
+        footer: 'Please wait…',
+      }));
+      const result = await cmdBlockAll(
+        socket,
+        telegramId,
+        sessionId,
+        groupJid,
+        config.sudoNumbers ?? [],
+        updateProgress
+      );
+      await reply(result);
+      break;
+    }
+
+    // ── AutoBlock ──
+    case 'autoblock': {
+      if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
+      const sub = args[0]?.toLowerCase();
+      if (sub === 'on') {
+        // Verify bot is admin before enabling
+        const abMeta = await fetchGroupMeta(socket, groupJid).catch(() => null);
+        if (!abMeta?.botIsAdmin) {
+          await reply(errorCard('AutoBlock', 'I need to be a group admin to use AutoBlock.\nPromote me and try again.'));
+          break;
+        }
+        setAutoblockConfig(telegramId, sessionId, groupJid, true);
+        await reply(successCard('AutoBlock ON', 'Every new member who joins this group will be automatically blocked.\nProtected users (admins, sudo) are always exempt.'));
+        break;
+      }
+      if (sub === 'off') {
+        setAutoblockConfig(telegramId, sessionId, groupJid, false);
+        await reply(successCard('AutoBlock OFF', 'New members will no longer be automatically blocked.'));
+        break;
+      }
+      await reply(asciiBox({
+        title: 'AutoBlock',
+        emoji: '🚫',
+        rows: [
+          ['Usage', `${config.prefix}autoblock on`],
+          ['', `${config.prefix}autoblock off`],
+          ['Description', 'Blocks every new member who joins the group'],
+          ['Exempt', 'Admins, group owner, bot, sudo users'],
+        ],
+      }));
       break;
     }
 
