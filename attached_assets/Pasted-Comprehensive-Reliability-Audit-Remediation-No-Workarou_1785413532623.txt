@@ -1,0 +1,455 @@
+Comprehensive Reliability Audit & Remediation (No Workarounds)
+
+Perform a full engineering audit of the WhatsApp bot built with @crysnovax/baileys. This is not a patch task. The objective is to identify and eliminate root causes while preserving existing functionality.
+
+Do not silence errors, add temporary workarounds, or fake successful responses. Every fix must be based on the actual behavior of the Baileys API.
+
+---
+
+Primary Objective
+
+Review every change introduced in this PR, every CodeRabbit finding, and every related moderation, anti-system, resolver, and messaging component.
+
+Before changing anything:
+
+- Verify whether each review comment is still valid against the latest code.
+- Skip only findings that are genuinely obsolete.
+- Explain briefly in code comments or commit messages why a skipped finding is no longer applicable.
+- Apply only minimal, correct fixes rather than rewriting unrelated systems.
+
+The final result should be production-ready.
+
+---
+
+1. Moderation Pipeline Audit
+
+Audit the complete moderation flow used by:
+
+- kick
+- ban
+- dnkick
+- remove
+- every command that removes members
+
+Trace the execution from:
+
+command
+→ resolver
+→ permission validation
+→ participant lookup
+→ Baileys participant update
+→ retry logic
+→ announcements
+→ logging
+→ persistence
+
+Verify every stage.
+
+---
+
+2. LID Resolution
+
+The resolver contract explicitly states:
+
+ResolvedTarget.jid must NEVER be a @lid.
+
+Guarantee this contract.
+
+When the matched participant is a LID:
+
+- resolve it using the existing helper functions
+- prefer bestRealJid(...)
+- use resolveRealJidFromMeta(...) where appropriate
+
+If the final value is still a LID:
+
+- treat the participant as unresolved
+- fail safely
+- never fabricate an @s.whatsapp.net JID from LID digits
+- never use LID digits as the displayed phone number
+- never persist LID-derived numbers into ban lists, permit lists, or logs
+
+Moderation actions must never execute against a LID.
+
+---
+
+3. Participant Resolution
+
+resolveTarget() already identifies the participant.
+
+Do not perform another participant search inside the moderation pipeline.
+
+Use:
+
+target.participant
+
+directly.
+
+Delete duplicate participant lookup helpers that are no longer needed.
+
+Remove unused imports introduced by those helpers.
+
+---
+
+4. Phone Number Resolution
+
+Audit every command accepting a target.
+
+Support:
+
+- Reply
+- Mention
+- Phone number
+- Local number
+- International number
+- Full JID
+
+Normalize correctly.
+
+When matching participants:
+
+- never treat LID digits as phone numbers
+- never compare normalized numbers against LID identifiers
+- only compare real participant phone numbers
+- only compare real WhatsApp JIDs
+
+Restrict Nigerian local conversion to exactly:
+
+0XXXXXXXXXX
+
+(11 digits only)
+
+Do not rewrite local numbers from other countries.
+
+---
+
+5. Removal API Validation
+
+Audit removeParticipantWithRetry().
+
+Do not assume success simply because groupParticipantsUpdate() resolved.
+
+Inspect the returned participant status array.
+
+Require:
+
+status == 200
+
+for the requested participant.
+
+Treat every other status as failure.
+
+Feed failures through the retry logic only when appropriate.
+
+Retry only transient failures.
+
+Do not retry permanent failures.
+
+---
+
+6. Retry Detection
+
+Audit transient error detection.
+
+Current matching is too broad.
+
+Ensure retry detection only matches actual transient errors.
+
+Avoid false positives caused by:
+
+- phone numbers
+- JIDs
+- unrelated words
+- embedded digits
+
+Retry only when justified.
+
+---
+
+7. Permission Validation
+
+Every moderation command must verify:
+
+- requester permissions
+- admin permissions
+- sudo permissions
+- owner permissions
+- bot admin status
+
+before executing moderation.
+
+Reject unauthorized requests immediately.
+
+The shared moderation pipeline should still verify that the bot itself has sufficient privileges.
+
+---
+
+8. Kick/Ban Success Flow
+
+Moderation success must happen only once.
+
+Prevent duplicate success messages.
+
+If the moderation pipeline already announces a successful removal:
+
+the command handler must not send another success card.
+
+Error replies must still work normally.
+
+---
+
+9. Announcement Reliability
+
+Member removal happens before announcement rendering.
+
+Never allow:
+
+renderTemplate()
+
+or
+
+sendMessage()
+
+failures
+
+to invalidate an already successful moderation action.
+
+Wrap announcements in a guarded section.
+
+Log failures.
+
+Do not rollback successful moderation.
+
+Do not return failure after the member has already been removed.
+
+---
+
+10. Logging Audit
+
+Review every moderation log.
+
+Never expose:
+
+- full phone numbers
+- raw command arguments
+- unnecessary personal identifiers
+
+Create one shared masking helper.
+
+Use it consistently across:
+
+- moderation
+- participant updates
+- resolver
+- logging
+- warnings
+
+---
+
+11. AntiSpam
+
+Audit the complete AntiSpam implementation.
+
+Verify:
+
+rolling window
+
+message counting
+
+cleanup
+
+configuration
+
+threshold comparison
+
+action execution
+
+cache lifecycle
+
+group isolation
+
+session isolation
+
+Persisted legacy configs must automatically inherit missing default values.
+
+Merge:
+
+defaultSpamConfig()
+
+underneath older saved configs.
+
+Existing values remain authoritative.
+
+---
+
+12. AntiGM
+
+Audit the complete AntiGM detector.
+
+Do not recursively scan arbitrary objects.
+
+Detect only official Baileys status mention fields.
+
+Prefer:
+
+groupStatusMentionMessage
+
+then
+
+statusMentions
+
+then
+
+statusMentionSources
+
+Avoid recursive object traversal.
+
+Avoid false positives.
+
+---
+
+13. Welcome & Goodbye
+
+Audit event listeners.
+
+Verify:
+
+participant updates
+
+join events
+
+leave events
+
+metadata refresh
+
+event registration
+
+group cache
+
+Reconnect scenarios.
+
+Ensure the implementation follows the capabilities exposed by @crysnovax/baileys instead of custom assumptions.
+
+---
+
+14. Anti-System Performance
+
+Profile AntiLink
+
+AntiSpam
+
+AntiBot
+
+AntiGM
+
+AntiSystem
+
+under large groups.
+
+Target:
+
+1000+
+
+2000+
+
+5000+
+
+member groups.
+
+Avoid repeated metadata fetches.
+
+Avoid repeated participant scans.
+
+Cache intelligently.
+
+Prevent O(n²) behavior.
+
+---
+
+15. Resolver Consistency
+
+Every command requiring a user must use the exact same centralized resolver.
+
+No command should implement its own participant lookup.
+
+No duplicate resolver logic should remain.
+
+---
+
+16. Code Cleanup
+
+Remove:
+
+dead helpers
+
+duplicate logic
+
+duplicate participant lookups
+
+unused imports
+
+obsolete compatibility code
+
+Only after confirming they are no longer referenced.
+
+---
+
+17. Regression Testing
+
+Before pushing:
+
+Verify:
+
+✓ Kick
+
+✓ Ban
+
+✓ DnKick
+
+✓ Phone number targeting
+
+✓ Reply targeting
+
+✓ Mention targeting
+
+✓ JID targeting
+
+✓ LID handling
+
+✓ AntiSpam
+
+✓ AntiBot
+
+✓ AntiGM
+
+✓ Welcome
+
+✓ Goodbye
+
+✓ Permission validation
+
+✓ Retry behavior
+
+✓ Announcement behavior
+
+✓ Logging
+
+✓ Legacy configuration loading
+
+✓ No duplicate moderation replies
+
+✓ No LID stored anywhere
+
+✓ No regression in existing commands
+
+---
+
+18. Final Verification
+
+Perform a complete code review after all fixes.
+
+Search the repository for every moderation path and ensure all implementations now follow the same contracts.
+
+If any capability is impossible because @crysnovax/baileys does not expose the required API, document the limitation clearly instead of returning fake success responses.
+
+Do not push until every verified issue has either been fixed or explicitly documented with a real technical limitation.
