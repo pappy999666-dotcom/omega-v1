@@ -16,6 +16,19 @@
 
 import type { BridgeWASocket as WASocket, WebMessageInfo } from '../baileys-types.js';
 import { resolveTarget, resolveTargetNumber } from '../utils/resolve-target.js';
+
+/**
+ * Extract everything after the first word (command name) from the raw message text,
+ * preserving newlines and original formatting.
+ */
+function extractRawArgs(msg: WebMessageInfo): string {
+  const raw = msg.message?.conversation
+    ?? msg.message?.extendedTextMessage?.text
+    ?? '';
+  const firstSpace = raw.search(/\s/);
+  if (firstSpace === -1) return '';
+  return raw.slice(firstSpace + 1);
+}
 import {
   fetchGroupMeta,
   isAdminJid,
@@ -698,7 +711,7 @@ export function cmdSetWelcome(
 
   const quotedText =
     msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.conversation ?? '';
-  const message = args.join(' ').trim() || quotedText.trim();
+  const message = extractRawArgs(msg) || quotedText.trim();
 
   if (!message) {
     const current = loadGroupEventConfig(telegramId, sessionId, groupJid);
@@ -746,7 +759,7 @@ export function cmdSetGoodbye(
 
   const quotedText =
     msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.conversation ?? '';
-  const message = args.join(' ').trim() || quotedText.trim();
+  const message = extractRawArgs(msg) || quotedText.trim();
 
   if (!message) {
     const current = loadGroupEventConfig(telegramId, sessionId, groupJid);
@@ -796,7 +809,7 @@ export function cmdSetModerationMsg(
 
   const quotedText =
     msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.conversation ?? '';
-  const message = args.join(' ').trim() || quotedText.trim();
+  const message = extractRawArgs(msg) || quotedText.trim();
 
   if (!message) {
     const current = getGroupMessage(telegramId, sessionId, groupJid, key);

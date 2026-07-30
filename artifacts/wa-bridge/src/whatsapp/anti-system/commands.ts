@@ -189,13 +189,15 @@ export function handleAntiMsg(
   if (!groupJid.endsWith('@g.us')) {
     return errorCard('Anti System', 'This command must be used inside a WhatsApp group.');
   }
-  const text = args.join(' ').trim();
-  // Also accept quoted message text
+  // Use raw message text after the command word to preserve newlines
+  const raw = msg.message?.conversation ?? msg.message?.extendedTextMessage?.text ?? '';
+  const firstSpace = raw.search(/\s/);
+  const rawArgs = firstSpace !== -1 ? raw.slice(firstSpace + 1) : '';
   const quotedText =
     msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.conversation ??
     msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.extendedTextMessage?.text ??
     '';
-  const message = text || quotedText;
+  const message = rawArgs || quotedText;
   if (!message) {
     return errorCard('Anti System', 'Provide a custom message text or reply to a message.\nVariables: @mention, &gcname, &desc, &getpp');
   }

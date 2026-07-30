@@ -118,7 +118,9 @@ async function removeParticipantWithRetry(
         const entry = results.find(
           (r) => !r.jid || r.jid === participantJid,
         );
-        if (entry && entry.status !== 200) {
+        // Only treat as error for known failure codes (≥400).
+        // Status 0, undefined, or missing = Baileys didn't populate it = treat as success.
+        if (entry && entry.status >= 400) {
           const statusErr = new Error(
             `groupParticipantsUpdate returned status ${entry.status} for participant`,
           );

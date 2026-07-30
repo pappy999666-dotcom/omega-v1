@@ -350,22 +350,32 @@ export async function handleParticipantUpdate(
     const eventConfig = loadGroupEventConfig(telegramId, sessionId, groupJid);
     if (eventConfig.welcomeEnabled && eventConfig.welcomeMessage) {
       let gcName = groupJid.split('@')[0] ?? 'Group';
+      let welcomeMeta: { subject?: string; participants?: { id: string; phoneNumber?: string }[] } | null = null;
       try {
-        const meta = await (socket as unknown as {
-          groupMetadata(jid: string): Promise<{ subject?: string }>;
+        welcomeMeta = await (socket as unknown as {
+          groupMetadata(jid: string): Promise<{ subject?: string; participants: { id: string; phoneNumber?: string }[] }>;
         }).groupMetadata(groupJid);
-        gcName = meta?.subject ?? gcName;
+        gcName = welcomeMeta?.subject ?? gcName;
       } catch { /* non-critical */ }
 
       for (const participantJid of participants) {
         try {
+          // Resolve LID → real JID for the mentions array
+          let mentionJid = participantJid;
+          if (participantJid.endsWith('@lid') && welcomeMeta?.participants) {
+            const lidNum = (participantJid.split('@')[0] ?? '').split(':')[0] ?? '';
+            const matched = welcomeMeta.participants.find(
+              p => !p.id.endsWith('@lid') && ((p.id.split('@')[0] ?? '').split(':')[0] === lidNum || (p.phoneNumber ?? '').replace(/\D/g, '') === lidNum)
+            );
+            if (matched) mentionJid = matched.id;
+          }
           const rendered = await renderTemplate(eventConfig.welcomeMessage, {
-            senderJid: participantJid,
+            senderJid: mentionJid,
             gcName,
             socket,
             groupJid,
           });
-          await socket.sendMessage(groupJid, { text: rendered, mentions: [participantJid] });
+          await socket.sendMessage(groupJid, { text: rendered, mentions: [mentionJid] });
         } catch (err) {
           logger.warn('[GroupEvents] Welcome send failed', { err: String(err), participantJid });
         }
@@ -406,22 +416,31 @@ export async function handleParticipantUpdate(
     const eventConfig = loadGroupEventConfig(telegramId, sessionId, groupJid);
     if (eventConfig.goodbyeEnabled && eventConfig.goodbyeMessage) {
       let gcName = groupJid.split('@')[0] ?? 'Group';
+      let goodbyeMeta: { subject?: string; participants?: { id: string; phoneNumber?: string }[] } | null = null;
       try {
-        const meta = await (socket as unknown as {
-          groupMetadata(jid: string): Promise<{ subject?: string }>;
+        goodbyeMeta = await (socket as unknown as {
+          groupMetadata(jid: string): Promise<{ subject?: string; participants: { id: string; phoneNumber?: string }[] }>;
         }).groupMetadata(groupJid);
-        gcName = meta?.subject ?? gcName;
+        gcName = goodbyeMeta?.subject ?? gcName;
       } catch { /* non-critical */ }
 
       for (const participantJid of participants) {
         try {
+          let mentionJid = participantJid;
+          if (participantJid.endsWith('@lid') && goodbyeMeta?.participants) {
+            const lidNum = (participantJid.split('@')[0] ?? '').split(':')[0] ?? '';
+            const matched = goodbyeMeta.participants.find(
+              p => !p.id.endsWith('@lid') && ((p.id.split('@')[0] ?? '').split(':')[0] === lidNum || (p.phoneNumber ?? '').replace(/\D/g, '') === lidNum)
+            );
+            if (matched) mentionJid = matched.id;
+          }
           const rendered = await renderTemplate(eventConfig.goodbyeMessage, {
-            senderJid: participantJid,
+            senderJid: mentionJid,
             gcName,
             socket,
             groupJid,
           });
-          await socket.sendMessage(groupJid, { text: rendered, mentions: [participantJid] });
+          await socket.sendMessage(groupJid, { text: rendered, mentions: [mentionJid] });
         } catch (err) {
           logger.warn('[GroupEvents] Goodbye send failed', { err: String(err), participantJid });
         }
