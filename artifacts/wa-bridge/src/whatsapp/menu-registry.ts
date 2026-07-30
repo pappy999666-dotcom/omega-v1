@@ -206,6 +206,15 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
   // AntiPromote / AntiDemote
   antipromote:  { section: '◈ ANTI SYSTEM',      syntax: 'antipromote <kick|warn N|delete|off>', desc: 'React to unauthorized admin promotions', target: 'group' },
   antidemote:   { section: '◈ ANTI SYSTEM',      syntax: 'antidemote <dwp|dnp|kwp|knp|off>', desc: 'React to unauthorized admin demotions', target: 'group' },
+
+  // ── Join Approval ─────────────────────────────────────────
+  // Mirror of the Telegram per-group dashboard approval features,
+  // now accessible directly from WhatsApp.
+  pendingjoin:    { section: '◈ JOIN APPROVAL',   syntax: 'pendingjoin',                  desc: 'List pending join requests',                 target: 'group' },
+  approveall:     { section: '◈ JOIN APPROVAL',   syntax: 'approveall',                   desc: 'Approve ALL pending join requests',          target: 'group' },
+  rejectall:      { section: '◈ JOIN APPROVAL',   syntax: 'rejectall',                    desc: 'Reject ALL pending join requests',           target: 'group' },
+  approveamt:     { section: '◈ JOIN APPROVAL',   syntax: 'approveamt <n>',               desc: 'Approve first N pending requests',           target: 'group' },
+  approvecountry: { section: '◈ JOIN APPROVAL',   syntax: 'approvecountry <+code>',       desc: 'Approve requests by phone country code',     target: 'group' },
 };
 
 // ── Section order ─────────────────────────────────────────
@@ -222,6 +231,7 @@ const MAIN_SECTION_ORDER = [
 
 const GROUP_SECTION_ORDER = [
   '◈ GROUP MODERATION',
+  '◈ JOIN APPROVAL',
   '◈ TAG ENGINE',
   '◈ ANTI SYSTEM',
 ];

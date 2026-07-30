@@ -32,6 +32,37 @@ export interface ResolvedGroupMeta {
   subject: string;
 }
 
+// ── Group Metadata TTL Cache ───────────────────────────────
+//
+// Keyed by socket (WeakMap → no leak) then groupJid.
+// TTL: 30 seconds — short enough to catch role changes, long enough
+// to avoid hammering the Baileys API on every Anti System check.
+// Call bustGroupMetaCache() after promote/demote/add/remove events.
+
+const META_TTL_MS = 30_000;
+
+const _metaCache = new WeakMap<
+  object,
+  Map<string, { meta: ResolvedGroupMeta; ts: number }>
+>();
+
+function _getPerSocket(
+  socket: WASocket
+): Map<string, { meta: ResolvedGroupMeta; ts: number }> {
+  const key = socket as unknown as object;
+  let m = _metaCache.get(key);
+  if (!m) {
+    m = new Map();
+    _metaCache.set(key, m);
+  }
+  return m;
+}
+
+/** Force the next fetchGroupMeta call to bypass the cache for this group. */
+export function bustGroupMetaCache(socket: WASocket, groupJid: string): void {
+  _getPerSocket(socket).delete(groupJid);
+}
+
 // ── Internal helpers ───────────────────────────────────────
 
 export function stripDeviceSuffix(jid: string): string {
@@ -49,12 +80,25 @@ export function numericId(jid: string): string {
 
 /**
  * Fetch group metadata and resolve the bot's admin status.
+ *
+ * Results are cached per-socket per-group for META_TTL_MS (30 s).
+ * Pass bust=true to force a fresh fetch (e.g. after a promote/demote).
  * Returns null if the group cannot be reached or an error occurs.
  */
 export async function fetchGroupMeta(
   socket: WASocket,
-  groupJid: string
+  groupJid: string,
+  bust = false
 ): Promise<ResolvedGroupMeta | null> {
+  // ── Cache read ──────────────────────────────────────────
+  const perSocket = _getPerSocket(socket);
+  if (!bust) {
+    const hit = perSocket.get(groupJid);
+    if (hit && Date.now() - hit.ts < META_TTL_MS) {
+      return hit.meta;
+    }
+  }
+
   try {
     const meta = await (socket as unknown as {
       groupMetadata(jid: string): Promise<{
@@ -81,12 +125,17 @@ export async function fetchGroupMeta(
     const botIsAdmin =
       botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin';
 
-    return {
+    const result: ResolvedGroupMeta = {
       botJid,
       botIsAdmin,
       participants,
       subject: meta.subject ?? groupJid.split('@')[0] ?? 'Group',
     };
+
+    // ── Cache write ───────────────────────────────────────
+    perSocket.set(groupJid, { meta: result, ts: Date.now() });
+
+    return result;
   } catch (err) {
     logger.warn('[GroupPermissions] fetchGroupMeta failed', { err: String(err), groupJid });
     return null;

@@ -182,6 +182,8 @@ export const ALL_COMMANDS = [
   'antipromote',
   // AntiDemote
   'antidemote',
+  // Join Approval (WhatsApp-side)
+  'pendingjoin', 'approveall', 'rejectall', 'approveamt', 'approvecountry',
 ] as const;
 
 export type CommandName = typeof ALL_COMMANDS[number];

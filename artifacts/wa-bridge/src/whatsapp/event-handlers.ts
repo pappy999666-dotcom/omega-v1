@@ -6,6 +6,7 @@
 // ============================================================
 
 import type { BridgeWASocket as WASocket, BaileysEventMap, IMessage, WebMessageInfo } from './baileys-types.js';
+import { resolvePreviewRoute } from './preview-router.js';
 import { parseCommand, parseStickerCommand, hashSticker } from './command-parser.js';
 import { resolveTarget, resolveTargetNumbers } from './utils/resolve-target.js';
 import { loadSessionConfig, loadSessionMeta, updateSessionMeta, saveSessionMeta, getGlobalMenuUrl } from '../services/workspace.js';
@@ -136,19 +137,29 @@ export async function handleWAEvent(
     return;
   }
 
-  // ── Anti System: group participant events (AntiPromote / AntiDemote) ──
+  // ── Anti System: group participant events (AntiPromote / AntiDemote / Welcome / Goodbye) ──
   if (event === 'group-participants.update') {
     const telegramId = sessionOwnerMap.get(sessionId);
     if (telegramId) {
-      const update = data as { id: string; participants: string[]; action: string; author?: string };
-      await handleParticipantUpdate(socket, sessionId, telegramId, {
-        id: update.id,
-        participants: update.participants,
-        action: update.action as 'add' | 'remove' | 'promote' | 'demote',
-        author: update.author,
-      }).catch((err) => {
-        logger.warn('[AntiSystem] handleParticipantUpdate error', { err: String(err) });
-      });
+      // Baileys emits group-participants.update as an ARRAY of update objects.
+      // Casting to a single object was the root cause of Welcome/Goodbye never firing.
+      const rawUpdates = data as unknown;
+      const updates: Array<{ id: string; participants: string[]; action: string; author?: string }> =
+        Array.isArray(rawUpdates)
+          ? (rawUpdates as Array<{ id: string; participants: string[]; action: string; author?: string }>)
+          : [rawUpdates as { id: string; participants: string[]; action: string; author?: string }];
+
+      for (const update of updates) {
+        if (!update?.id) continue;
+        await handleParticipantUpdate(socket, sessionId, telegramId, {
+          id: update.id,
+          participants: update.participants ?? [],
+          action: update.action as 'add' | 'remove' | 'promote' | 'demote',
+          author: update.author,
+        }).catch((err) => {
+          logger.warn('[AntiSystem] handleParticipantUpdate error', { err: String(err) });
+        });
+      }
     }
     return;
   }
@@ -284,13 +295,13 @@ async function processMessage(
   const quotedText = extractMessageText(quotedMessage);
   // Stage 1: Extract existing preview from quoted message via PreviewManager
   const quotedPreview = PreviewManager.extractIncomingPreview(quotedMessage);
-  // As-is relay: use preview-router to detect sourceExt for chat commands
-  const { resolvePreviewRoute } = await import('./preview-router.js');
-  const chatRoute = resolvePreviewRoute(msg, text);
-  const sourceExt = chatRoute.route === 'AS_IS' ? chatRoute.sourceExt : undefined;
 
   // Extract sticker for macro matching
   const stickerMsg = msg.message?.stickerMessage;
+
+  // As-is relay: detect sourceExt for chat commands (static import — no dynamic overhead)
+  const chatRoute = resolvePreviewRoute(msg, text);
+  const sourceExt = chatRoute.route === 'AS_IS' ? chatRoute.sourceExt : undefined;
 
   const config = loadSessionConfig(telegramId, sessionId);
   const sessionMeta = loadSessionMeta(telegramId, sessionId);
@@ -1458,6 +1469,263 @@ async function processMessage(
           ['Exempt', 'Admins, group owner, bot, sudo users'],
         ],
       }));
+      break;
+    }
+
+    // ── Join Approval — WhatsApp-side commands ──
+    // These mirror the Telegram per-group dashboard approval features.
+    // All require the bot to be a group admin.
+
+    case 'pendingjoin': {
+      if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
+      try {
+        const sock = socket as unknown as {
+          groupRequestParticipantsList(jid: string): Promise<Array<{ jid: string; phoneNumber?: string }>>;
+        };
+        const pending = await sock.groupRequestParticipantsList(groupJid);
+        if (pending.length === 0) {
+          await reply(warningCard('NO PENDING REQUESTS', 'There are currently no pending join requests for this group.'));
+          break;
+        }
+        await reply(asciiBox({
+          title: 'PENDING JOIN REQUESTS',
+          emoji: '🚪',
+          rows: [
+            ['Total', String(pending.length)],
+            ...pending.slice(0, 10).map((r, i): [string, string] => [
+              `#${i + 1}`,
+              `+${(r.phoneNumber ?? r.jid.split('@')[0] ?? '').replace(/[^0-9]/g, '')}`,
+            ]),
+            ...(pending.length > 10 ? [['…', `+${pending.length - 10} more`] as [string, string]] : []),
+          ],
+          footer: `Use ${config.prefix}approveall, ${config.prefix}approveamt <n>, or ${config.prefix}approvecountry <code>`,
+        }));
+      } catch (err) {
+        await reply(errorCard('PENDING REQUESTS FAILED', 'Could not fetch join requests. Make sure the bot is an admin.', String(err)));
+      }
+      break;
+    }
+
+    case 'approveall': {
+      if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
+      const meta_aa = await fetchGroupMeta(socket, groupJid);
+      if (!meta_aa?.botIsAdmin) { await reply(errorCard('APPROVE ALL', 'I need to be a group admin to manage join requests.')); break; }
+      try {
+        const sock = socket as unknown as {
+          groupRequestParticipantsList(jid: string): Promise<Array<{ jid: string }>>;
+          groupRequestParticipantsUpdate(jid: string, p: string[], action: 'approve' | 'reject'): Promise<unknown>;
+        };
+        const pending_aa = await sock.groupRequestParticipantsList(groupJid);
+        if (pending_aa.length === 0) {
+          await reply(warningCard('NOTHING TO APPROVE', 'No pending join requests found.')); break;
+        }
+        const updateProgress_aa = await createProgressReply(asciiBox({
+          title: 'APPROVE ALL — RUNNING',
+          emoji: '✅',
+          rows: [['Pending', String(pending_aa.length)], ['Status', 'APPROVING']],
+        }));
+        let approved_aa = 0, failed_aa = 0;
+        const BATCH_aa = 20;
+        for (let i = 0; i < pending_aa.length; i += BATCH_aa) {
+          const batch = pending_aa.slice(i, i + BATCH_aa).map((r) => r.jid);
+          try {
+            await sock.groupRequestParticipantsUpdate(groupJid, batch, 'approve');
+            approved_aa += batch.length;
+          } catch {
+            for (const j of batch) {
+              try { await sock.groupRequestParticipantsUpdate(groupJid, [j], 'approve'); approved_aa++; }
+              catch { failed_aa++; }
+            }
+          }
+          if (i + BATCH_aa < pending_aa.length) {
+            await updateProgress_aa(asciiBox({
+              title: 'APPROVE ALL — RUNNING',
+              emoji: '✅',
+              rows: [
+                ['Total', String(pending_aa.length)],
+                ['Approved', String(approved_aa)],
+                ['Failed', String(failed_aa)],
+                ['Remaining', String(pending_aa.length - approved_aa - failed_aa)],
+              ],
+            }));
+            await new Promise((r) => setTimeout(r, 800));
+          }
+        }
+        await updateProgress_aa(asciiBox({
+          title: 'APPROVE ALL — COMPLETE',
+          emoji: '✅',
+          rows: [
+            ['Total', String(pending_aa.length)],
+            ['Approved', String(approved_aa)],
+            ['Failed', String(failed_aa)],
+          ],
+        }));
+      } catch (err) {
+        await reply(errorCard('APPROVE ALL FAILED', String(err)));
+      }
+      break;
+    }
+
+    case 'rejectall': {
+      if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
+      const meta_ra = await fetchGroupMeta(socket, groupJid);
+      if (!meta_ra?.botIsAdmin) { await reply(errorCard('REJECT ALL', 'I need to be a group admin to manage join requests.')); break; }
+      try {
+        const sock = socket as unknown as {
+          groupRequestParticipantsList(jid: string): Promise<Array<{ jid: string }>>;
+          groupRequestParticipantsUpdate(jid: string, p: string[], action: 'approve' | 'reject'): Promise<unknown>;
+        };
+        const pending_ra = await sock.groupRequestParticipantsList(groupJid);
+        if (pending_ra.length === 0) {
+          await reply(warningCard('NOTHING TO REJECT', 'No pending join requests found.')); break;
+        }
+        let rejected_ra = 0, failed_ra = 0;
+        const BATCH_ra = 20;
+        for (let i = 0; i < pending_ra.length; i += BATCH_ra) {
+          const batch = pending_ra.slice(i, i + BATCH_ra).map((r) => r.jid);
+          try {
+            await sock.groupRequestParticipantsUpdate(groupJid, batch, 'reject');
+            rejected_ra += batch.length;
+          } catch {
+            for (const j of batch) {
+              try { await sock.groupRequestParticipantsUpdate(groupJid, [j], 'reject'); rejected_ra++; }
+              catch { failed_ra++; }
+            }
+          }
+          if (i + BATCH_ra < pending_ra.length) await new Promise((r) => setTimeout(r, 500));
+        }
+        await reply(asciiBox({
+          title: 'REJECT ALL — COMPLETE',
+          emoji: '🚫',
+          rows: [['Rejected', String(rejected_ra)], ['Failed', String(failed_ra)]],
+        }));
+      } catch (err) {
+        await reply(errorCard('REJECT ALL FAILED', String(err)));
+      }
+      break;
+    }
+
+    case 'approveamt': {
+      if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
+      const amtStr = args[0];
+      const amt = amtStr ? parseInt(amtStr, 10) : 0;
+      if (!amt || amt < 1) {
+        await reply(warningCard('AMOUNT REQUIRED', `Usage: ${config.prefix}approveamt <number>\nExample: ${config.prefix}approveamt 50`));
+        break;
+      }
+      const meta_amt = await fetchGroupMeta(socket, groupJid);
+      if (!meta_amt?.botIsAdmin) { await reply(errorCard('APPROVE BY AMOUNT', 'I need to be a group admin to manage join requests.')); break; }
+      try {
+        const sock = socket as unknown as {
+          groupRequestParticipantsList(jid: string): Promise<Array<{ jid: string }>>;
+          groupRequestParticipantsUpdate(jid: string, p: string[], action: 'approve' | 'reject'): Promise<unknown>;
+        };
+        const all_amt = await sock.groupRequestParticipantsList(groupJid);
+        const toApprove = all_amt.slice(0, amt);
+        if (toApprove.length === 0) {
+          await reply(warningCard('NOTHING TO APPROVE', 'No pending join requests found.')); break;
+        }
+        const updateProgress_amt = await createProgressReply(asciiBox({
+          title: 'APPROVE BY AMOUNT',
+          emoji: '✅',
+          rows: [['Requested', String(amt)], ['Available', String(all_amt.length)], ['Status', 'APPROVING']],
+        }));
+        let approved_amt = 0, failed_amt = 0;
+        const BATCH_amt = 20;
+        for (let i = 0; i < toApprove.length; i += BATCH_amt) {
+          const batch = toApprove.slice(i, i + BATCH_amt).map((r) => r.jid);
+          try {
+            await sock.groupRequestParticipantsUpdate(groupJid, batch, 'approve');
+            approved_amt += batch.length;
+          } catch {
+            for (const j of batch) {
+              try { await sock.groupRequestParticipantsUpdate(groupJid, [j], 'approve'); approved_amt++; }
+              catch { failed_amt++; }
+            }
+          }
+          if (i + BATCH_amt < toApprove.length) await new Promise((r) => setTimeout(r, 800));
+        }
+        await updateProgress_amt(asciiBox({
+          title: 'APPROVE BY AMOUNT — COMPLETE',
+          emoji: '✅',
+          rows: [
+            ['Requested', String(amt)],
+            ['Approved', String(approved_amt)],
+            ['Failed', String(failed_amt)],
+            ['Remaining (total)', String(all_amt.length - toApprove.length)],
+          ],
+        }));
+      } catch (err) {
+        await reply(errorCard('APPROVE BY AMOUNT FAILED', String(err)));
+      }
+      break;
+    }
+
+    case 'approvecountry': {
+      if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
+      const rawCode = args[0];
+      const countryDigits = rawCode ? rawCode.replace(/[^0-9]/g, '') : '';
+      if (!countryDigits) {
+        await reply(warningCard('COUNTRY CODE REQUIRED',
+          `Usage: ${config.prefix}approvecountry <code>\nExamples: ${config.prefix}approvecountry 234 (Nigeria) or ${config.prefix}approvecountry +1 (USA)`
+        ));
+        break;
+      }
+      const meta_ac = await fetchGroupMeta(socket, groupJid);
+      if (!meta_ac?.botIsAdmin) { await reply(errorCard('APPROVE BY COUNTRY', 'I need to be a group admin to manage join requests.')); break; }
+      try {
+        const sock = socket as unknown as {
+          groupRequestParticipantsList(jid: string): Promise<Array<{ jid: string; phoneNumber?: string }>>;
+          groupRequestParticipantsUpdate(jid: string, p: string[], action: 'approve' | 'reject'): Promise<unknown>;
+        };
+        const all_ac = await sock.groupRequestParticipantsList(groupJid);
+        const matched_ac = all_ac.filter((r) => {
+          const num = (r.phoneNumber ?? '').replace(/[^0-9]/g, '') || (r.jid.split('@')[0] ?? '').split(':')[0];
+          return num.startsWith(countryDigits);
+        });
+        if (matched_ac.length === 0) {
+          await reply(warningCard('NO MATCHES', `No pending requests with country code +${countryDigits}.\nTotal pending: ${all_ac.length}`));
+          break;
+        }
+        const updateProgress_ac = await createProgressReply(asciiBox({
+          title: 'APPROVE BY COUNTRY',
+          emoji: '✅',
+          rows: [
+            ['Country', `+${countryDigits}`],
+            ['Matched', String(matched_ac.length)],
+            ['Total pending', String(all_ac.length)],
+            ['Status', 'APPROVING'],
+          ],
+        }));
+        let approved_ac = 0, failed_ac = 0;
+        const BATCH_ac = 20;
+        for (let i = 0; i < matched_ac.length; i += BATCH_ac) {
+          const batch = matched_ac.slice(i, i + BATCH_ac).map((r) => r.jid);
+          try {
+            await sock.groupRequestParticipantsUpdate(groupJid, batch, 'approve');
+            approved_ac += batch.length;
+          } catch {
+            for (const j of batch) {
+              try { await sock.groupRequestParticipantsUpdate(groupJid, [j], 'approve'); approved_ac++; }
+              catch { failed_ac++; }
+            }
+          }
+          if (i + BATCH_ac < matched_ac.length) await new Promise((r) => setTimeout(r, 800));
+        }
+        await updateProgress_ac(asciiBox({
+          title: 'APPROVE BY COUNTRY — COMPLETE',
+          emoji: '✅',
+          rows: [
+            ['Country', `+${countryDigits}`],
+            ['Matched', String(matched_ac.length)],
+            ['Approved', String(approved_ac)],
+            ['Failed', String(failed_ac)],
+            ['Remaining (other)', String(all_ac.length - matched_ac.length)],
+          ],
+        }));
+      } catch (err) {
+        await reply(errorCard('APPROVE BY COUNTRY FAILED', String(err)));
+      }
       break;
     }
 

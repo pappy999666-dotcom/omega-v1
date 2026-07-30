@@ -24,6 +24,7 @@ import {
   fetchGroupMeta,
   isProtectedJid,
   bestRealJid,
+  bustGroupMetaCache,
 } from '../utils/group-permissions.js';
 
 // Modules
@@ -281,6 +282,10 @@ export async function handleParticipantUpdate(
 ): Promise<void> {
   const { id: groupJid, participants, action, author } = update;
   if (!groupJid.endsWith('@g.us')) return;
+
+  // Participant roles changed — bust the metadata cache so the next
+  // fetchGroupMeta call sees the updated admin list.
+  bustGroupMetaCache(socket, groupJid);
 
   const gc = loadGroupAntiConfig(telegramId, sessionId, groupJid);
 
