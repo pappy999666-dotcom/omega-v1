@@ -111,9 +111,18 @@ export async function fetchGroupMeta(
       }>;
     }).groupMetadata(groupJid);
 
-    const rawBotJid = (socket as unknown as { user?: { id?: string } }).user?.id ?? '';
-    const botJid = stripDeviceSuffix(rawBotJid);
-    const botNum = numericId(botJid);
+    // ── Resolve bot identity (handles @s.whatsapp.net AND @lid accounts) ──────
+    // Newer WhatsApp accounts expose the bot in the participant list under a
+    // @lid JID whose numeric part is NOT the phone number.  We must try every
+    // identity form to reliably locate the bot's own participant entry.
+    const rawUser = (socket as unknown as { user?: { id?: string; lid?: string } }).user;
+    const rawBotJid  = rawUser?.id  ?? '';
+    const rawBotLid  = rawUser?.lid ?? '';
+
+    const botJid    = stripDeviceSuffix(rawBotJid);
+    const botLidJid = rawBotLid ? stripDeviceSuffix(rawBotLid) : '';
+    const botNum    = numericId(botJid);
+    const botLidNum = botLidJid ? numericId(botLidJid) : '';
 
     const participants: GroupParticipant[] = (meta.participants ?? []).map((p) => ({
       id: p.id,
@@ -121,7 +130,22 @@ export async function fetchGroupMeta(
       phoneNumber: p.phoneNumber,
     }));
 
-    const botParticipant = participants.find((p) => numericId(p.id) === botNum);
+    const botParticipant = participants.find((p) => {
+      const pStripped = stripDeviceSuffix(p.id);
+      // 1. Exact stripped-JID match (most reliable; catches both @s.whatsapp.net and @lid)
+      if (botJid    && pStripped === botJid)    return true;
+      if (botLidJid && pStripped === botLidJid) return true;
+      // 2. Numeric match — works for standard @s.whatsapp.net participants
+      const pNum = numericId(p.id);
+      if (botNum    && !p.id.endsWith('@lid') && pNum === botNum)    return true;
+      if (botLidNum && p.id.endsWith('@lid')  && pNum === botLidNum) return true;
+      // 3. Phone-number field fallback (populated by Baileys for some @lid entries)
+      if (botNum && p.phoneNumber) {
+        const clean = p.phoneNumber.replace(/\D/g, '');
+        if (clean && clean === botNum) return true;
+      }
+      return false;
+    });
     const botIsAdmin =
       botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin';
 
