@@ -1,0 +1,199 @@
+WhatsApp Bot Stability, Performance & Feature Parity Update
+
+Perform a complete stability and performance pass across the WhatsApp bot before pushing the changes to GitHub. Do not apply quick patches—identify the root cause of each issue and refactor where necessary.
+
+---
+
+1. Bot Cannot Detect Its Own Admin Status
+
+The bot is no longer correctly detecting whether it is a group admin.
+
+Audit the permission system and participant metadata.
+
+Every command that requires admin privileges must correctly determine:
+
+- Whether the bot is a group admin.
+- Whether the bot is the group owner (where applicable).
+- Whether the target user is an admin.
+- Whether the target user is the group owner.
+- Whether the target is protected (Owner/Sudo).
+
+This check must be reliable and cached efficiently to avoid repeated metadata requests while still updating when group roles change.
+
+---
+
+2. Performance Optimization
+
+The bot has become noticeably slower.
+
+Profile the entire command pipeline and identify bottlenecks.
+
+Optimize:
+
+- Event listeners
+- Message parsing
+- Anti System
+- Group metadata lookups
+- Permission checks
+- Database operations
+- Command routing
+- Media processing
+
+Goals:
+
+- Minimize unnecessary API calls.
+- Cache frequently used metadata safely.
+- Process events concurrently where appropriate.
+- Prevent one command from blocking another.
+- Keep memory usage low.
+- Maintain smooth performance in groups with 1,000+ members.
+
+The Anti System should remain event-driven and lightweight.
+
+---
+
+3. Welcome & Goodbye Still Not Working
+
+The Welcome and Goodbye system is still not detecting member events.
+
+Do not create a custom workaround if @crysnovax/baileys already exposes the required participant update events.
+
+Instead:
+
+- Audit the existing Baileys event implementation.
+- Ensure the correct event listeners are registered.
+- Ensure listeners survive reconnects.
+- Verify join, leave, remove, and add events all trigger correctly.
+- Confirm welcome and goodbye messages are sent only once per event.
+
+---
+
+4. WhatsApp Menu Redesign
+
+Split the WhatsApp menu into two levels.
+
+Main Menu
+
+The normal ".menu" command should focus on general bot commands.
+
+New Group Menu
+
+Add a dedicated command:
+
+.gmenu
+
+This menu should contain every group-related feature, including:
+
+- Anti System
+- Kick
+- dnkick
+- Promote
+- Demote
+- Ban
+- Unban
+- Warn
+- Tag
+- Poll
+- Welcome
+- Goodbye
+- Group Status
+- Group Settings
+- Link Management
+- Permit Management
+- AutoBlock
+- BlockAll
+- Group Information
+- Join Approval
+- Custom Responses
+
+Every new group command added in the future should automatically register itself inside ".gmenu" so the menu never becomes outdated.
+
+---
+
+5. Join Approval Fixes
+
+The join approval system is not detecting large approval queues correctly.
+
+Audit the approval flow.
+
+It must correctly retrieve every pending join request, even when a group has many requests.
+
+Fix:
+
+- Approve All
+- Approve by Amount
+- Approve by Country
+
+The country filter should:
+
+- Detect the country using the phone number prefix.
+- Work correctly with hundreds or thousands of pending requests.
+- Display how many requests match before approval.
+- Skip unmatched requests.
+
+---
+
+6. Stronger Anti System
+
+Further optimize the Anti System for large communities.
+
+Requirements:
+
+- Stable in 1,000+ member groups.
+- Extremely low latency.
+- Independent listeners per module.
+- Shared parsing layer to avoid duplicate message processing.
+- Efficient caching.
+- Concurrent execution where safe.
+- No duplicate scans of the same message.
+- Graceful error isolation.
+
+One detector failing must never stop the others.
+
+---
+
+7. Telegram ↔ WhatsApp Feature Parity
+
+The Telegram Group Dashboard already contains useful per-group management features.
+
+Bring those management features to WhatsApp wherever practical.
+
+The WhatsApp Group Menu (".gmenu") should expose the same capabilities available in the Telegram per-group dashboard, adapted for chat commands.
+
+This includes group configuration, Anti System controls, join approval management, moderation settings, custom responses, and other group management tools, so users can manage a group directly from WhatsApp without needing Telegram.
+
+---
+
+8. Command Registration
+
+Whenever a new command is added:
+
+- Register it automatically.
+- Add it to the correct menu (".menu" or ".gmenu").
+- Include help text.
+- Include permission requirements.
+- Include aliases where applicable.
+
+Avoid hardcoded menu lists that become outdated.
+
+---
+
+9. Final QA Before Push
+
+Before pushing to GitHub:
+
+- Audit all modified files.
+- Verify no existing commands were broken.
+- Test admin detection.
+- Test Welcome/Goodbye.
+- Test all Anti modules.
+- Test join approval.
+- Test ".menu".
+- Test ".gmenu".
+- Test large-group performance.
+- Test permission handling.
+- Test session isolation.
+
+Only after all tests pass should the changes be committed and pushed to GitHub.
+
+The objective is a fast, reliable, production-ready WhatsApp bot that scales to large groups while maintaining feature parity between Telegram and WhatsApp management.

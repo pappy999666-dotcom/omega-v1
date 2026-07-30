@@ -36,6 +36,8 @@ import { PreviewManager } from '../preview-engine/index.js';
 import { statusDesignEngine } from '../services/StatusDesignEngine.js';
 import type { SessionMeta } from '../types/index.js';
 import { pendingGcCodes } from '../telegram/bot.js';
+import { ALL_COMMANDS } from './command-parser.js';
+import { buildMenuSections, buildGroupMenuSections } from './menu-registry.js';
 // ── Anti System ───────────────────────────────────────────
 import { runAntiChecks, handleParticipantUpdate } from './anti-system/index.js';
 import {
@@ -503,109 +505,16 @@ async function processMessage(
       break;
     }
 
-    // ── Menu ──
+    // ── Menu (general commands) ──
     case 'menu':
     case 'help': {
-      await reply(whatsappMenu('WA-BRIDGE CONTROL', [
-        {
-          heading: '◈ STATUS ENGINE',
-          items: [
-            { cmd: config.prefix + 'godcast', desc: 'Designed current-GC status' },
-            { cmd: config.prefix + 'statusdesign', desc: 'Designed current-GC status' },
-            { cmd: config.prefix + 'settheme', desc: 'Set status theme' },
-            { cmd: config.prefix + 'smedia', desc: 'Post media status' },
-            { cmd: config.prefix + 'gstatus [msg]', desc: 'Post to current group status' },
-            { cmd: config.prefix + 'tochat [jid] [msg]', desc: 'Send to a target group' },
-            { cmd: config.prefix + 'togstatus [jid] [msg]', desc: 'Post to a target group status' },
-            { cmd: config.prefix + 'tochatx [jid] [n] [msg]', desc: 'Repeat a target chat send' },
-            { cmd: config.prefix + 'togstatusx [n] [jid] [msg]', desc: 'Repeat a target group status' },
-            { cmd: config.prefix + 'sstatus [msg]', desc: 'Run status loop until stopspam' },
-          ],
-        },
-        {
-          heading: '◈ BROADCAST NETWORK',
-          items: [
-            { cmd: config.prefix + 'allstatus [msg]', desc: 'Post to all group statuses' },
-            { cmd: config.prefix + 'allstatusx [n] [msg]', desc: 'Repeat across every group' },
-            { cmd: config.prefix + 'allchat [msg]', desc: 'Send to all groups with hidetag' },
-            { cmd: config.prefix + 'stopspam', desc: 'Stop the active status loop' },
-          ],
-        },
-        {
-          heading: '◈ LIFECYCLE MODULE',
-          items: [
-            { cmd: config.prefix + 'join [link]', desc: 'Join a group' },
-            { cmd: config.prefix + 'leave [jid]', desc: 'Leave a group' },
-            { cmd: config.prefix + 'joinall', desc: 'Join all active bucket links' },
-            { cmd: config.prefix + 'left', desc: 'Leave the current group' },
-            { cmd: config.prefix + 'leaveall', desc: 'Leave all groups' },
-          ],
-        },
-        {
-          heading: '◈ TAG ENGINE',
-          items: [
-            { cmd: config.prefix + 'tag', desc: 'Hidetag all members' },
-            { cmd: config.prefix + 'mtag', desc: 'Visible mention all members' },
-          ],
-        },
-        {
-          heading: '◈ PAIRING',
-          items: [
-            { cmd: config.prefix + 'pair [phone]', desc: 'Pair a new WA number from WhatsApp' },
-          ],
-        },
-        {
-          heading: '◈ SYSTEM CONFIG',
-          items: [
-            { cmd: config.prefix + 'setprefix [p]', desc: 'Change command prefix' },
-            { cmd: config.prefix + 'setcmd [cmd]', desc: 'Bind quoted sticker to command' },
-            { cmd: config.prefix + 'delcmd', desc: 'Delete quoted sticker binding' },
-            { cmd: config.prefix + 'setsudo [number]', desc: 'Grant command access (or reply to msg)' },
-            { cmd: config.prefix + 'delsudo [number]', desc: 'Revoke command access' },
-            { cmd: config.prefix + 'info', desc: 'Session information' },
-            { cmd: config.prefix + 'groups', desc: 'List joined groups' },
-            { cmd: config.prefix + 'userinfo', desc: 'Show user JID, number & LID' },
-          ],
-        },
-        {
-          heading: '◈ GROUP MODERATION',
-          items: [
-            { cmd: config.prefix + 'kick', desc: 'Kick member (reply / @mention / number)' },
-            { cmd: config.prefix + 'ban / unban', desc: 'Ban or unban a member' },
-            { cmd: config.prefix + 'banlist', desc: 'View ban list for this group' },
-            { cmd: config.prefix + 'promote / demote', desc: 'Grant or remove admin' },
-            { cmd: config.prefix + 'warn / unwarn / warns', desc: 'Issue, clear, or check warnings' },
-            { cmd: config.prefix + 'poll Q|A|B', desc: 'Create a group poll' },
-            { cmd: config.prefix + 'welcome / goodbye', desc: 'Welcome & goodbye messages' },
-            { cmd: config.prefix + 'kickmsg / warnmsg / banmsg', desc: 'Customise action responses' },
-            { cmd: config.prefix + 'eventstatus', desc: 'Group event config overview' },
-          ],
-        },
-        {
-          heading: '◈ ANTI SYSTEM',
-          items: [
-            { cmd: config.prefix + 'antistatus', desc: 'Overview of all anti modules' },
-            { cmd: config.prefix + 'antilink <kick|warn|delete>', desc: 'Block links' },
-            { cmd: config.prefix + 'antibot', desc: 'Remove automation clients' },
-            { cmd: config.prefix + 'antispam', desc: 'Rate-limit spammers' },
-            { cmd: config.prefix + 'spamlimit <n> <sec>', desc: 'Adjust spam window' },
-            { cmd: config.prefix + 'antipic / antivid / antiaud', desc: 'Block media types' },
-            { cmd: config.prefix + 'antivn / antitxt', desc: 'Block voice notes / plain text' },
-            { cmd: config.prefix + 'antiemoji / antisticker', desc: 'Block emoji / stickers' },
-            { cmd: config.prefix + 'antigroupcall', desc: 'Block group calls' },
-            { cmd: config.prefix + 'antinsfw', desc: 'NSFW detection (needs API URL)' },
-            { cmd: config.prefix + 'antigroupmention', desc: 'Block @group mentions' },
-            { cmd: config.prefix + 'antiwords', desc: 'Block custom word list' },
-            { cmd: config.prefix + 'antiaddword / antirmword', desc: 'Add / remove blocked words' },
-            { cmd: config.prefix + 'antiwordlist', desc: 'Show blocked word list' },
-            { cmd: config.prefix + 'antipoll / antiforward', desc: 'Block polls / forwards' },
-            { cmd: config.prefix + 'antichannel', desc: 'Block channel reposts' },
-            { cmd: config.prefix + 'antipromote / antidemote', desc: 'Guard admin changes' },
-            { cmd: config.prefix + '<module>permit / rm<module>permit', desc: 'Exempt / un-exempt a user' },
-            { cmd: config.prefix + '<module>msg <text>', desc: 'Custom violation response' },
-          ],
-        },
-      ]));
+      await reply(whatsappMenu('WA-BRIDGE CONTROL', buildMenuSections(config.prefix, ALL_COMMANDS)));
+      break;
+    }
+
+    // ── Group Menu (moderation + anti system) ──
+    case 'gmenu': {
+      await reply(whatsappMenu('GROUP TOOLS', buildGroupMenuSections(config.prefix, ALL_COMMANDS)));
       break;
     }
 

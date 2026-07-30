@@ -127,7 +127,7 @@ export const ALL_COMMANDS = [
   // Settings
   'setprefix', 'setcmd', 'delcmd', 'setsudo', 'delsudo', 'sudo', 'prefix',
   // Info
-  'menu', 'help', 'ping', 'info', 'groups', 'jid', 'userinfo', 'getinfo',
+  'menu', 'help', 'gmenu', 'ping', 'info', 'groups', 'jid', 'userinfo', 'getinfo',
   // Bucket
   'addlink',
   // Group Moderation
