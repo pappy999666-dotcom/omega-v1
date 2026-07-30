@@ -652,7 +652,7 @@ export function createBot(): Telegraf<BotContext> {
           groupMetadata(jid: string): Promise<{ participants: { id: string; admin?: string | null; phoneNumber?: string }[] }>;
           groupParticipantsUpdate(jid: string, p: string[], action: string): Promise<unknown>;
           groupInviteCode(jid: string): Promise<string>;
-          groupRequestParticipantsList(jid: string): Promise<Array<{ jid: string; addedBy?: string }>>;
+          groupRequestParticipantsList(jid: string): Promise<Array<{ jid: string; addedBy?: string; phoneNumber?: string; phone_number?: string }>>;
           groupRequestParticipantsUpdate(jid: string, participants: string[], action: 'approve' | 'reject'): Promise<unknown>;
         };
         const meta = await sock.groupMetadata(gcJid);
@@ -665,10 +665,17 @@ export function createBot(): Telegraf<BotContext> {
 
         if (!member) {
           // Check pending join requests first — auto-approve if found
-          const pending = await sock.groupRequestParticipantsList(gcJid).catch((): Array<{ jid: string; addedBy?: string; phoneNumber?: string }> => []);
+          const pending = await sock.groupRequestParticipantsList(gcJid).catch((): Array<{ jid: string; addedBy?: string; phoneNumber?: string; phone_number?: string }> => []);
           const pendingMatch = pending.find((r) => {
-            const rNum = (r.jid.split('@')[0] ?? '').split(':')[0];
-            return rNum === digits;
+            // Prefer phone number field (both camelCase and raw snake_case attrs from Baileys)
+            const phoneRaw = (r.phone_number ?? r.phoneNumber ?? '').replace(/[^0-9]/g, '');
+            if (phoneRaw) return phoneRaw === digits || phoneRaw.endsWith(digits) || digits.endsWith(phoneRaw);
+            // For @s.whatsapp.net JIDs the local part IS the phone number
+            if (!r.jid.endsWith('@lid')) {
+              const rNum = (r.jid.split('@')[0] ?? '').split(':')[0];
+              return rNum === digits;
+            }
+            return false;
           });
           if (pendingMatch) {
             await sock.groupRequestParticipantsUpdate(gcJid, [pendingMatch.jid], 'approve');
@@ -806,17 +813,26 @@ export function createBot(): Telegraf<BotContext> {
       const socket = getSocket(sessionId);
       if (!socket || isFrozen(sessionId)) { await ctx.reply(noticeCard('Failed', 'Session not connected.', 'warning'), { parse_mode: 'HTML' }); return; }
       const sock2 = socket as unknown as {
-        groupRequestParticipantsList(jid: string): Promise<Array<{ jid: string; phoneNumber?: string }>>;
+        groupRequestParticipantsList(jid: string): Promise<Array<{ jid: string; phoneNumber?: string; phone_number?: string }>>;
         groupRequestParticipantsUpdate(jid: string, participants: string[], action: 'approve' | 'reject'): Promise<unknown>;
       };
-      let pending: Array<{ jid: string; phoneNumber?: string }> = [];
+      let pending: Array<{ jid: string; phoneNumber?: string; phone_number?: string }> = [];
       try { pending = await sock2.groupRequestParticipantsList(gcJid); } catch (err) {
         await ctx.reply(noticeCard('Failed', String(err), 'error'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}:approverequests`) });
         return;
       }
       const matched = pending.filter((r) => {
-        const num = (r.phoneNumber ?? '').replace(/[^0-9]/g, '') || (r.jid.split('@')[0] ?? '').split(':')[0];
-        return num.startsWith(countryDigits);
+        // Baileys returns raw XML attrs — key may be snake_case phone_number OR camelCase phoneNumber.
+        const phoneRaw = (r.phone_number ?? r.phoneNumber ?? '').replace(/[^0-9]/g, '');
+        if (phoneRaw) return phoneRaw.startsWith(countryDigits);
+        // For @s.whatsapp.net JIDs the local part IS the E.164 number — safe to match.
+        if (!r.jid.endsWith('@lid')) {
+          const jidNum = (r.jid.split('@')[0] ?? '').split(':')[0]!;
+          return jidNum.startsWith(countryDigits);
+        }
+        // @lid JID with no phone number — country is unresolvable; include in the
+        // batch so LID-format Nigerian requesters are not silently skipped.
+        return true;
       });
       if (matched.length === 0) {
         await ctx.reply(noticeCard('No Matches', `No pending requests found with country code +${countryDigits}.`, 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`gcset:${sessionId}:${gcKey}:approverequests`) });
@@ -1794,7 +1810,7 @@ async function routeCallback(
       groupParticipantsUpdate(jid: string, p: string[], action: string): Promise<unknown>;
       profilePictureUrl(jid: string, type: string): Promise<string | null>;
       groupInviteCode(jid: string): Promise<string>;
-      groupRequestParticipantsList(jid: string): Promise<Array<{ jid: string; addedBy?: string; phoneNumber?: string }>>;
+      groupRequestParticipantsList(jid: string): Promise<Array<{ jid: string; addedBy?: string; phoneNumber?: string; phone_number?: string }>>;
       groupRequestParticipantsUpdate(jid: string, participants: string[], action: 'approve' | 'reject'): Promise<unknown>;
       user?: { id?: string };
     };
