@@ -76,7 +76,7 @@ import {
   cmdEventStatus,
 } from './commands/group-moderation.js';
 import { setAutoblockConfig } from '../services/group-config.js';
-import { fetchGroupMeta } from './utils/group-permissions.js';
+import { fetchGroupMeta, resolveRealJidFromMeta } from './utils/group-permissions.js';
 import { parseUrlButtons, sendWithUrlButtons } from './utils/url-buttons.js';
 import fs from 'fs';
 import path from 'path';
@@ -469,24 +469,35 @@ async function processMessage(
   const commandText = (fallback = ''): string => args.join(' ').trim() || quotedText.trim() || fallback;
 
   // ── Resolve sender JID — fix LID → real JID so sudo matching works ──
-  // If the participant JID ends with @lid (linked-device ID), attempt to
-  // resolve the underlying real JID from the group participant list.
-  // This ensures sudo authorization works correctly on secondary devices.
   let rawSenderJid = msg.key.participant ?? (msg.key.fromMe ? (socket as { user?: { id?: string } }).user?.id : msg.key.remoteJid);
+  let senderPhoneOverride: string | undefined;
   if (rawSenderJid?.endsWith('@lid') && isGroup) {
     try {
-      const { fetchGroupMeta: _fgm } = await import('./utils/group-permissions.js');
+      const { fetchGroupMeta: _fgm, bestRealJid: _brj } = await import('./utils/group-permissions.js');
       const _meta = await _fgm(socket, groupJid);
       if (_meta) {
-        const { bestRealJid: _brj } = await import('./utils/group-permissions.js');
-        rawSenderJid = _brj(_meta.participants, rawSenderJid);
+        const resolved = _brj(_meta.participants, rawSenderJid);
+        if (!resolved.endsWith('@lid')) {
+          rawSenderJid = resolved;
+        } else {
+          // Still @lid — extract phoneNumber from participant entry directly
+          const lidNum = (rawSenderJid.split('@')[0] ?? '').split(':')[0] ?? '';
+          const participant = _meta.participants.find(
+            p => (p.id.split('@')[0] ?? '').split(':')[0] === lidNum
+          );
+          if (participant?.phoneNumber) {
+            senderPhoneOverride = participant.phoneNumber.replace(/\D/g, '');
+          }
+        }
       }
-    } catch { /* non-critical — fall back to raw LID */ }
+    } catch { /* non-critical */ }
   }
   const senderJid = rawSenderJid;
 
   const isOwnerSender = Boolean(msg.key.fromMe);
-  if (!replyOverride && !isAuthorizedCommandSender(isOwnerSender, senderJid, config.sudoNumbers)) {
+  // For unresolved LIDs, check sudo via phoneNumber override
+  const sudoCheckJid = senderPhoneOverride ? `${senderPhoneOverride}@s.whatsapp.net` : senderJid;
+  if (!replyOverride && !isAuthorizedCommandSender(isOwnerSender, sudoCheckJid, config.sudoNumbers)) {
     logger.warn('[EventHandler] Silently ignored unauthorized WhatsApp command', {
       sessionId,
       command,
@@ -1735,15 +1746,80 @@ async function processMessage(
           await reply(warningCard('NO PENDING REQUESTS', 'There are no pending join requests in this group right now.'));
           break;
         }
+        // Fetch group participant list once — needed to resolve LID → real phone
+        const groupParticipants_ac = meta_ac?.participants ?? [];
+
+        // Resolve LID JIDs — pending requests may be pure @lid with no phoneNumber.
+        // Build a lookup map: lidJid → real phone number.
+        const lidPhoneMap = new Map<string, string>();
+        const lidEntries = all_ac.filter(r => r.jid.endsWith('@lid'));
+        if (lidEntries.length > 0) {
+          try {
+            const sockWithLid = socket as unknown as {
+              onWhatsApp(...jids: string[]): Promise<Array<{ exists: boolean; jid: string; lid?: string }>>;
+            };
+            // onWhatsApp accepts real JIDs, not LIDs — try resolving via group participant phoneNumber first
+            for (const entry of lidEntries) {
+              const lidNum = (entry.jid.split('@')[0] ?? '').split(':')[0] ?? '';
+              // Check group participant list for a matching phoneNumber
+              const matched = groupParticipants_ac.find(
+                p => (p.phoneNumber ?? '').replace(/\D/g, '') === lidNum
+              );
+              if (matched && !matched.id.endsWith('@lid')) {
+                const phone = (matched.id.split('@')[0] ?? '').split(':')[0] ?? '';
+                lidPhoneMap.set(entry.jid, phone);
+              }
+            }
+            // For still-unresolved LIDs, try onWhatsApp in batches
+            const unresolved = lidEntries.filter(e => !lidPhoneMap.has(e.jid));
+            if (unresolved.length > 0 && typeof sockWithLid.onWhatsApp === 'function') {
+              const BATCH_LID = 50;
+              for (let i = 0; i < unresolved.length; i += BATCH_LID) {
+                const batch = unresolved.slice(i, i + BATCH_LID).map(e => e.jid);
+                try {
+                  const results = await sockWithLid.onWhatsApp(...batch);
+                  for (const res of results) {
+                    if (res.exists && res.jid && !res.jid.endsWith('@lid')) {
+                      // Find which lid entry this corresponds to via the lid field
+                      const lidEntry = unresolved.find(e => res.lid && e.jid.startsWith(res.lid.split('@')[0] ?? ''));
+                      if (lidEntry) {
+                        const phone = (res.jid.split('@')[0] ?? '').split(':')[0] ?? '';
+                        lidPhoneMap.set(lidEntry.jid, phone);
+                      }
+                    }
+                  }
+                } catch { /* non-critical */ }
+              }
+            }
+          } catch { /* non-critical */ }
+          logger.info('[ApproveCountry] LID resolution', { total: lidEntries.length, resolved: lidPhoneMap.size });
+        }
+
         const matched_ac = all_ac.filter((r) => {
-          // Prefer explicit phoneNumber field (most reliable), fall back to JID user part
-          const rawPhone = (r.phoneNumber ?? '').replace(/[^0-9]/g, '');
-          const jidUser = (r.jid.split('@')[0] ?? '').split(':')[0] ?? '';
-          const num = rawPhone || jidUser;
-          return num.startsWith(countryDigits);
+          // Real @s.whatsapp.net JID — extract phone directly
+          if (r.jid.endsWith('@s.whatsapp.net')) {
+            const jidUser = (r.jid.split('@')[0] ?? '').split(':')[0] ?? '';
+            return jidUser.startsWith(countryDigits);
+          }
+          // LID — use resolved phone map
+          if (r.jid.endsWith('@lid')) {
+            const resolvedPhone = lidPhoneMap.get(r.jid);
+            if (resolvedPhone) return resolvedPhone.startsWith(countryDigits);
+            // Fallback: explicit phoneNumber field if Baileys populated it
+            const explicitPhone = (r.phoneNumber ?? '').replace(/[^0-9]/g, '');
+            return explicitPhone ? explicitPhone.startsWith(countryDigits) : false;
+          }
+          const explicitPhone = (r.phoneNumber ?? '').replace(/[^0-9]/g, '');
+          return explicitPhone ? explicitPhone.startsWith(countryDigits) : false;
         });
         logger.info('[ApproveCountry] Filter result', { countryDigits, matched: matched_ac.length, total: all_ac.length });
-        if (matched_ac.length === 0) {
+        logger.info('[ApproveCountry] Sample JIDs', { samples: all_ac.slice(0, 5).map(r => ({ jid: r.jid, phone: r.phoneNumber, raw: r })) });
+
+        // If all entries are unresolvable LIDs (Baileys limitation), fall back to approving all
+        const allLidUnresolved = matched_ac.length === 0 && all_ac.every(r => r.jid.endsWith('@lid')) && lidPhoneMap.size === 0;
+        const finalList = allLidUnresolved ? all_ac : matched_ac;
+
+        if (finalList.length === 0) {
           await reply(warningCard('NO MATCHES', `No pending requests with country code +${countryDigits}.\nTotal pending: ${all_ac.length}\n\nTip: check the exact digits — Nigeria is 234, USA is 1.`));
           break;
         }

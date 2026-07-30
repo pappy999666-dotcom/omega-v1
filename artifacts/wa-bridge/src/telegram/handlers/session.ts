@@ -24,6 +24,7 @@ import {
   getUserSockets,
   getSocket,
   normalizePairingPhone,
+  markPurged,
 } from '../../whatsapp/socket-manager.js';
 import { registerSessionOwner } from '../../whatsapp/event-handlers.js';
 import type { BridgeWASocket as WASocket } from '../../whatsapp/baileys-types.js';
@@ -526,6 +527,7 @@ export async function handlePurgeConfirm(
   ctx: Context & { telegramId: string },
   sessionId: string
 ): Promise<void> {
+  markPurged(sessionId);
   await closeSocket(sessionId);
   wsPurgeSession(ctx.telegramId, sessionId);
 

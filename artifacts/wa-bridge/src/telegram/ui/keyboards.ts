@@ -139,7 +139,8 @@ export function sessionMenuKeyboard(sessionId: string): InlineKeyboardMarkup {
       [btn('✏️ Set Name', `session:${sessionId}:setname`, 'primary'), btn('📝 Set Bio', `session:${sessionId}:setbio`, 'primary')],
       [btn('🔍 WA Info', `session:${sessionId}:wainfo`, 'primary'), btn('👥 Create GC', `session:${sessionId}:creategc`, 'success')],
       [btn('🚪 Leave GC', `session:${sessionId}:leavegc`, 'danger'), btn('📋 My Groups', `session:${sessionId}:mygroups`, 'primary')],
-      [btn('🌉 Bridge', `session:${sessionId}:bridge`, 'primary'), btn('🔙 Back', 'sessions:list', 'primary')],
+      [btn('🛡 Sudo List', `session:${sessionId}:sudo`, 'primary'), btn('🌉 Bridge', `session:${sessionId}:bridge`, 'primary')],
+      [btn('🔙 Back', 'sessions:list', 'primary')],
     ],
   };
 }

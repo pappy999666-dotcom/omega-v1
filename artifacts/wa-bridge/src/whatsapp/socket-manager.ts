@@ -91,6 +91,7 @@ const registry = new Map<string, SocketHandle>();
 const reconnectTimers = new Map<string, NodeJS.Timeout>();
 const socketGenerations = new Map<string, number>();
 const reconnectWindows = new Map<string, { startedAt: number; attempts: number }>();
+const purgedSessions = new Set<string>();
 const CUSTOM_PAIRING_CODE = 'PAPPYBOT';
 const MAX_RECONNECTS_PER_WINDOW = 8;
 const RECONNECT_WINDOW_MS = 10 * 60_000;
@@ -304,6 +305,13 @@ export async function initSocket(
         return;
       }
 
+      // Skip all recovery if this session was intentionally purged
+      if (purgedSessions.has(sessionId)) {
+        purgedSessions.delete(sessionId);
+        log.info('Skipping recovery for purged session', { sessionId });
+        return;
+      }
+
       // Update meta
       const currentMeta = { ...meta };
       currentMeta.errorCount = (currentMeta.errorCount ?? 0) + 1;
@@ -444,6 +452,11 @@ export async function closeSocket(sessionId: string): Promise<void> {
     }
     registry.delete(sessionId);
   }
+}
+
+/** Mark a session as intentionally purged so the disconnect handler skips recovery. */
+export function markPurged(sessionId: string): void {
+  purgedSessions.add(sessionId);
 }
 
 /**

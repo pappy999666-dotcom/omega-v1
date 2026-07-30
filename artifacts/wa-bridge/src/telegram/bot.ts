@@ -157,6 +157,7 @@ interface BotContext extends Context {
     awaitingGcSetField?: string;
     awaitingGcSetJid?: string;
     awaitingLeaveGcSessionId?: string;
+    awaitingSudoAddSessionId?: string;
     // Per-group bridge mode
     groupBridgeSessionId?: string;
     groupBridgeGcJid?: string;
@@ -895,6 +896,26 @@ export function createBot(): Telegraf<BotContext> {
       return;
     }
 
+    if (ctx.session?.awaitingSudoAddSessionId) {
+      const sessionId = ctx.session.awaitingSudoAddSessionId;
+      delete ctx.session.awaitingSudoAddSessionId;
+      const number = text.trim().replace(/\D/g, '');
+      if (number.length < 7) {
+        await ctx.reply(noticeCard('Invalid Number', 'Send a valid phone number e.g. 2348012345678', 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:sudo`) });
+        return;
+      }
+      const cfg = loadSessionConfig(ctx.telegramId, sessionId);
+      const current = new Set(cfg?.sudoNumbers ?? []);
+      if (current.has(number)) {
+        await ctx.reply(noticeCard('Already Sudo', `+${number} already has sudo access.`, 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:sudo`) });
+        return;
+      }
+      current.add(number);
+      updateSessionConfig(ctx.telegramId, sessionId, { sudoNumbers: [...current] });
+      await ctx.reply(noticeCard('Sudo Granted', `+${number} can now run commands on this session.`, 'success'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:sudo`) });
+      return;
+    }
+
     if (ctx.session?.awaitingForceJoin) {
       ctx.session.awaitingForceJoin = false;
       const targets = [...new Set(text.split(/[\s,]+/u).map((target) => target.trim()).filter(Boolean))];
@@ -1619,6 +1640,9 @@ async function routeCallback(
     if (sub === 'reinit') { await handleReinitSession(ctx, sessionId); return; }
     if (sub === 'purge' && params[2] === 'confirm') { await handlePurgeConfirm(ctx, sessionId); return; }
     if (sub === 'purge') { await handlePurgeSession(ctx, sessionId); return; }
+    if (sub === 'sudo' && params[2] === 'add') { await handleSudoAdd(ctx, sessionId); return; }
+    if (sub === 'sudo' && params[2] === 'del') { await handleSudoDel(ctx, sessionId, params[3]); return; }
+    if (sub === 'sudo') { await handleSudoMenu(ctx, sessionId); return; }
     if (sub === 'pfp') {
       const operation = params[2];
       const socket = getSocket(sessionId);
@@ -2699,12 +2723,72 @@ Reply directly to a WhatsApp sticker with ${H.code(`${macroConfig.prefix || ''}s
   }
 
   // Default fallback: never leave a rendered button apparently unresponsive.
+  if (action === 'verify' && params[0] === 'joined') {
+    await ctx.deleteMessage().catch(() => {});
+    await ctx.reply(
+      mainMenu(ctx.telegramId, ctx.isOwner),
+      { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(ctx.isOwner) }
+    );
+    return;
+  }
+
   await ctx.reply(noticeCard(
     'Unsupported Action',
     'This button is not available in the current bot version.',
     'warning',
     [action, ...params].join(':')
   ), { parse_mode: 'HTML' });
+}
+
+// ── Sudo Handlers ────────────────────────────────────────
+
+async function handleSudoMenu(ctx: BotContext, sessionId: string): Promise<void> {
+  const cfg = loadSessionConfig(ctx.telegramId, sessionId);
+  const numbers = cfg?.sudoNumbers ?? [];
+  const lines = numbers.length
+    ? numbers.map((n, i) => `${i + 1}. +${n}`).join('\n')
+    : 'No sudo numbers set.';
+  await ctx.editMessageText(
+    [
+      `<b>🛡 Sudo List</b>`,
+      `<code>------------------------------</code>`,
+      `<b>Session:</b> <code>${sessionId}</code>`,
+      ``,
+      H.blockquote(lines, true),
+    ].join('\n'),
+    {
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [btn('➕ Add Number', `session:${sessionId}:sudo:add`, 'success')],
+          ...numbers.map((n, i) => [btn(`🗑 Remove +${n}`, `session:${sessionId}:sudo:del:${i}`, 'danger')]),
+          [btn('🔙 Back', `session:${sessionId}:menu`, 'primary')],
+        ],
+      },
+    }
+  ).catch(() => {});
+}
+
+async function handleSudoAdd(ctx: BotContext, sessionId: string): Promise<void> {
+  ctx.session.awaitingSudoAddSessionId = sessionId;
+  await ctx.editMessageText(
+    card('Add Sudo Number', '🛡', [['Session', sessionId]], 'Send the full international number, e.g. 2348012345678.'),
+    { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:sudo`) }
+  ).catch(() => {});
+}
+
+async function handleSudoDel(ctx: BotContext, sessionId: string, indexStr: string | undefined): Promise<void> {
+  const idx = parseInt(indexStr ?? '', 10);
+  const cfg = loadSessionConfig(ctx.telegramId, sessionId);
+  const numbers = [...(cfg?.sudoNumbers ?? [])];
+  if (isNaN(idx) || idx < 0 || idx >= numbers.length) {
+    await ctx.answerCbQuery('Number not found', { show_alert: true }).catch(() => {});
+    return;
+  }
+  const removed = numbers.splice(idx, 1)[0];
+  updateSessionConfig(ctx.telegramId, sessionId, { sudoNumbers: numbers });
+  await ctx.answerCbQuery(`Removed +${removed}`, { show_alert: false }).catch(() => {});
+  await handleSudoMenu(ctx, sessionId);
 }
 
 // ── Alert Sender (used by socket manager) ────────────────
