@@ -171,6 +171,7 @@ export const ALL_COMMANDS = [
   'antinsfw', 'nsfwpermit', 'rmnsfwpermit',
   // AntiGroupMention
   'antigroupmention', 'mentionpermit', 'rmmentionpermit',
+  'antigm', 'gmpermit', 'rmgmpermit',
   // AntiWords
   'antiwords', 'antiaddword', 'antirmword', 'antiwordlist', 'antiwordsmsg',
   // AntiPoll

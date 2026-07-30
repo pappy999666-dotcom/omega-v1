@@ -1238,6 +1238,20 @@ async function processMessage(
       break;
     }
 
+    // ── AntiGM (Status Group Mentions) ──
+    case 'antigm': {
+      await reply(handleAntiCommand('antigm', 'antigm', args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+    case 'gmpermit': {
+      await reply(handlePermitCommand('antigm', true, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'rmgmpermit': {
+      await reply(handlePermitCommand('antigm', false, args, msg, telegramId, sessionId, groupJid));
+      break;
+    }
+
     // ── AntiWords ──
     case 'antiwords': {
       await reply(handleAntiCommand('antiwords', 'antiwords', args, telegramId, sessionId, groupJid, config.prefix));

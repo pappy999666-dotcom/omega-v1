@@ -45,7 +45,7 @@ function moduleLabel(key: string): string {
     antipic: 'AntiPic', antivid: 'AntiVid', antiaud: 'AntiAud',
     antivn: 'AntiVN', antitxt: 'AntiText', antiemoji: 'AntiEmoji',
     antisticker: 'AntiSticker', antigroupcall: 'AntiGroupCall',
-    antinsfw: 'AntiNSFW', antigroupmention: 'AntiGroupMention',
+    antinsfw: 'AntiNSFW', antigroupmention: 'AntiGroupMention', antigm: 'AntiGM',
     antiwords: 'AntiWords', antipoll: 'AntiPoll', antiforward: 'AntiForward',
     antichannel: 'AntiChannel', antipromote: 'AntiPromote', antidemote: 'AntiDemote',
   };
@@ -96,7 +96,8 @@ export function handleAntiCommand(
     : 3;
 
   const gc = loadGroupAntiConfig(telegramId, sessionId, groupJid);
-  const existing = gc[moduleKey] as AntiModuleConfig | undefined ?? defaultModuleConfig();
+  const existing = (gc[moduleKey] as AntiModuleConfig | undefined)
+    ?? (moduleKey === 'antispam' ? defaultSpamConfig() : defaultModuleConfig());
   (gc as unknown as Record<string, unknown>)[moduleKey] = {
     ...existing,
     enabled: true,
@@ -317,6 +318,7 @@ export function handleAntiStatus(
     ['AntiGroupCall', gc.antigroupcall?.enabled ? `✅ ${gc.antigroupcall.action}` : '❌ off'],
     ['AntiNSFW', gc.antinsfw?.enabled ? `✅ ${gc.antinsfw.action}` : '❌ off'],
     ['AntiGroupMention', gc.antigroupmention?.enabled ? `✅ ${gc.antigroupmention.action}` : '❌ off'],
+    ['AntiGM', gc.antigm?.enabled ? `✅ ${gc.antigm.action}` : '❌ off'],
     ['AntiWords', gc.antiwords?.enabled ? `✅ ${gc.antiwords.action} (${gc.antiwords.words.length} words)` : '❌ off'],
     ['AntiPoll', gc.antipoll?.enabled ? `✅ ${gc.antipoll.action}` : '❌ off'],
     ['AntiForward', gc.antiforward?.enabled ? `✅ ${gc.antiforward.action}` : '❌ off'],

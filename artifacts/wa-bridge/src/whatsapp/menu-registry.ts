@@ -178,6 +178,7 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
 
   // AntiGroupMention
   antigroupmention: { section: '◈ ANTI SYSTEM',  syntax: 'antigroupmention <kick|warn N|delete|off>', desc: 'Block @group / channel mention blasts', target: 'group' },
+  antigm: { section: '◈ ANTI SYSTEM', syntax: 'antigm <kick|warn N|delete|off>', desc: 'Handle WhatsApp Status group mentions', target: 'group' },
   mentionpermit:    { section: '◈ ANTI SYSTEM',  syntax: 'mentionpermit @user',       desc: 'Exempt from AntiGroupMention',               target: 'group', hidden: true },
   rmmentionpermit:  { section: '◈ ANTI SYSTEM',  syntax: 'rmmentionpermit @user',     desc: 'Remove AntiGroupMention exemption',          target: 'group', hidden: true },
 
