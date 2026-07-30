@@ -40,6 +40,7 @@ import { messageIsSticker } from './modules/anti-sticker.js';
 import { messageIsGroupCall } from './modules/anti-group-call.js';
 import { messageIsNSFW } from './modules/anti-nsfw.js';
 import { messageIsGroupMention } from './modules/anti-group-mention.js';
+import { messageIsGroupStatusMention } from './modules/anti-gm.js';
 import { messageContainsBlockedWord } from './modules/anti-words.js';
 import { messageIsPoll } from './modules/anti-poll.js';
 import { messageIsForwarded } from './modules/anti-forward.js';
@@ -49,7 +50,7 @@ import type { AntiModuleConfig } from './types.js';
 type ModuleKey =
   | 'antilink' | 'antibot' | 'antispam' | 'antipic' | 'antivid' | 'antiaud'
   | 'antivn' | 'antitxt' | 'antiemoji' | 'antisticker' | 'antigroupcall'
-  | 'antinsfw' | 'antigroupmention' | 'antiwords' | 'antipoll'
+  | 'antinsfw' | 'antigroupmention' | 'antigm' | 'antiwords' | 'antipoll'
   | 'antiforward' | 'antichannel';
 
 /** Check if sender is in a module's permit list */
@@ -193,7 +194,8 @@ export async function runAntiChecks(
     const spamCfg = gc.antispam;
     if (spamCfg?.enabled && !isPermitted(spamCfg, senderNumber)) {
       const count = recordSpamMessage(sessionId, groupJid, senderNumber, spamCfg.windowSeconds);
-      if (count > spamCfg.messageLimit) {
+      logger.debug('[AntiSystem] AntiSpam window', { sessionId, groupJid, senderNumber, count, limit: spamCfg.messageLimit, windowSeconds: spamCfg.windowSeconds });
+      if (count >= spamCfg.messageLimit) {
         resetSpamWindow(sessionId, groupJid, senderNumber);
         triggered = true;
         violations.push(triggerViolation(socket, msg, sessionId, telegramId, groupJid, senderJid, senderNumber, 'antispam', 'AntiSpam', spamCfg, 'antispam'));
@@ -225,6 +227,9 @@ export async function runAntiChecks(
 
   // ── AntiGroupMention ─────────────────────────────────────
   tryModule('antigroupmention', 'AntiGroupMention', () => messageIsGroupMention(msg), 'antigroupmention');
+
+  // ── AntiGM: group mentioned from WhatsApp Status ──────────
+  tryModule('antigm', 'AntiGM', () => messageIsGroupStatusMention(msg, groupJid), 'antigm');
 
   // ── AntiPoll ─────────────────────────────────────────────
   tryModule('antipoll', 'AntiPoll', () => messageIsPoll(msg), 'antipoll');

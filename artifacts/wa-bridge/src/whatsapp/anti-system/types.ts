@@ -46,6 +46,7 @@ export interface GroupAntiConfig {
   antigroupcall?: AntiModuleConfig;
   antinsfw?: AntiModuleConfig;
   antigroupmention?: AntiModuleConfig;
+  antigm?: AntiModuleConfig;
   antiwords?: AntiWordsConfig;
   antipoll?: AntiModuleConfig;
   antiforward?: AntiModuleConfig;
