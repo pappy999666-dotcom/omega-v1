@@ -413,6 +413,11 @@ export async function cmdWarn(
 
   if (count >= threshold) {
     resetWarn(sessionId, groupJid, target.number, 'manual');
+    // Delete the quoted message if this was a reply-warn
+    const quotedKey = msg.message?.extendedTextMessage?.contextInfo?.stanzaId
+      ? { remoteJid: groupJid, id: msg.message.extendedTextMessage.contextInfo.stanzaId, participant: msg.message.extendedTextMessage.contextInfo.participant, fromMe: false }
+      : null;
+    if (quotedKey) await (socket as unknown as { sendMessage(j: string, c: Record<string, unknown>): Promise<unknown> }).sendMessage(groupJid, { delete: quotedKey }).catch(() => {});
     // Only attempt kick if bot is admin
     if (meta?.botIsAdmin) {
       await participantUpdate(socket, groupJid, target.jid, 'remove'); // best-effort
@@ -888,6 +893,133 @@ export async function cmdUnmute(
     const reason = err instanceof Error ? err.message : String(err);
     return errorCard('Unmute Failed', `Could not unmute the group.\n\nReason: ${reason}`);
   }
+}
+
+// ── Block ────────────────────────────────────────────────
+// Kick + block a member. Works on any JID form (LID-safe).
+
+export async function cmdBlock(
+  args: string[],
+  msg: WebMessageInfo,
+  socket: WASocket,
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  prefix: string
+): Promise<string> {
+  const permErr = await checkRequesterPermission(msg, socket, telegramId, sessionId, groupJid, 'Block');
+  if (permErr) return permErr;
+
+  if (!groupJid.endsWith('@g.us')) return errorCard('Block', 'This command must be used inside a WhatsApp group.');
+
+  const meta = await fetchGroupMeta(socket, groupJid, true);
+  if (!meta?.botIsAdmin) return errorCard('Block', BOT_NOT_ADMIN_MSG);
+
+  const target = await resolveTarget(args, msg, socket, groupJid, meta);
+  if (!target?.participant) return warningCard('Block', `Provide a phone number, reply to a message, or @mention someone.\nUsage: ${prefix}block @user`);
+
+  if (isAdminJid(meta.participants, target.participant.id)) {
+    return warningCard('Block', `@${target.number} is a group admin. Use ${prefix}dnkick first.`);
+  }
+
+  const targetJid = stripDeviceSuffix(target.participant.id);
+  const sock = socket as unknown as {
+    groupParticipantsUpdate(jid: string, p: string[], a: string): Promise<unknown>;
+    updateBlockStatus(jid: string, action: string): Promise<unknown>;
+  };
+
+  // Kick first, then block — both best-effort after first succeeds
+  try {
+    await sock.groupParticipantsUpdate(groupJid, [targetJid], 'remove');
+  } catch (err) {
+    return errorCard('Block Failed', `Could not remove @${target.number}.\n\nReason: ${String(err)}`);
+  }
+
+  // Block — try real JID, fallback to phone-derived JID
+  const blockJid = targetJid.endsWith('@lid')
+    ? `${target.number}@s.whatsapp.net`
+    : targetJid;
+  await sock.updateBlockStatus(blockJid, 'block').catch(() =>
+    sock.updateBlockStatus(`${target.number}@s.whatsapp.net`, 'block').catch(() => {})
+  );
+
+  await socket.sendMessage(groupJid, {
+    text: `🚫 @${target.number} has been kicked and blocked from *${meta.subject}*.`,
+    mentions: [targetJid],
+  }).catch(() => {});
+
+  return successCard('Blocked', `@${target.number} was kicked and blocked.`, [['Number', target.number]]);
+}
+
+// ── Delete All ────────────────────────────────────────────
+// Delete all cached messages from a sender in this group.
+// Uses the in-memory store if available; otherwise deletes
+// only the quoted message and reports what was found.
+
+export async function cmdDeleteAll(
+  args: string[],
+  msg: WebMessageInfo,
+  socket: WASocket,
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  prefix: string
+): Promise<string> {
+  const permErr = await checkRequesterPermission(msg, socket, telegramId, sessionId, groupJid, 'DeleteAll');
+  if (permErr) return permErr;
+
+  if (!groupJid.endsWith('@g.us')) return errorCard('DeleteAll', 'This command must be used inside a WhatsApp group.');
+
+  const meta = await fetchGroupMeta(socket, groupJid);
+  if (!meta?.botIsAdmin) return errorCard('DeleteAll', BOT_NOT_ADMIN_MSG);
+
+  const target = await resolveTarget(args, msg, socket, groupJid, meta);
+  if (!target) return warningCard('DeleteAll', `Provide a phone number, reply to a message, or @mention someone.\nUsage: ${prefix}deleteall @user`);
+
+  const targetJid = stripDeviceSuffix(target.participant?.id ?? `${target.number}@s.whatsapp.net`);
+  const targetNum = target.number;
+
+  const sock = socket as unknown as {
+    sendMessage(jid: string, content: Record<string, unknown>): Promise<unknown>;
+    store?: { messages?: Record<string, { array?: Array<{ key: { id: string; participant?: string; fromMe?: boolean }; key2?: unknown }> }> };
+  };
+
+  // Collect message keys from store if available
+  const chatMessages = sock.store?.messages?.[groupJid]?.array ?? [];
+  const toDelete = chatMessages.filter((m) => {
+    const p = (m.key.participant ?? '').split('@')[0]?.split(':')[0] ?? '';
+    return p === targetNum || p.endsWith(targetNum) || targetNum.endsWith(p);
+  });
+
+  // Always delete the quoted message too
+  const quotedStanzaId = msg.message?.extendedTextMessage?.contextInfo?.stanzaId;
+  const quotedParticipant = msg.message?.extendedTextMessage?.contextInfo?.participant;
+  if (quotedStanzaId) {
+    toDelete.push({ key: { id: quotedStanzaId, participant: quotedParticipant ?? undefined, fromMe: false } });
+  }
+
+  if (toDelete.length === 0) {
+    return warningCard('DeleteAll', `No cached messages found for @${targetNum} in this group.\nOnly messages received since the bot started can be deleted.`);
+  }
+
+  let deleted = 0;
+  let failed = 0;
+  for (const m of toDelete) {
+    try {
+      await sock.sendMessage(groupJid, {
+        delete: { remoteJid: groupJid, id: m.key.id, participant: m.key.participant, fromMe: false },
+      });
+      deleted++;
+    } catch { failed++; }
+    // Small delay to avoid rate-limit
+    await new Promise((r) => setTimeout(r, 150));
+  }
+
+  return successCard('DeleteAll', `Deleted messages from @${targetNum}.`, [
+    ['Deleted', String(deleted)],
+    ...(failed > 0 ? [['Failed', String(failed)] as [string, string]] : []),
+    ['Note', 'Only messages cached since bot start'],
+  ]);
 }
 
 // ── Group Event Status ────────────────────────────────────

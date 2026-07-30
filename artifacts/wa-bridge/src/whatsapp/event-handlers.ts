@@ -66,6 +66,8 @@ import {
   cmdWarnCount,
   cmdPoll,
   cmdBlockAll,
+  cmdBlock,
+  cmdDeleteAll,
   cmdMute,
   cmdUnmute,
   cmdSetWelcome,
@@ -1370,6 +1372,16 @@ async function processMessage(
 
     case 'ban': {
       await reply(await cmdBan(args, msg, socket, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+
+    case 'block': {
+      await reply(await cmdBlock(args, msg, socket, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+
+    case 'deleteall': {
+      await reply(await cmdDeleteAll(args, msg, socket, telegramId, sessionId, groupJid, config.prefix));
       break;
     }
 

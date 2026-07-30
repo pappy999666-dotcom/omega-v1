@@ -50,9 +50,14 @@ export function parseCommand(
 
   if (!body) return null;
 
-  const parts = body.split(/\s+/);
-  let command = parts[0]!.toLowerCase();
-  const args = parts.slice(1);
+  // Split only on the first whitespace to get the command word.
+  // Everything after is kept raw so newlines in message bodies are preserved.
+  const firstWs = body.search(/\s/);
+  let command = (firstWs === -1 ? body : body.slice(0, firstWs)).toLowerCase();
+  // args: split remainder on spaces only (not newlines) for single-line arg lists;
+  // for multiline bodies the raw text is accessed via msg.message directly.
+  const rawRemainder = firstWs === -1 ? '' : body.slice(firstWs + 1);
+  const args = rawRemainder ? rawRemainder.split(/ +/).filter(Boolean) : [];
   const aliases: Record<string, string> = {
     left: 'left',
     stopspam: 'stopspam',

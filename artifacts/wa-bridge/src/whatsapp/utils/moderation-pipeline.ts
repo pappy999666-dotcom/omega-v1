@@ -225,6 +225,21 @@ export async function runRemoveModerationPipeline(
   }
 
   // Member has been successfully removed.
+  // Delete the triggering message (quoted reply) if this was a reply-kick.
+  const quotedKey = msg.message?.extendedTextMessage?.contextInfo?.stanzaId
+    ? {
+        remoteJid: groupJid,
+        id: msg.message.extendedTextMessage.contextInfo.stanzaId,
+        participant: msg.message.extendedTextMessage.contextInfo.participant,
+        fromMe: false,
+      }
+    : null;
+  if (quotedKey) {
+    await (socket as unknown as {
+      sendMessage(jid: string, content: Record<string, unknown>): Promise<unknown>;
+    }).sendMessage(groupJid, { delete: quotedKey }).catch(() => {});
+  }
+
   // onSuccess, announcement rendering, and sendMessage are all best-effort:
   // failures in this section must NOT invalidate the completed moderation action.
   onSuccess?.(target.number);

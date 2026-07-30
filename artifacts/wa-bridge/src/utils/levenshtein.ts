@@ -58,8 +58,13 @@ export function fuzzyMatchCommand(
 
 /**
  * Strip extra spaces near the prefix to handle ". menu" → ".menu".
- * Also normalizes multi-space runs.
+ * Only normalizes the FIRST LINE so multiline message bodies are preserved.
  */
 export function normalizeCommandString(raw: string): string {
-  return raw.replace(/\s+/g, ' ').trim();
+  // Only collapse whitespace on the first line — preserve newlines in the body
+  const newlineIdx = raw.search(/\n/);
+  if (newlineIdx === -1) return raw.replace(/\s+/g, ' ').trim();
+  const firstLine = raw.slice(0, newlineIdx).replace(/\s+/g, ' ').trim();
+  const rest = raw.slice(newlineIdx); // keep \n + everything after
+  return firstLine + rest;
 }
