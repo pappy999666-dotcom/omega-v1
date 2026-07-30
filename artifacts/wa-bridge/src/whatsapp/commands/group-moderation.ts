@@ -519,7 +519,6 @@ export async function cmdBlockAll(
   sessionId: string,
   groupJid: string,
   sudoNumbers: string[],
-  onProgress: (text: string) => Promise<void>
 ): Promise<string> {
   if (!groupJid.endsWith('@g.us')) {
     return errorCard('BlockAll', 'This command must be used inside a WhatsApp group.');
@@ -544,60 +543,46 @@ export async function cmdBlockAll(
 
   let done = 0;
   let failed = 0;
-  const total = eligible.length;
+  let skippedLid = 0;
 
-  await onProgress(
-    asciiBox({
-      title: 'BlockAll — Running',
-      emoji: '🚫',
-      rows: [
-        ['Total eligible', String(total)],
-        ['Blocked', '0'],
-        ['Failed', '0'],
-      ],
-      footer: 'Processing…',
-    })
-  );
+  const sock = socket as unknown as {
+    updateBlockStatus(jid: string, action: string): Promise<unknown>;
+  };
 
   for (const p of eligible) {
+    // ── Resolve @lid → @s.whatsapp.net ───────────────────────────────────
+    // updateBlockStatus requires a real @s.whatsapp.net JID.
+    // @lid participants must be converted using their phoneNumber field;
+    // if no phone number is available, we cannot block them this way.
+    let targetJid = p.id;
+    if (p.id.endsWith('@lid')) {
+      const phone = (p.phoneNumber ?? '').replace(/\D/g, '');
+      if (!phone) { skippedLid++; continue; }
+      targetJid = `${phone}@s.whatsapp.net`;
+    }
+
     try {
-      await (socket as unknown as {
-        updateBlockStatus(jid: string, action: string): Promise<unknown>;
-      }).updateBlockStatus(p.id, 'block');
+      await sock.updateBlockStatus(targetJid, 'block');
       done++;
     } catch {
       failed++;
     }
 
-    // Progress update every 5 members
-    if ((done + failed) % 5 === 0 || done + failed === total) {
-      await onProgress(
-        asciiBox({
-          title: 'BlockAll — Running',
-          emoji: '🚫',
-          rows: [
-            ['Total eligible', String(total)],
-            ['Blocked', String(done)],
-            ['Failed', String(failed)],
-            ['Remaining', String(total - done - failed)],
-          ],
-          footer: 'Processing…',
-        })
-      ).catch(() => {});
-    }
-
-    // Respect rate limits
+    // Respect rate limits — 300 ms between calls
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
+
+  const rows: [string, string][] = [
+    ['Blocked', String(done)],
+    ['Failed', String(failed)],
+    ['Skipped (protected)', String(meta.participants.length - eligible.length)],
+  ];
+  if (skippedLid > 0) rows.push(['Skipped (no phone)', String(skippedLid)]);
 
   return asciiBox({
     title: 'BlockAll — Complete',
     emoji: '✅',
-    rows: [
-      ['Blocked', String(done)],
-      ['Failed', String(failed)],
-      ['Skipped (protected)', String(meta.participants.length - total)],
-    ],
+    rows,
     footer: `Group: ${meta.subject}`,
   });
 }
