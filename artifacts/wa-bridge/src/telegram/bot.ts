@@ -2632,7 +2632,9 @@ async function routeCallback(
       const { loadPlatformSessions } = await import('../services/workspace.js');
       const page = parseInt(params[1] ?? '0', 10);
       const PAGE_SIZE = 10;
-      const all = loadPlatformSessions().filter((s: { status: string }) => s.status === 'open' || s.status === 'frozen');
+      const all = loadPlatformSessions().filter((s: { status: string; sessionId: string }) =>
+        s.status === 'open' || (s.status === 'frozen' && isFrozen(s.sessionId))
+      );
       const statusIcons: Record<string, string> = { open: '🟢', frozen: '🔵', error: '🔴', connecting: '🟡', closed: '⚫', banned: '💣' };
       const slice = all.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
       const sessionButtons = slice.map((s: { sessionId: string; label?: string; phone: string; telegramId: string; status: string }) => [

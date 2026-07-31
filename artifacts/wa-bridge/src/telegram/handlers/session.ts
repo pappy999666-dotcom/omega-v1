@@ -23,6 +23,7 @@ import {
   unfreezeSession,
   getUserSockets,
   getSocket,
+  isFrozen,
   normalizePairingPhone,
   markPurged,
 } from '../../whatsapp/socket-manager.js';
@@ -101,10 +102,10 @@ export async function handleSessionsList(
   ctx: Context & { telegramId: string; isOwner?: boolean },
   page = 0
 ): Promise<void> {
-  // Only show active sessions: open (green) and frozen (user-paused)
-  // closed/banned/error/connecting are excluded — they're not usable
+  // Show open sessions + sessions the user explicitly froze this runtime
+  // (frozen = socket is live but paused). Stale frozen from previous boot are excluded.
   const sessions = Object.values(loadAllSessions(ctx.telegramId))
-    .filter((s) => s.status === 'open' || s.status === 'frozen');
+    .filter((s) => s.status === 'open' || (s.status === 'frozen' && isFrozen(s.sessionId)));
 
   if (sessions.length === 0) {
     await ctx.editMessageText?.(
