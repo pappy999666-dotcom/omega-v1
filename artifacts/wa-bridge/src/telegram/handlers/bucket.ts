@@ -131,16 +131,18 @@ export async function handleStartFilterHttp(ctx: Context & { telegramId: string 
   await ctx.answerCbQuery('HTTP validation started').catch(() => {});
   const msg = await ctx.reply(
     `<blockquote><b>◈ OMEGA HTTP VALIDATOR</b>\n\nNo session needed.\nChecking ${main.length} links via HTTP…\n\nStatus     ● STARTING</blockquote>`,
-    { parse_mode: 'HTML' }
+    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏹ Stop', callback_data: 'bucket:filter:stop' }]] } }
   );
   const chatId = ctx.chat!.id;
   const msgId = msg.message_id;
   let last = '';
-  const onProgress = async (line: string) => {
-    const text = `<blockquote><b>◈ OMEGA HTTP VALIDATOR</b>\n\n${line}</blockquote>`;
-    if (text === last) return;
-    last = text;
-    await ctx.telegram.editMessageText(chatId, msgId, undefined, text, { parse_mode: 'HTML' }).catch(() => {});
+  const onProgress = async (html: string) => {
+    if (html === last) return;
+    last = html;
+    await ctx.telegram.editMessageText(chatId, msgId, undefined, html, {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: '⏹ Stop', callback_data: 'bucket:filter:stop' }]] },
+    }).catch(() => {});
   };
   validateLinksHttp(ctx.telegramId, onProgress).then(async r => {
     await ctx.telegram.editMessageText(chatId, msgId, undefined,
@@ -246,8 +248,11 @@ export async function handleStartFilter(ctx: Context & { telegramId: string }): 
 
 export async function handleStopFilter(ctx: Context & { telegramId: string }): Promise<void> {
   stopAutoFilter(ctx.telegramId);
-  await ctx.answerCbQuery('Filter stopped').catch(() => {});
-  await handleBucketStatus(ctx);
+  await ctx.answerCbQuery('Filter stopped ⏹').catch(() => {});
+  await ctx.editMessageText(
+    noticeCard('Validator Stopped', 'The filter was stopped. Validated links have been saved to their buckets.', 'warning'),
+    { parse_mode: 'HTML', reply_markup: bucketMenuKeyboard(false) }
+  ).catch(() => {});
 }
 
 // ── Export Bucket ─────────────────────────────────────────

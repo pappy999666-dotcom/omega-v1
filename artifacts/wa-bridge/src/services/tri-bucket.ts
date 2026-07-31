@@ -22,6 +22,8 @@ import type { BridgeWASocket as WASocket } from '../whatsapp/baileys-types.js';
 
 // Track auto-filter running state per user
 const autoFilterRunning = new Set<string>();
+// Per-user stop signal for the inner validateAllLinks loop
+const stopSignals = new Set<string>();
 
 // ── WhatsApp Invite Link Extraction ──────────────────────
 
@@ -198,7 +200,16 @@ export async function validateAllLinks(
   let currentSessionId = sessionId;
   let sessionIndex = 1;
 
+  // Clear any stale stop signal from a previous run
+  stopSignals.delete(telegramId);
+
   for (let i = 0; i < main.length; i++) {
+    // Respect stop signal — break immediately
+    if (stopSignals.has(telegramId)) {
+      result.remaining = main.length - i;
+      break;
+    }
+
     const entry = main[i]!;
 
     // Circuit breaker check
@@ -355,6 +366,7 @@ export function isAutoFilterRunning(telegramId: string): boolean {
 }
 
 export function stopAutoFilter(telegramId: string): void {
+  stopSignals.add(telegramId);   // signal inner loop to break immediately
   autoFilterRunning.delete(telegramId);
 }
 
@@ -367,9 +379,10 @@ export async function startAutoFilter(
 ): Promise<void> {
   if (autoFilterRunning.has(telegramId)) return;
   autoFilterRunning.add(telegramId);
+  stopSignals.delete(telegramId); // clear any stale stop signal
 
   try {
-    while (autoFilterRunning.has(telegramId)) {
+    while (autoFilterRunning.has(telegramId) && !stopSignals.has(telegramId)) {
       const main = loadBucket(telegramId, 'main').filter(
         (e) => e.status === 'unvalidated'
       );
@@ -390,6 +403,7 @@ export async function startAutoFilter(
     }
   } finally {
     autoFilterRunning.delete(telegramId);
+    stopSignals.delete(telegramId);
   }
 }
 
@@ -551,46 +565,63 @@ export async function validateLinkHttp(link: string): Promise<ValidationResult> 
 
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
+    const timer = setTimeout(() => controller.abort(), 10_000);
     let html = '';
+    let status = 0;
     try {
       const res = await fetch(`https://chat.whatsapp.com/${code}`, {
         signal: controller.signal,
         headers: {
-          'user-agent': 'Mozilla/5.0 (compatible; WhatsApp/2.23)',
-          'accept': 'text/html',
+          'user-agent': 'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+          'accept': 'text/html,application/xhtml+xml',
+          'accept-language': 'en-US,en;q=0.9',
         },
         redirect: 'follow',
       });
-      if (res.status === 404 || res.status === 410) return { link, isValid: false, reason: 'Link not found' };
+      status = res.status;
       html = await res.text();
     } finally {
       clearTimeout(timer);
     }
 
-    // WhatsApp returns specific meta tags for valid groups
-    if (html.includes('"groupName"') || html.includes('og:title') && !html.includes('Invalid Link') && !html.includes('This invite link is invalid')) {
-      // Extract group name from og:title
-      const titleMatch = html.match(/<meta property="og:title" content="([^"]+)"/);
-      const descMatch = html.match(/<meta property="og:description" content="([^"]+)"/);
-      const title = titleMatch?.[1];
-      const desc = descMatch?.[1];
-      // Extract member count from description like "123 members"
-      const memberMatch = desc?.match(/(\d+)\s+member/);
-      return {
-        link,
-        isValid: true,
-        title: title ?? undefined,
-        memberCount: memberMatch ? parseInt(memberMatch[1]!, 10) : undefined,
-      };
+    // Hard dead signals
+    if (status === 404 || status === 410) {
+      return { link, isValid: false, reason: `HTTP ${status}` };
     }
 
-    if (html.includes('Invalid Link') || html.includes('This invite link is invalid') || html.includes('This link is no longer valid')) {
-      return { link, isValid: false, reason: 'Link revoked or expired' };
+    const dead =
+      html.includes('This invite link is invalid') ||
+      html.includes('This link is no longer valid') ||
+      html.includes('Invalid Link') ||
+      html.includes('link has expired') ||
+      html.includes('revoked');
+
+    if (dead) return { link, isValid: false, reason: 'Link revoked or expired' };
+
+    // Must have BOTH og:title AND a group name signal to be considered active
+    const hasOgTitle = html.includes('<meta property="og:title"');
+    const hasGroupSignal =
+      html.includes('"groupName"') ||
+      html.includes('"groupInvite"') ||
+      html.includes('wa-group') ||
+      (hasOgTitle && html.includes('og:description') && html.includes('member'));
+
+    if (!hasGroupSignal) {
+      // Ambiguous — could be JS-rendered or rate limited, treat as transient
+      return { link, isValid: false, reason: 'Could not confirm group', transient: true };
     }
 
-    // Ambiguous — treat as valid (could be rate limited or JS-rendered)
-    return { link, isValid: true, reason: 'HTTP check passed' };
+    const titleMatch = html.match(/<meta property="og:title" content="([^"]+)"/);
+    const descMatch = html.match(/<meta property="og:description" content="([^"]+)"/);
+    const title = titleMatch?.[1];
+    const memberMatch = descMatch?.[1]?.match(/(\d+)\s+member/);
+
+    return {
+      link,
+      isValid: true,
+      title: title ?? undefined,
+      memberCount: memberMatch ? parseInt(memberMatch[1]!, 10) : undefined,
+    };
   } catch (err) {
     const msg = String(err);
     if (msg.includes('abort') || msg.includes('timeout')) {
@@ -612,25 +643,54 @@ export async function validateLinksHttp(
   const toActivate: BucketEntry[] = [];
   const toDead: BucketEntry[] = [];
 
-  for (let i = 0; i < main.length; i++) {
-    const entry = main[i]!;
-    await onProgress?.(`Checking ${i + 1}/${main.length}: ${entry.link}`);
-    const vr = await validateLinkHttp(entry.link);
-    if (vr.isValid) {
-      toActivate.push({ ...entry, title: vr.title, memberCount: vr.memberCount, validatedAt: Date.now(), status: 'active' });
-      result.activated++;
-    } else if (!vr.transient) {
-      toDead.push({ ...entry, deadReason: vr.reason, validatedAt: Date.now(), status: 'dead' });
-      result.killed++;
-    } else {
-      result.errors++;
+  stopSignals.delete(telegramId);
+  autoFilterRunning.add(telegramId);
+
+  try {
+    for (let i = 0; i < main.length; i++) {
+      if (stopSignals.has(telegramId)) break;
+
+      const entry = main[i]!;
+      const elapsed = i > 0 ? ((i / Math.max((Date.now() - Date.now()) / 60000, 0.01)).toFixed(1)) : '0.0';
+      await onProgress?.(
+        [
+          `<blockquote><b>◈ OMEGA HTTP VALIDATOR</b>`,
+          ``,
+          `Checked    ${i + 1}/${main.length}`,
+          `Active     ${result.activated}`,
+          `Dead       ${result.killed}`,
+          `Errors     ${result.errors}`,
+          ``,
+          `Status     ● RUNNING`,
+          `Current    ${entry.link.slice(-35)}`,
+          `</blockquote>`,
+        ].join('\n')
+      );
+
+      const vr = await validateLinkHttp(entry.link);
+      if (vr.isValid) {
+        toActivate.push({ ...entry, title: vr.title, memberCount: vr.memberCount, validatedAt: Date.now(), status: 'active' });
+        result.activated++;
+      } else if (!vr.transient) {
+        toDead.push({ ...entry, deadReason: vr.reason, validatedAt: Date.now(), status: 'dead' });
+        result.killed++;
+      } else {
+        result.errors++;
+      }
+
+      // Flush every 50
+      if (toActivate.length >= 50) moveToActiveBucket(telegramId, toActivate.splice(0));
+      if (toDead.length >= 50) moveToDeadBucket(telegramId, toDead.splice(0));
+
+      await new Promise(r => setTimeout(r, 400 + Math.random() * 300));
     }
-    // Small delay to avoid rate limiting
-    await new Promise(r => setTimeout(r, 300 + Math.random() * 200));
+  } finally {
+    if (toActivate.length > 0) moveToActiveBucket(telegramId, toActivate);
+    if (toDead.length > 0) moveToDeadBucket(telegramId, toDead);
+    autoFilterRunning.delete(telegramId);
+    stopSignals.delete(telegramId);
   }
 
-  if (toActivate.length > 0) moveToActiveBucket(telegramId, toActivate);
-  if (toDead.length > 0) moveToDeadBucket(telegramId, toDead);
   return result;
 }
 
