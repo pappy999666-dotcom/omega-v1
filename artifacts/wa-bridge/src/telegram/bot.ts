@@ -944,7 +944,7 @@ export function createBot(): Telegraf<BotContext> {
       }
       ctx.session.awaitingAdminAutoPromoSessionId = 'days';
       ctx.session.awaitingAutoPromoLink = link;
-      await ctx.reply(card('Admin Auto-Promote — Step 2', '📅', [['Link', link.slice(0, 50)], ['Slots', '4:00, 4:30, 5:00, 5:30 PM WAT'], ['Max links', '4']], 'How many days? Send a number (1–30).'), { parse_mode: 'HTML', reply_markup: backKeyboard('admin:autopromo') });
+      await ctx.reply(card('Admin Auto-Promote — Step 2', '📅', [['Link', link], ['Slots', '4:00, 4:30, 5:00, 5:30 PM WAT'], ['Max links', '4']], 'How many days? Send a number (1–30).'), { parse_mode: 'HTML', reply_markup: backKeyboard('admin:autopromo') });
       return;
     }
 
@@ -963,7 +963,7 @@ export function createBot(): Telegraf<BotContext> {
       const endsDate = new Date(job.endsAt).toLocaleDateString('en-NG', { timeZone: 'Africa/Lagos' });
       await ctx.reply(
         card('Admin Auto-Promote Added', '📅', [
-          ['Link', link.slice(0, 50)],
+          ['Link', link],
           ['Queue', String(job.links.length) + '/4'],
           ['Slots', '4:00, 4:30, 5:00, 5:30 PM WAT'],
           ['Ends', endsDate],
@@ -984,7 +984,7 @@ export function createBot(): Telegraf<BotContext> {
       }
       ctx.session.awaitingAutoPromoSessionId = sessionId;
       ctx.session.awaitingAutoPromoDays = link; // store link temporarily in days field
-      await ctx.reply(card('Auto-Promote — Step 2', '📅', [['Link', link.slice(0, 50)]], 'How many days should this run? Send a number (1–30).'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:autopromo`) });
+      await ctx.reply(card('Auto-Promote — Step 2', '📅', [['Link', link]], 'How many days should this run? Send a number (1–30).'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:autopromo`) });
       return;
     }
 
@@ -1004,7 +1004,7 @@ export function createBot(): Telegraf<BotContext> {
       const endsDate = new Date(job.endsAt).toLocaleDateString('en-NG', { timeZone: 'Africa/Lagos' });
       await ctx.reply(
         card('Auto-Promote Scheduled', '📅', [
-          ['Link', link.slice(0, 50)],
+          ['Link', link],
           ['Days', String(days)],
           ['Runs', '6:00 AM + 6:00 PM WAT daily'],
           ['Ends', endsDate],
@@ -1934,7 +1934,7 @@ async function routeCallback(
         : 'No runs yet.';
       const endsDate = job ? new Date(job.endsAt).toLocaleDateString('en-NG', { timeZone: 'Africa/Lagos' }) : '—';
       const linkLines = links.length
-        ? links.map((l, i) => `${i + 1}. ${escape(l.slice(0, 55))}`).join('\n')
+        ? links.map((l, i) => `${i + 1}. ${escape(l)}`).join('\n')
         : 'No links queued.';
       const statusText = [
         header('Auto-Promote Queue', '📅'),
@@ -2854,7 +2854,7 @@ async function routeCallback(
       const endsDate = job ? new Date(job.endsAt).toLocaleDateString('en-NG', { timeZone: 'Africa/Lagos' }) : '—';
       const slotLabels = ['4:00 PM', '4:30 PM', '5:00 PM', '5:30 PM'];
       const linkLines = links.length
-        ? links.map((l: string, i: number) => `${slotLabels[i] ?? `Slot ${i+1}`}: ${escape(l.slice(0, 50))}`).join('\n')
+        ? links.map((l: string, i: number) => `${slotLabels[i] ?? `Slot ${i+1}`}: ${escape(l)}`).join('\n')
         : 'No links queued.';
       const histLines = history.length
         ? history.map((r: any) => `🌆 ${new Date(r.at).toLocaleDateString('en-NG', { timeZone: 'Africa/Lagos' })} Slot${r.linkIndex+1} — ✅${r.success} ❌${r.failed} (${Math.round(r.durationMs/60000)}min)`).join('\n')
