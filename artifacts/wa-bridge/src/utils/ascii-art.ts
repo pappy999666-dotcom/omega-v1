@@ -170,6 +170,23 @@ export function sessionBox(opts: {
   });
 }
 
+export function connectedCard(opts: { name: string; phone: string; sessionId: string; method: string }): string {
+  return [
+    '```',
+    '┌────────────────────────────────────────────┐',
+    '│  ► PAPPY-BOT — SESSION ONLINE                  │',
+    '├────────────────────────────────────────────┤',
+    `│  👤 Name    : ${opts.name.slice(0, 22).padEnd(22)}  │`,
+    `│  📱 Number  : +${opts.phone.slice(0, 21).padEnd(21)}  │`,
+    `│  🔗 Method  : ${opts.method.slice(0, 22).padEnd(22)}  │`,
+    '├────────────────────────────────────────────┤',
+    '│  STATUS  : ● CONNECTED ✔                        │',
+    '│  BOT     : ACTIVE — AWAITING COMMANDS           │',
+    '└────────────────────────────────────────────┘',
+    '```',
+  ].join('\n');
+}
+
 export function whatsappMenu(
   _title: string,
   sections: { heading: string; items: { cmd: string; desc: string }[] }[]

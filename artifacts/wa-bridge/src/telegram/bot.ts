@@ -26,6 +26,7 @@ import {
   getBridgeSession,
   handleLinkCollection,
   handleJoinManager,
+  clearJoinManagerSub,
 } from './handlers/session.js';
 import {
   handleBucketStatus,
@@ -1396,11 +1397,67 @@ export function createBot(): Telegraf<BotContext> {
 
 // ── Callback Route Table ──────────────────────────────────
 
+function clearAllAwaitingStates(ctx: BotContext): void {
+  delete ctx.session.awaitingLinks;
+  delete ctx.session.awaitingPrefix;
+  delete ctx.session.awaitingGlobalBridge;
+  delete ctx.session.awaitingOmniCommand;
+  delete ctx.session.awaitingSupport;
+  delete ctx.session.awaitingBroadcast;
+  delete ctx.session.awaitingForceJoin;
+  delete ctx.session.awaitingGlobalMenuUrl;
+  delete ctx.session.awaitingProfilePhotoSessionId;
+  delete ctx.session.awaitingGcPfpSessionId;
+  delete ctx.session.awaitingGcPfpJid;
+  delete ctx.session.awaitingSetNameSessionId;
+  delete ctx.session.awaitingSetBioSessionId;
+  delete ctx.session.awaitingWaInfoSessionId;
+  delete ctx.session.awaitingCreateGcSessionId;
+  delete ctx.session.awaitingLeaveGcSessionId;
+  delete ctx.session.awaitingGcSetSessionId;
+  delete ctx.session.awaitingGcSetField;
+  delete ctx.session.awaitingGcSetJid;
+  delete ctx.session.awaitingPromoteSessionId;
+  delete ctx.session.awaitingPromoteGcJid;
+  delete ctx.session.awaitingDemoteSessionId;
+  delete ctx.session.awaitingDemoteGcJid;
+  delete ctx.session.awaitingApproveAmountSessionId;
+  delete ctx.session.awaitingApproveAmountGcJid;
+  delete ctx.session.awaitingApproveCountrySessionId;
+  delete ctx.session.awaitingApproveCountryGcJid;
+  delete ctx.session.awaitingSudoAddSessionId;
+  delete ctx.session.awaitingJoinLimitSessionId;
+  delete ctx.session.awaitingJoinDelaySessionId;
+  delete ctx.session.gcWizard;
+  delete ctx.session.onboarding;
+}
+
 async function routeCallback(
   ctx: BotContext,
   action: string,
   params: string[]
 ): Promise<void> {
+  // Clear ALL awaiting input states on any button press
+  // Preserve onboarding only during the session wizard flow
+  const savedOnboarding = (action === 'session' && (params[0] === 'new' || params[1] === 'new'))
+    ? ctx.session.onboarding : undefined;
+  clearAllAwaitingStates(ctx);
+  if (savedOnboarding) ctx.session.onboarding = savedOnboarding;
+
+  // Clear stale bridge mode and join manager subscription on any navigation
+  // except the bridge/join actions themselves
+  const isJoinAction = action === 'session' && (params[1] === 'joinmgr' || params[1] === 'join');
+  const isBridgeAction = action === 'bridge' || action === 'gcbridge' ||
+    (action === 'session' && params[1] === 'bridge');
+  if (!isJoinAction) clearJoinManagerSub(ctx.telegramId);
+  if (!isBridgeAction) {
+    handleBridgeExit(ctx.telegramId);
+    const { clearGroupBridge } = await import('./handlers/group-bridge.js');
+    clearGroupBridge(ctx.telegramId);
+    delete ctx.session.groupBridgeSessionId;
+    delete ctx.session.groupBridgeGcJid;
+    delete ctx.session.groupBridgeGcName;
+  }
   // ── Menu ──
   if (action === 'menu' && params[0] === 'main') {
     await ctx.editMessageText(mainMenu(ctx.telegramId, ctx.isOwner), {

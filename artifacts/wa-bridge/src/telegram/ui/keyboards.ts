@@ -162,14 +162,19 @@ export function joinManagerKeyboard(sessionId: string, status: string): InlineKe
   if (status === 'running') controls.push(btn('⏸ Pause', `session:${sessionId}:join:pause`, 'danger'));
   else controls.push(btn(status === 'paused' ? '▶️ Resume' : '▶️ Start', `session:${sessionId}:join:start`, 'success'));
   if (status === 'running' || status === 'paused') controls.push(btn('⏹ Stop', `session:${sessionId}:join:stop`, 'danger'));
-  return {
-    inline_keyboard: [
-      controls,
-      [btn('🔢 Set Join Limit', `session:${sessionId}:join:setlimit`, 'primary'), btn('⏱ Set Delay', `session:${sessionId}:join:setdelay`, 'primary')],
-      [btn('🔄 Refresh Log', `session:${sessionId}:joinmgr`, 'primary')],
-      [btn('🔙 Back', `session:${sessionId}:menu`, 'primary')],
-    ],
-  };
+  // When running, Back is the only navigation — all other nav is disabled to prevent re-render loops
+  const navRow = status === 'running'
+    ? [btn('🔙 Back (keeps running)', `session:${sessionId}:menu`, 'primary')]
+    : [
+        btn('🔢 Set Join Limit', `session:${sessionId}:join:setlimit`, 'primary'),
+        btn('⏱ Set Delay', `session:${sessionId}:join:setdelay`, 'primary'),
+      ];
+  const rows: IKB[][] = [controls];
+  if (status !== 'running') rows.push(navRow);
+  else rows.push(navRow);
+  rows.push([btn('🔄 Refresh', `session:${sessionId}:joinmgr`, 'primary')]);
+  if (status !== 'running') rows.push([btn('🔙 Back', `session:${sessionId}:menu`, 'primary')]);
+  return { inline_keyboard: rows };
 }
 
 export function sessionPairKeyboard(sessionId: string): InlineKeyboardMarkup {
@@ -257,7 +262,7 @@ export function adminPanelKeyboard(paused = false, maintenance = false): InlineK
 }
 
 export function adminUsersKeyboard(
-  users: { telegramId: string; username?: string; isBanned: boolean }[],
+  users: { telegramId: string; username?: string; isBanned: boolean; activeSessions?: number }[],
   page = 0,
   pageSize = 8
 ): InlineKeyboardMarkup {
@@ -265,9 +270,9 @@ export function adminUsersKeyboard(
   const slice = users.slice(start, start + pageSize);
 
   const rows: IKB[][] = slice.map((u) => {
-    const label = u.isBanned
-      ? `🚫 ${u.username ?? u.telegramId}`
-      : `✅ ${u.username ?? u.telegramId}`;
+    const status = u.isBanned ? '🚫' : '✅';
+    const sessions = u.activeSessions ? ` [🟢${u.activeSessions}]` : '';
+    const label = `${status} ${u.username ?? u.telegramId}${sessions}`;
     return [btn(label, `admin:user:${u.telegramId}`, u.isBanned ? 'danger' : 'primary')];
   });
 

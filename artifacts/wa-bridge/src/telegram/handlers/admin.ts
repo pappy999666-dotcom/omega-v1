@@ -54,9 +54,16 @@ export async function handleAdminPanel(ctx: Context): Promise<void> {
 
 export async function handleAdminUsers(ctx: Context, page = 0): Promise<void> {
   const userIds = getAllUserIds();
+  const { getAllSockets } = await import('../../whatsapp/socket-manager.js');
+  const allSockets = getAllSockets();
   const users = userIds.map((id) => {
     const cfg = loadConfig(id);
-    return { telegramId: id, username: cfg.username, isBanned: cfg.isBanned };
+    // Count active (non-frozen) sockets for this user
+    const activeSessions = [...allSockets.entries()].filter(([, h]) => {
+      const meta = h.meta as { telegramId?: string };
+      return meta?.telegramId === id && !h.frozen;
+    }).length;
+    return { telegramId: id, username: cfg.username, isBanned: cfg.isBanned, activeSessions };
   });
 
   await ctx.editMessageText(

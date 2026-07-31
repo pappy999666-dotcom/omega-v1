@@ -61,6 +61,7 @@ import {
   stopJoinManager,
   subscribeJoinManager,
 } from '../../services/join-manager.js';
+import { connectedCard } from '../../utils/ascii-art.js';
 
 // ── Fetch WA profile (name + photo) after connect ────────
 
@@ -227,25 +228,30 @@ export async function handleNewSession(
           `<blockquote>Ready for WhatsApp commands. Use the menu below to manage this session.</blockquote>`,
         ].join('\n');
 
-        // Edit the progress message
         await ctx.telegram.editMessageText(
           ctx.chat!.id, progressMsg.message_id, undefined,
           connectedText,
-          { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sid) }
+          { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sid, 'open') }
         ).catch(() => {});
 
-        // DM the owner with photo if available
+        // Send cyber ASCII DM to the paired WhatsApp number
+        if (socket && ownJid) {
+          socket.sendMessage(ownJid, {
+            text: connectedCard({ name: displayName, phone: meta.phone, sessionId: sid, method: 'QR Code' }),
+          }).catch(() => {});
+        }
+
         try {
           if (photoBuffer) {
             await ctx.telegram.sendPhoto(
               parseInt(ctx.telegramId, 10),
               { source: photoBuffer },
-              { caption: connectedText, parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sid) }
+              { caption: connectedText, parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sid, 'open') }
             );
           } else {
             await ctx.telegram.sendMessage(
               parseInt(ctx.telegramId, 10), connectedText,
-              { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sid) }
+              { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sid, 'open') }
             );
           }
         } catch { /* same chat or blocked */ }
@@ -346,27 +352,32 @@ export async function handlePairingCode(
           `<blockquote>Ready for WhatsApp commands. Use the menu below to manage this session.</blockquote>`,
         ].join('\n');
 
-        // Edit the pairing message
         await ctx.telegram.editMessageText(
           ctx.chat!.id, progress.message_id, undefined,
           connectedText,
-          { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId) }
+          { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId, 'open') }
         ).catch(() =>
-          ctx.telegram.sendMessage(ctx.chat!.id, connectedText, { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId) }).catch(() => {})
+          ctx.telegram.sendMessage(ctx.chat!.id, connectedText, { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId, 'open') }).catch(() => {})
         );
 
-        // DM the owner with photo if available
+        // Send cyber ASCII DM to the paired WhatsApp number
+        if (socket && ownJid) {
+          socket.sendMessage(ownJid, {
+            text: connectedCard({ name: displayName, phone: normalizedPhone, sessionId, method: 'Pairing Code' }),
+          }).catch(() => {});
+        }
+
         try {
           if (photoBuffer) {
             await ctx.telegram.sendPhoto(
               parseInt(ctx.telegramId, 10),
               { source: photoBuffer },
-              { caption: connectedText, parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId) }
+              { caption: connectedText, parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId, 'open') }
             );
           } else {
             await ctx.telegram.sendMessage(
               parseInt(ctx.telegramId, 10), connectedText,
-              { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId) }
+              { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId, 'open') }
             );
           }
         } catch { /* same chat or blocked */ }
@@ -560,6 +571,14 @@ export async function handleLinkCollection(
   ).catch(() => {});
 }
 
+// ── Active join manager subscriptions (telegramId → unsub fn) ──────────
+const activeJoinSubs = new Map<string, () => void>();
+
+export function clearJoinManagerSub(telegramId: string): void {
+  activeJoinSubs.get(telegramId)?.();
+  activeJoinSubs.delete(telegramId);
+}
+
 export async function handleJoinManager(
   ctx: Context & { telegramId: string; chat?: { id: number } },
   sessionId: string,
@@ -623,9 +642,11 @@ export async function handleJoinManager(
   if (state.status === 'running' && sentMsg && chatId) {
     const msgId = (sentMsg as unknown as { message_id?: number }).message_id;
     if (!msgId) return;
+    // Kill any previous subscription for this user before starting a new one
+    clearJoinManagerSub(ctx.telegramId);
     let lastEdit = Date.now();
     let unsub: (() => void) | null = null;
-    const timeout = setTimeout(() => { unsub?.(); }, 90_000);
+    const timeout = setTimeout(() => { unsub?.(); activeJoinSubs.delete(ctx.telegramId); }, 90_000);
     unsub = subscribeJoinManager(sessionId, async (s) => {
       if (Date.now() - lastEdit < 1500) return;
       lastEdit = Date.now();
@@ -644,8 +665,13 @@ export async function handleJoinManager(
         parse_mode: 'HTML',
         reply_markup: joinManagerKeyboard(sessionId, s.status),
       }).catch(() => {});
-      if (s.status !== 'running') { clearTimeout(timeout); unsub?.(); }
+      if (s.status !== 'running') {
+        clearTimeout(timeout);
+        unsub?.();
+        activeJoinSubs.delete(ctx.telegramId);
+      }
     });
+    activeJoinSubs.set(ctx.telegramId, () => { clearTimeout(timeout); unsub?.(); });
   }
 }
 
