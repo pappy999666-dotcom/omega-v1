@@ -30,20 +30,40 @@ export async function generateStatusCard(
   // Only fall back to a network fetch when no pre-resolved data exists.
   const metadata = preResolved ?? await PreviewManager.fetchLinkMeta(url);
 
-  // Only use metadata title if it's a real name — not just a bare URL or domain string.
-  // "whatsapp.com" as a title only appears when the scraper fell back to Stage 3 (hostname).
-  // If the title came from pre-resolved socket data it should always be used.
+  // Derive the URL hostname as a last-resort title fallback — always more informative
+  // than the design engine's generic theme defaults (e.g. "Community" for `clean`).
+  const hostname = (() => {
+    try { return new URL(url).hostname; } catch { return undefined; }
+  })();
+
+  // Special-case well-known WA URL patterns so the title is at least descriptive
+  const waFallbackTitle = (() => {
+    if (/whatsapp\.com\/channel\//i.test(url)) return 'WA Channel';
+    if (/chat\.whatsapp\.com\//i.test(url))    return 'WA Group';
+    return undefined;
+  })();
+
+  // Only use scraped title if it's a real name — not just a bare URL or domain string.
+  // Stage 3 sets title = hostname when all scraping fails; detect and replace that too.
   const rawTitle = metadata?.title?.trim() ?? '';
   const isJustDomain =
-    /^https?:\/\//i.test(rawTitle) ||      // title is literally a URL
-    rawTitle === 'chat.whatsapp.com' ||     // exact hostname fallback (Stage 3)
-    rawTitle === 'whatsapp.com' ||          // exact hostname fallback
-    rawTitle.length < 3;                    // too short to be meaningful
+    /^https?:\/\//i.test(rawTitle) ||    // title is literally a URL
+    rawTitle === 'chat.whatsapp.com' ||   // exact hostname fallback (Stage 3)
+    rawTitle === 'whatsapp.com' ||        // exact hostname fallback
+    rawTitle === (hostname ?? '') ||      // Stage 3 hostname-as-title (any site)
+    rawTitle.length < 3;                  // too short to be meaningful
 
-  // Pre-resolved titles (from socket) are always trustworthy — never suppress them
-  const title = (preResolved?.title && preResolved.title.trim().length >= 3)
-    ? preResolved.title.trim()
-    : (isJustDomain ? undefined : rawTitle);
+  // Title resolution priority:
+  // 1. Pre-resolved title from socket (real group/channel name) — always trust it
+  // 2. Scraped title if it's a real page name (not a domain string)
+  // 3. WA-specific descriptive fallback for WA links (e.g. "WA Channel")
+  // 4. URL hostname — better than the design engine's generic "Community" default
+  const title =
+    (preResolved?.title && preResolved.title.trim().length >= 3)
+      ? preResolved.title.trim()
+      : (!isJustDomain && rawTitle.length >= 3)
+        ? rawTitle
+        : (waFallbackTitle ?? hostname);
 
   // Strip URL from text to get any user-provided label as message hint
   const msgWithoutUrl = text.replace(url, '').replace(/https?:\/\/\S+/gu, '').trim();

@@ -182,7 +182,11 @@ export class MetadataResolver {
       meta = await fetchStage2(normalized);
     }
 
-    if (!meta) {
+    // Fall back to Stage 3 when:
+    // - Stage 2 itself returned null (network failure), OR
+    // - Stage 2 returned an object but couldn't extract any title or description
+    //   (JS-rendered pages like WhatsApp channel pages, heavy SPAs, etc.)
+    if (!meta || (!meta.title && !meta.description)) {
       PreviewLogger.metadataFallback(normalized, 'Stage4_HtmlParse', 'Stage5_UrlOnly');
       meta = fetchStage3(normalized);
     }
