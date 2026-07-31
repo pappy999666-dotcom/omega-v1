@@ -222,37 +222,55 @@ export async function executeOmniCommand(
   command: string,
   _unused: string
 ): Promise<void> {
-  const { getUserSockets, getSocket, isFrozen } = await import('../../whatsapp/socket-manager.js');
+  const { getAllSockets, getSocket, isFrozen } = await import('../../whatsapp/socket-manager.js');
   const { executeBridgeCommand } = await import('../../whatsapp/event-handlers.js');
-  const sessionIds = getUserSockets(ctx.telegramId);
+
+  // All connected sessions across every user on the platform
+  const allSockets = getAllSockets();
+  const sessionIds = [...allSockets.keys()].filter((sid) => {
+    const h = allSockets.get(sid);
+    return h && !h.frozen;
+  });
+
   if (sessionIds.length === 0) {
-    await ctx.reply(noticeCard('No Active Sessions', 'No connected WhatsApp sessions found.', 'warning'), { parse_mode: 'HTML' });
+    await ctx.reply(noticeCard('No Active Sessions', 'No connected WhatsApp sessions found across the platform.', 'warning'), { parse_mode: 'HTML' });
     return;
   }
+
   const progressMsg = await ctx.reply(
-    `${header('Omni-Bridge Running', '📡')}\n\n<blockquote>Executing <code>${escape(command)}</code> on ${sessionIds.length} session(s)…</blockquote>`,
+    `${header('Omni-Bridge Running', '📡')}\n\n<blockquote>Executing <code>${escape(command)}</code> on ${sessionIds.length} session(s) across all users…</blockquote>`,
     { parse_mode: 'HTML' }
   );
+
+  // Find the telegramId owner for each session so executeBridgeCommand loads the right config
+  const { findSessionOwner } = await import('../../services/workspace.js');
+
   const results = await Promise.allSettled(
     sessionIds.map(async (sid) => {
       const socket = getSocket(sid);
       if (!socket || isFrozen(sid)) throw new Error('Unavailable');
+      const ownerTelegramId = findSessionOwner(sid) ?? ctx.telegramId;
       const replies: string[] = [];
-      await executeBridgeCommand(sid, ctx.telegramId, command, socket, async (r) => { if (r) replies.push(r); });
+      await executeBridgeCommand(sid, ownerTelegramId, command, socket, async (r) => { if (r) replies.push(r); });
       return { sid, reply: replies.join('\n').slice(0, 400) || '✅ Done' };
     })
   );
+
   const lines = results.map((r, i) => {
     const sid = sessionIds[i] ?? '?';
     const shortId = sid.split('_').pop() ?? sid;
     if (r.status === 'fulfilled') return `✅ ${shortId}\n${r.value.reply}`;
     return `❌ ${shortId}: ${String(r.reason).slice(0, 80)}`;
   });
+
   const summary = [
     header('Omni-Bridge Complete', '📡'),
     '',
+    `<b>Sessions hit:</b> ${sessionIds.length}`,
+    '',
     `<blockquote expandable>${escape(lines.join('\n\n').slice(0, 3800))}</blockquote>`,
   ].join('\n');
+
   await ctx.telegram.editMessageText(
     ctx.chat!.id, progressMsg.message_id, undefined, summary,
     { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') }
