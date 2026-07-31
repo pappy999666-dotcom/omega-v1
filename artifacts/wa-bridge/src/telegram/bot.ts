@@ -1602,7 +1602,7 @@ async function routeCallback(
       const { sessionCard } = await import('../utils/formatter.js');
       await ctx.editMessageText(
         sessionCard({ sessionId, label: meta.label, phone: meta.phone, status: meta.status, paired: meta.status === 'open' }),
-        { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId) }
+        { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId, meta.status) }
       ).catch(() => {});
       return;
     }
@@ -2632,7 +2632,7 @@ async function routeCallback(
       const { loadPlatformSessions } = await import('../services/workspace.js');
       const page = parseInt(params[1] ?? '0', 10);
       const PAGE_SIZE = 10;
-      const all = loadPlatformSessions().filter((s: { status: string }) => s.status !== 'closed' && s.status !== 'banned');
+      const all = loadPlatformSessions().filter((s: { status: string }) => s.status === 'open' || s.status === 'frozen');
       const statusIcons: Record<string, string> = { open: '🟢', frozen: '🔵', error: '🔴', connecting: '🟡', closed: '⚫', banned: '💣' };
       const slice = all.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
       const sessionButtons = slice.map((s: { sessionId: string; label?: string; phone: string; telegramId: string; status: string }) => [

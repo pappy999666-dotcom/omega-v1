@@ -128,12 +128,15 @@ export function sessionsListKeyboard(
   return { inline_keyboard: rows };
 }
 
-export function sessionMenuKeyboard(sessionId: string): InlineKeyboardMarkup {
+export function sessionMenuKeyboard(sessionId: string, status?: string): InlineKeyboardMarkup {
+  const isFrozen = status === 'frozen';
   return {
     inline_keyboard: [
       [btn('📊 Info', `session:${sessionId}:info`, 'primary'), btn('📋 Groups', `session:${sessionId}:groups`, 'primary')],
-      [btn('❄️ Freeze', `session:${sessionId}:freeze`, 'danger'), btn('🔥 Unfreeze', `session:${sessionId}:unfreeze`, 'success')],
-      [btn('🔄 Re-Init', `session:${sessionId}:reinit`, 'primary'), btn('🗑 Purge', `session:${sessionId}:purge`, 'danger')],
+      isFrozen
+        ? [btn('🔥 Unfreeze', `session:${sessionId}:unfreeze`, 'success')]
+        : [btn('❄️ Freeze', `session:${sessionId}:freeze`, 'danger'), btn('🔄 Re-Init', `session:${sessionId}:reinit`, 'primary')],
+      [btn('🗑 Purge', `session:${sessionId}:purge`, 'danger')],
       [btn('🔗 Link Collection', `session:${sessionId}:collect`, 'primary'), btn('🚪 Join Manager', `session:${sessionId}:joinmgr`, 'primary')],
       [btn('🖼 Set PFP', `session:${sessionId}:pfp:set`, 'primary'), btn('📸 Get PFP', `session:${sessionId}:pfp:get`, 'primary'), btn('🗑 Remove PFP', `session:${sessionId}:pfp:remove`, 'danger')],
       [btn('✏️ Set Name', `session:${sessionId}:setname`, 'primary'), btn('📝 Set Bio', `session:${sessionId}:setbio`, 'primary')],

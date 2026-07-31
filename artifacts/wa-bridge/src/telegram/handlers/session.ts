@@ -101,9 +101,10 @@ export async function handleSessionsList(
   ctx: Context & { telegramId: string; isOwner?: boolean },
   page = 0
 ): Promise<void> {
-  // Always show only the caller's own sessions — admin uses All Sessions in admin panel
+  // Only show active sessions: open (green) and frozen (user-paused)
+  // closed/banned/error/connecting are excluded — they're not usable
   const sessions = Object.values(loadAllSessions(ctx.telegramId))
-    .filter((s) => s.status !== 'closed' && s.status !== 'banned');
+    .filter((s) => s.status === 'open' || s.status === 'frozen');
 
   if (sessions.length === 0) {
     await ctx.editMessageText?.(
@@ -426,7 +427,7 @@ export async function handleFreezeSession(
   await ctx.answerCbQuery('Session frozen ❄️').catch(() => {});
   await ctx.editMessageText(
     `${header('Session Frozen', '❄️')}\n\n${H.code(sessionId)}\n\nTraffic paused. Use Unfreeze to resume.`,
-    { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId) }
+    { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId, 'frozen') }
   ).catch(() => {});
 }
 
@@ -438,7 +439,7 @@ export async function handleUnfreezeSession(
   await ctx.answerCbQuery('Session unfrozen 🔥').catch(() => {});
   await ctx.editMessageText(
     `${header('Session Active', '🟢')}\n\n${H.code(sessionId)}\n\nTraffic resumed.`,
-    { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId) }
+    { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId, 'open') }
   ).catch(() => {});
 }
 
