@@ -625,7 +625,7 @@ export async function handleJoinManager(
   const msgText = [
     card('Link Join Manager', '🚪', [
       ['Source', 'Active bucket'], ['Status', state.status],
-      ['Progress', `${state.cursor}/${state.total}`], ['In Groups', `📊 ${state.gcCount ?? 0}`],
+      ['Progress', `${state.cursor}/${state.total}`], ['In Groups', `📊 ${state.gcCount != null && state.gcCount >= 0 ? state.gcCount : '?'}`],
       ['Joined', String(state.joined)], ['Skipped', String(state.skipped)],
       ['Failed', String(state.failed)], ['Rate Limits', `${state.rateLimitHits ?? 0}/5`],
       ['Join Limit', limitDisplay], ['Delay', delayDisplay],
@@ -654,7 +654,7 @@ export async function handleJoinManager(
       const lt = [
         card('Link Join Manager', '🚪', [
           ['Status', s.status], ['Progress', `${s.cursor}/${s.total}`],
-          ['In Groups', `📊 ${s.gcCount ?? 0}`],
+          ['In Groups', `📊 ${s.gcCount != null && s.gcCount >= 0 ? s.gcCount : '?'}`],
           ['Joined', String(s.joined)], ['Skipped', String(s.skipped)],
           ['Failed', String(s.failed)], ['Rate Limits', `${s.rateLimitHits ?? 0}/5`],
           ['Join Limit', limitDisplay], ['Delay', delayDisplay],

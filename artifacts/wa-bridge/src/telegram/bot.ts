@@ -1450,8 +1450,15 @@ export function createBot(): Telegraf<BotContext> {
       if (action !== 'gcset') await ctx.answerCbQuery().catch(() => {});
       await routeCallback(bc, action!, params);
     } catch (err) {
-      logger.error('[Bot] Callback error', { data, err: String(err) });
-      await ctx.reply(noticeCard('Action Failed', 'The selected action could not be completed.', 'error', String(err)), {
+      const errStr = String(err);
+      // Silently ignore WhatsApp rate-overlimit — it’s transient and not user-actionable
+      if (/rate.over.limit|rate-overlimit|429|too.many/i.test(errStr)) {
+        logger.warn('[Bot] Callback rate-overlimit (ignored)', { data, err: errStr });
+        await ctx.answerCbQuery('⚠️ Rate limited — try again in a moment', { show_alert: true }).catch(() => {});
+        return;
+      }
+      logger.error('[Bot] Callback error', { data, err: errStr });
+      await ctx.reply(noticeCard('Action Failed', 'The selected action could not be completed.', 'error', errStr), {
         parse_mode: 'HTML',
       }).catch(() => {});
     }

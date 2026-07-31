@@ -135,7 +135,7 @@ async function fetchGcCount(socket: WASocket): Promise<number> {
     }).groupFetchAllParticipating();
     return Object.keys(groups).length;
   } catch {
-    return 0;
+    return -1; // -1 = unavailable (rate limited)
   }
 }
 
@@ -175,9 +175,9 @@ export async function startJoinManager(
         logs: [`▶ Started — ${effectiveLinks.length} links queued`],
       };
 
-  // Fetch initial GC count
+  // Fetch initial GC count (best-effort — may be unavailable if rate limited)
   state.gcCount = await fetchGcCount(socket);
-  state.logs.push(`📊 Currently in ${state.gcCount} groups`);
+  state.logs.push(`📊 Currently in ${state.gcCount >= 0 ? state.gcCount : '?'} groups`);
 
   const controller = { cancelled: false };
   controllers.set(sessionId, controller);
@@ -203,8 +203,8 @@ export async function startJoinManager(
       if (result.success) {
         state.joined += 1;
         state.consecutiveRestrictions = 0;
-        // Update live GC count after every successful join
-        state.gcCount = await fetchGcCount(socket);
+        // Increment gcCount by 1 on each successful join — avoids hammering groupFetchAllParticipating
+        if (state.gcCount >= 0) state.gcCount += 1;
         state.logs.push(`✅ Joined: ${result.title ?? result.jid ?? link} | GCs: ${state.gcCount}`);
       } else {
         const error = result.error ?? 'Unknown failure';
@@ -278,9 +278,10 @@ export async function startJoinManager(
 
     if (!controller.cancelled && state.status === 'running') {
       state.status = 'completed';
-      // Final GC count
-      state.gcCount = await fetchGcCount(socket);
-      state.logs.push(`✅ Done — Joined: ${state.joined} | Skipped: ${state.skipped} | Failed: ${state.failed} | GCs: ${state.gcCount}`);
+      // Final GC count — only fetch if not rate limited
+      const finalCount = await fetchGcCount(socket);
+      if (finalCount >= 0) state.gcCount = finalCount;
+      state.logs.push(`✅ Done — Joined: ${state.joined} | Skipped: ${state.skipped} | Failed: ${state.failed} | GCs: ${state.gcCount >= 0 ? state.gcCount : '?'}`);
     }
   } catch (error) {
     state.status = 'stopped';
