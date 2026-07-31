@@ -1,0 +1,346 @@
+The recent link preview changes have introduced regressions. Do NOT patch symptoms. Perform a complete forensic audit of the entire outbound link-preview pipeline and restore the intended architecture.
+
+Current Problems
+
+1.
+Status Design no longer renders.
+
+Instead of
+
+(Status Design)
+↓
+Link Preview
+
+the bot now sends
+
+Native Preview
+↓
+Raw Link
+
+meaning the preview builder bypasses the StatusDesign renderer completely.
+
+StatusDesign must ALWAYS execute first.
+
+It owns the outgoing message.
+
+The preview system must enrich it, never replace it.
+
+
+
+2.
+
+WhatsApp Group Invite previews now frequently have
+
+• title only
+• no thumbnail
+
+meaning Baileys preview hydration is incomplete.
+
+The bot should NEVER manually fabricate previews.
+
+Instead it should rely on the native @crysnovax/baileys preview generation exactly how WhatsApp expects.
+
+
+
+3.
+
+WhatsApp Channel links
+
+https://whatsapp.com/channel/...
+
+sometimes produce
+
+no preview
+
+or
+
+title only.
+
+Investigate why channel URLs fail while group URLs partially work.
+
+Compare the metadata fetch path for
+
+chat.whatsapp.com
+
+vs
+
+whatsapp.com/channel
+
+and ensure both are hydrated.
+
+
+
+4.
+
+The previous "Use As Sent" feature still works perfectly.
+
+DO NOT TOUCH IT.
+
+That pipeline correctly preserves existing hydrated previews.
+
+Leave it exactly as it is.
+
+Only repair generated previews.
+
+
+
+5.
+
+Status Design currently gets ignored whenever preview generation occurs.
+
+Instead:
+
+Command
+
+↓
+
+StatusDesign.render()
+
+↓
+
+Append generated title into the design
+
+↓
+
+Hydrate preview with Baileys
+
+↓
+
+Send ONE message
+
+Never send preview first.
+
+Never send design second.
+
+Never split them.
+
+
+
+Status Design Rules
+
+If Status Design is enabled
+
+the generated title must be inserted into the design.
+
+Example
+
+━━━━━━━━━━━━━━
+
+✦ Follow
+✦ MYTHIC VAULT
+
+Join the official channel.
+
+━━━━━━━━━━━━━━
+
+Generated Preview Title
+
+━━━━━━━━━━━━━━
+
+URL
+
+Then hydrate that exact message.
+
+Do NOT replace it with a plain preview.
+
+Do NOT shrink long titles.
+
+Allow wrapping.
+
+Never truncate.
+
+
+
+Long titles
+
+Current behavior shrinks them into one line.
+
+Instead
+
+allow multiline wrapping inside the design.
+
+The design expands vertically.
+
+Never horizontally compress.
+
+Never cut characters.
+
+
+
+AllStatus
+
+allstatus currently only supports text.
+
+Extend it to fully support
+
+• images
+• videos
+• GIFs
+• stickers (when supported)
+• captions
+• mentions
+• link previews
+• status designs
+
+Behavior should match normal sendStatus.
+
+
+
+Media + Caption
+
+When sending
+
+image + caption containing URL
+
+the pipeline becomes
+
+Media
+
+↓
+
+Caption
+
+↓
+
+Status Design
+
+↓
+
+Preview hydration
+
+↓
+
+Send
+
+Do not lose captions.
+
+Do not duplicate captions.
+
+
+
+Thumbnail Investigation
+
+Investigate why generated previews lose thumbnails.
+
+Audit
+
+generateLinkPreview()
+
+prepareWAMessageMedia()
+
+generateWAMessage()
+
+link-preview helpers
+
+externalAdReply
+
+previewType
+
+jpegThumbnail
+
+highQualityThumbnail
+
+thumbnailDirectPath
+
+canonical-url handling
+
+title extraction
+
+description extraction
+
+Do not manually fake thumbnails if Baileys can generate them.
+
+Use native Baileys preview generation.
+
+
+
+Execution Order
+
+Current
+
+Command
+↓
+Preview
+↓
+Send
+
+Required
+
+Command
+↓
+Status Design
+↓
+Insert Preview Title
+↓
+Hydrate Preview
+↓
+Send
+
+
+
+Requirements
+
+• Audit every sendMessage wrapper.
+• Audit every preview helper.
+• Audit middleware.
+• Audit status pipeline.
+• Audit group-status pipeline.
+• Audit allstatus.
+• Audit media sends.
+• Audit caption processing.
+• Audit URL detection.
+• Audit externalAdReply handling.
+• Audit preview suppression flags.
+• Audit message mutation before send.
+
+Search the entire repository for anything that strips:
+
+text
+
+caption
+
+contextInfo
+
+externalAdReply
+
+linkPreview
+
+previewType
+
+jpegThumbnail
+
+thumbnail
+
+statusDesign
+
+renderTemplate
+
+No helper should overwrite another's output.
+
+
+
+Regression Prevention
+
+After fixing, verify all of these work:
+
+✓ Raw group invite
+✓ Raw channel link
+✓ Multiple links
+✓ Image + URL
+✓ Video + URL
+✓ Caption + URL
+✓ StatusDesign ON
+✓ StatusDesign OFF
+✓ Existing hydrated preview ("Use As Sent")
+✓ Group Status
+✓ allstatus
+✓ Long titles
+✓ Unicode titles
+✓ Emojis
+✓ Very long channel names
+
+There must be zero regressions.
+
+Do not implement quick fixes.
+
+Restore one unified, deterministic preview pipeline where Status Design renders first and Baileys only enriches the already-rendered message.
