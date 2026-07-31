@@ -2630,23 +2630,34 @@ async function routeCallback(
     if (sub === 'omni') { await handleOmniBridge(ctx); return; }
     if (sub === 'allsessions') {
       const { loadPlatformSessions } = await import('../services/workspace.js');
+      const page = parseInt(params[1] ?? '0', 10);
+      const PAGE_SIZE = 10;
       const all = loadPlatformSessions().filter((s: { status: string }) => s.status !== 'closed' && s.status !== 'banned');
       const statusIcons: Record<string, string> = { open: '🟢', frozen: '🔵', error: '🔴', connecting: '🟡', closed: '⚫', banned: '💣' };
-      const lines = all.map((s: { status: string; label?: string; phone: string; telegramId: string }) => {
-        const icon = statusIcons[s.status] ?? '⚪';
-        return `${icon} <b>${escape(s.label ?? s.phone)}</b> — <code>${escape(s.phone)}</code> (${escape(s.telegramId)})`;
-      });
-      const text = [
-        header('All Platform Sessions', '📋'),
-        '',
-        `<b>Active:</b> ${all.length}`,
-        '',
-        all.length ? lines.join('\n') : H.italic('No active sessions.'),
-      ].join('\n');
-      await ctx.editMessageText(text.slice(0, 4096), {
-        parse_mode: 'HTML',
-        reply_markup: backKeyboard('admin:panel'),
-      }).catch(() => {});
+      const slice = all.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+      const sessionButtons = slice.map((s: { sessionId: string; label?: string; phone: string; telegramId: string; status: string }) => [
+        btn(
+          `${statusIcons[s.status] ?? '⚪'} ${s.label ?? s.phone} (${s.telegramId})`,
+          `session:${s.sessionId}:menu`,
+          'primary'
+        ),
+      ]);
+      const nav: ReturnType<typeof btn>[] = [];
+      if (page > 0) nav.push(btn('◄ Prev', `admin:allsessions:${page - 1}`, 'primary'));
+      if ((page + 1) * PAGE_SIZE < all.length) nav.push(btn('Next ►', `admin:allsessions:${page + 1}`, 'primary'));
+      await ctx.editMessageText(
+        card('All Platform Sessions', '📋', [['Total', String(all.length)], ['Page', `${page + 1}/${Math.ceil(all.length / PAGE_SIZE) || 1}`]], 'Tap any session to open its full control menu.'),
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              ...sessionButtons,
+              ...(nav.length ? [nav] : []),
+              [btn('🔙 Back', 'admin:panel', 'primary')],
+            ],
+          },
+        }
+      ).catch(() => {});
       return;
     }
     if (sub === 'forcejoin') {
