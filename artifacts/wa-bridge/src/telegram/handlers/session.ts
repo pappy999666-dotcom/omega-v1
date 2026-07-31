@@ -605,10 +605,11 @@ export async function handleJoinManager(
   const msgText = [
     card('Link Join Manager', '🚪', [
       ['Source', 'Active bucket'], ['Status', state.status],
-      ['Progress', `${state.cursor}/${state.total}`], ['Joined', String(state.joined)],
-      ['Skipped', String(state.skipped)], ['Failed', String(state.failed)],
+      ['Progress', `${state.cursor}/${state.total}`], ['In Groups', `📊 ${state.gcCount ?? 0}`],
+      ['Joined', String(state.joined)], ['Skipped', String(state.skipped)],
+      ['Failed', String(state.failed)], ['Rate Limits', `${state.rateLimitHits ?? 0}/5`],
       ['Join Limit', limitDisplay], ['Delay', delayDisplay],
-    ], state.currentLink ? `Current: ${state.currentLink}` : 'Jobs stop after 5 consecutive restriction failures.'),
+    ], state.currentLink ? `Current: ${state.currentLink.slice(-40)}` : 'Jobs stop at 5 rate limit hits.'),
     H.blockquote(logs, true),
   ].join('\n\n');
 
@@ -617,7 +618,6 @@ export async function handleJoinManager(
     reply_markup: joinManagerKeyboard(sessionId, state.status),
   }).catch(() => null);
 
-  // Live log: subscribe and auto-edit while running (max 90s, 1.5s throttle)
   const chatId = ctx.chat?.id ?? (ctx as any).callbackQuery?.message?.chat?.id;
   if (state.status === 'running' && sentMsg && chatId) {
     const msgId = (sentMsg as unknown as { message_id?: number }).message_id;
@@ -632,9 +632,11 @@ export async function handleJoinManager(
       const lt = [
         card('Link Join Manager', '🚪', [
           ['Status', s.status], ['Progress', `${s.cursor}/${s.total}`],
-          ['Joined', String(s.joined)], ['Skipped', String(s.skipped)], ['Failed', String(s.failed)],
+          ['In Groups', `📊 ${s.gcCount ?? 0}`],
+          ['Joined', String(s.joined)], ['Skipped', String(s.skipped)],
+          ['Failed', String(s.failed)], ['Rate Limits', `${s.rateLimitHits ?? 0}/5`],
           ['Join Limit', limitDisplay], ['Delay', delayDisplay],
-        ], s.currentLink ? `Current: ${s.currentLink}` : ''),
+        ], s.currentLink ? `Current: ${s.currentLink.slice(-40)}` : ''),
         H.blockquote(ll, true),
       ].join('\n\n');
       await ctx.telegram.editMessageText(chatId, msgId, undefined, lt, {

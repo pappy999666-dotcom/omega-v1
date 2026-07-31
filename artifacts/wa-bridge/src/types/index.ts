@@ -64,7 +64,9 @@ export interface JoinManagerState {
   joined: number;
   skipped: number;
   failed: number;
+  gcCount: number;
   consecutiveRestrictions: number;
+  rateLimitHits: number;
   currentLink?: string;
   lastError?: string;
   startedAt?: number;

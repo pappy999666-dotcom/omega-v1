@@ -80,7 +80,8 @@ const listeners = new Map<string, Set<(state: JoinManagerState) => Promise<void>
 function initialState(): JoinManagerState {
   return {
     status: 'idle', cursor: 0, total: 0, joined: 0, skipped: 0, failed: 0,
-    consecutiveRestrictions: 0, updatedAt: Date.now(), logs: [],
+    gcCount: 0, consecutiveRestrictions: 0, rateLimitHits: 0,
+    updatedAt: Date.now(), logs: [],
   };
 }
 
@@ -125,6 +126,19 @@ export function stopJoinManager(telegramId: string, sessionId: string): JoinMana
   return state;
 }
 
+// ── GC Count Helper ───────────────────────────────────────
+
+async function fetchGcCount(socket: WASocket): Promise<number> {
+  try {
+    const groups = await (socket as unknown as {
+      groupFetchAllParticipating(): Promise<Record<string, unknown>>;
+    }).groupFetchAllParticipating();
+    return Object.keys(groups).length;
+  } catch {
+    return 0;
+  }
+}
+
 // ── Main Engine ───────────────────────────────────────────
 
 export async function startJoinManager(
@@ -146,11 +160,8 @@ export async function startJoinManager(
 
   const cfg: JoinSettings = { ...DEFAULT_JOIN_SETTINGS, ...settings };
 
-  // Load and shuffle the active bucket on every fresh start
   const rawLinks = loadBucket(telegramId, 'active').map((entry) => entry.link);
   const links = shuffleArray(rawLinks);
-
-  // Apply per-run cap if set
   const effectiveLinks = cfg.maxLinksPerRun > 0 ? links.slice(0, cfg.maxLinksPerRun) : links;
 
   const previous = getJoinManagerState(telegramId, sessionId);
@@ -161,16 +172,22 @@ export async function startJoinManager(
         status: 'running',
         total: effectiveLinks.length,
         startedAt: Date.now(),
-        logs: [`▶ Join manager started — ${effectiveLinks.length} links (shuffled)`],
+        logs: [`▶ Started — ${effectiveLinks.length} links queued`],
       };
+
+  // Fetch initial GC count
+  state.gcCount = await fetchGcCount(socket);
+  state.logs.push(`📊 Currently in ${state.gcCount} groups`);
 
   const controller = { cancelled: false };
   controllers.set(sessionId, controller);
   persist(telegramId, sessionId, state);
 
+  // Dead links collected this run — moved back to main bucket at end
+  const deadLinksThisRun: string[] = [];
+
   try {
     while (state.cursor < effectiveLinks.length && !controller.cancelled) {
-      // Pause polling
       if (state.status === 'paused') {
         await new Promise((resolve) => setTimeout(resolve, 1000));
         continue;
@@ -186,7 +203,9 @@ export async function startJoinManager(
       if (result.success) {
         state.joined += 1;
         state.consecutiveRestrictions = 0;
-        state.logs.push(`✅ Joined: ${result.title ?? result.jid ?? link}`);
+        // Update live GC count after every successful join
+        state.gcCount = await fetchGcCount(socket);
+        state.logs.push(`✅ Joined: ${result.title ?? result.jid ?? link} | GCs: ${state.gcCount}`);
       } else {
         const error = result.error ?? 'Unknown failure';
         const kind = classifyJoinError(error);
@@ -195,65 +214,98 @@ export async function startJoinManager(
           case 'restriction':
             state.failed += 1;
             state.consecutiveRestrictions += 1;
+            state.rateLimitHits += 1;
             state.lastError = error;
-            state.logs.push(`🚫 Restricted: ${error.slice(0, 100)}`);
+            state.logs.push(`🚫 Rate limit (${state.rateLimitHits}/5): ${error.slice(0, 80)}`);
+            // Stop immediately at 5 rate limit hits — account protection
+            if (state.rateLimitHits >= cfg.restrictionThreshold) {
+              state.status = 'restricted';
+              state.logs.push(`🛑 STOPPED — 5 rate limits hit. Account protection triggered. Wait before retrying.`);
+              logger.warn('[JoinManager] Rate limit threshold reached', { sessionId, rateLimitHits: state.rateLimitHits });
+              persist(telegramId, sessionId, state);
+              // Move dead links back to main before exiting
+              if (deadLinksThisRun.length > 0) {
+                const activeEntries = loadBucket(telegramId, 'active');
+                const toMove = activeEntries.filter((e) => deadLinksThisRun.includes(e.link));
+                if (toMove.length > 0) {
+                  const { addToMainBucket } = await import('./workspace.js');
+                  addToMainBucket(telegramId, toMove.map((e) => e.link));
+                  const active = activeEntries.filter((e) => !deadLinksThisRun.includes(e.link));
+                  const { saveBucket } = await import('./workspace.js');
+                  saveBucket(telegramId, 'active', active);
+                }
+              }
+              controllers.delete(sessionId);
+              return;
+            }
             break;
           case 'dead':
             state.failed += 1;
             state.consecutiveRestrictions = 0;
-            state.logs.push(`💀 Dead link: ${link}`);
+            // Return dead link to main bucket (not dead bucket) so user can review
+            deadLinksThisRun.push(link);
+            state.logs.push(`💀 Dead/failed link returned to main: ${link.slice(-30)}`);
             break;
           case 'already':
             state.skipped += 1;
             state.consecutiveRestrictions = 0;
-            state.logs.push(`⏭ Already joined: ${link}`);
+            state.logs.push(`⏭ Already in group: ${link.slice(-30)}`);
             break;
           case 'full':
             state.skipped += 1;
             state.consecutiveRestrictions = 0;
-            state.logs.push(`👥 Group full: ${link}`);
+            state.logs.push(`👥 Group full: ${link.slice(-30)}`);
             break;
           case 'network':
             state.failed += 1;
             state.consecutiveRestrictions = 0;
-            state.logs.push(`🌐 Network error: ${error.slice(0, 80)}`);
+            state.logs.push(`🌐 Network error — retrying next: ${error.slice(0, 60)}`);
             break;
           default:
             state.failed += 1;
             state.consecutiveRestrictions = 0;
-            state.logs.push(`❌ Failed: ${error.slice(0, 100)}`);
-        }
-
-        // Stop after N consecutive restriction failures
-        if (state.consecutiveRestrictions >= cfg.restrictionThreshold) {
-          state.status = 'restricted';
-          state.logs.push(`🛑 Stopped — ${cfg.restrictionThreshold} consecutive restriction failures. Account protection triggered.`);
-          logger.warn('[JoinManager] Restriction threshold reached', {
-            sessionId, consecutiveRestrictions: state.consecutiveRestrictions,
-          });
-          break;
+            // Unknown failures also go back to main for review
+            deadLinksThisRun.push(link);
+            state.logs.push(`❌ Failed (returned to main): ${error.slice(0, 80)}`);
         }
       }
 
       persist(telegramId, sessionId, state);
 
-      // Randomized delay between joins
       const delay = cfg.minDelayMs + Math.floor(Math.random() * (cfg.maxDelayMs - cfg.minDelayMs));
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
 
     if (!controller.cancelled && state.status === 'running') {
       state.status = 'completed';
-      state.logs.push(`✅ Completed — Joined: ${state.joined} | Failed: ${state.failed} | Skipped: ${state.skipped}`);
+      // Final GC count
+      state.gcCount = await fetchGcCount(socket);
+      state.logs.push(`✅ Done — Joined: ${state.joined} | Skipped: ${state.skipped} | Failed: ${state.failed} | GCs: ${state.gcCount}`);
     }
   } catch (error) {
     state.status = 'stopped';
     state.lastError = String(error);
-    state.logs.push(`💥 Fatal error: ${String(error).slice(0, 100)}`);
+    state.logs.push(`💥 Fatal: ${String(error).slice(0, 100)}`);
     logger.error('[JoinManager] Job failed', { sessionId, error: String(error) });
   } finally {
     state.currentLink = undefined;
     persist(telegramId, sessionId, state);
     controllers.delete(sessionId);
+
+    // Move dead/failed links from active bucket back to main bucket
+    if (deadLinksThisRun.length > 0) {
+      try {
+        const activeEntries = loadBucket(telegramId, 'active');
+        const toReturn = activeEntries.filter((e) => deadLinksThisRun.includes(e.link));
+        if (toReturn.length > 0) {
+          const { addToMainBucket, saveBucket } = await import('./workspace.js');
+          addToMainBucket(telegramId, toReturn.map((e) => e.link));
+          saveBucket(telegramId, 'active', activeEntries.filter((e) => !deadLinksThisRun.includes(e.link)));
+          logger.info('[JoinManager] Returned dead/failed links to main bucket', { count: toReturn.length, sessionId });
+        }
+      } catch (err) {
+        logger.warn('[JoinManager] Failed to return dead links to main', { err: String(err) });
+      }
+    }
   }
 }
