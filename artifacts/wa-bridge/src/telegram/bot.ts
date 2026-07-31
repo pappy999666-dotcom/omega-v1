@@ -158,6 +158,8 @@ interface BotContext extends Context {
     awaitingGcSetJid?: string;
     awaitingLeaveGcSessionId?: string;
     awaitingSudoAddSessionId?: string;
+    awaitingJoinLimitSessionId?: string;
+    awaitingJoinDelaySessionId?: string;
     // Per-group bridge mode
     groupBridgeSessionId?: string;
     groupBridgeGcJid?: string;
@@ -402,16 +404,14 @@ export function createBot(): Telegraf<BotContext> {
     );
   });
 
-  // /omni [cmd] [text] — Admin omni-bridge command
+  // /omni [full WA command] — runs on all connected sessions
   bot.command('omni', ownerOnly() as never, async (ctx) => {
-    const parts = ctx.message.text.split(' ').slice(1);
-    const command = parts[0];
-    const text = parts.slice(1).join(' ');
-    if (!command) {
-      await ctx.reply(card('Omni-Bridge', '📡', [['Usage', '/omni [broadcast|status] [text]']], 'Choose an operation and provide its content.'), { parse_mode: 'HTML' });
+    const fullText = ctx.message.text.split(' ').slice(1).join(' ').trim();
+    if (!fullText) {
+      await ctx.reply(card('Omni-Bridge', '📡', [['Usage', '/omni .ping  or  /omni .allstatus hello']], 'Runs any WhatsApp command across all your connected sessions.'), { parse_mode: 'HTML' });
       return;
     }
-    await executeOmniCommand(ctx as BotContext, command, text);
+    await executeOmniCommand(ctx as BotContext, fullText, '');
   });
 
   // /unbind — Exit bridge mode
@@ -893,6 +893,36 @@ export function createBot(): Telegraf<BotContext> {
           { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }
         );
       }
+      return;
+    }
+
+    if (ctx.session?.awaitingJoinLimitSessionId) {
+      const sessionId = ctx.session.awaitingJoinLimitSessionId;
+      delete ctx.session.awaitingJoinLimitSessionId;
+      const n = parseInt(text.trim(), 10);
+      if (isNaN(n) || n < 0) {
+        await ctx.reply(noticeCard('Invalid', 'Send a number (0 = unlimited).', 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:joinmgr`) });
+        return;
+      }
+      const { updateSessionMeta, loadSessionMeta } = await import('../services/workspace.js');
+      const m = loadSessionMeta(ctx.telegramId, sessionId) as any;
+      updateSessionMeta(ctx.telegramId, sessionId, { joinSettings: { ...(m?.joinSettings ?? {}), maxLinksPerRun: n } });
+      await ctx.reply(noticeCard('Join Limit Set', n === 0 ? 'Unlimited joins per run.' : `Max ${n} joins per run.`, 'success'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:joinmgr`) });
+      return;
+    }
+
+    if (ctx.session?.awaitingJoinDelaySessionId) {
+      const sessionId = ctx.session.awaitingJoinDelaySessionId;
+      delete ctx.session.awaitingJoinDelaySessionId;
+      const secs = parseInt(text.trim(), 10);
+      if (isNaN(secs) || secs < 1 || secs > 60) {
+        await ctx.reply(noticeCard('Invalid', 'Send a number between 1 and 60 seconds.', 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:joinmgr`) });
+        return;
+      }
+      const { updateSessionMeta, loadSessionMeta } = await import('../services/workspace.js');
+      const m = loadSessionMeta(ctx.telegramId, sessionId) as any;
+      updateSessionMeta(ctx.telegramId, sessionId, { joinSettings: { ...(m?.joinSettings ?? {}), delayMs: secs * 1000 } });
+      await ctx.reply(noticeCard('Delay Set', `${secs}s between each join.`, 'success'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:joinmgr`) });
       return;
     }
 
@@ -1721,8 +1751,10 @@ async function routeCallback(
     }
     if (sub === 'joinmgr') { await handleJoinManager(ctx, sessionId); return; }
     if (sub === 'join') {
-      const operation = params[2] as 'start' | 'pause' | 'stop' | undefined;
-      await handleJoinManager(ctx, sessionId, operation);
+      const operation = params[2] as 'start' | 'pause' | 'stop' | 'setlimit' | 'setdelay' | undefined;
+      if (operation === 'setlimit') { ctx.session.awaitingJoinLimitSessionId = sessionId; await handleJoinManager(ctx, sessionId, 'setlimit'); return; }
+      if (operation === 'setdelay') { ctx.session.awaitingJoinDelaySessionId = sessionId; await handleJoinManager(ctx, sessionId, 'setdelay'); return; }
+      await handleJoinManager(ctx, sessionId, operation as 'start' | 'pause' | 'stop' | undefined);
       return;
     }
     if (sub === 'bridge') { await handleBridgeSession(ctx, sessionId); return; }

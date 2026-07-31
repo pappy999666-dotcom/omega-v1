@@ -27,6 +27,7 @@ import {
 import { extractInviteCode } from '../../services/tri-bucket.js';
 import { resultBox } from '../../utils/ascii-art.js';
 import { humanDuration } from '../../utils/delay.js';
+import { isJoinAllStopped, clearJoinAllStop } from '../../services/join-manager.js';
 
 
 async function maybeAutoPromote(socket: WASocket, telegramId: string, sessionId: string, groupJid?: string): Promise<void> {
@@ -135,9 +136,15 @@ export async function cmdJoinAll(
   };
 
   const deadLinks: string[] = [];
+  clearJoinAllStop(sessionId);
 
   for (let i = 0; i < links.length; i++) {
     const link = links[i]!;
+
+    if (isJoinAllStopped(sessionId)) {
+      result.details.push('⏹ Stopped by user');
+      break;
+    }
 
     // Circuit breaker
     if (isCircuitOpen(telegramId, sessionId, 'lifecycle')) {

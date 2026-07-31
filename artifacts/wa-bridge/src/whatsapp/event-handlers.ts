@@ -451,21 +451,26 @@ async function processMessage(
 
   const createProgressReply = async (initialText: string): Promise<(nextText: string) => Promise<void>> => {
     if (replyOverride) {
-      await replyOverride(initialText);
-      return replyOverride;
+      // Telegram bridge: send one message then edit it for live updates
+      // replyOverride is ctx.reply — we need editMessageText, so we use a shared ref
+      const wrap = (t: string) => `<blockquote expandable>${t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</blockquote>`;
+      await replyOverride(wrap(initialText));
+      // Can't edit via replyOverride alone — send final result only to avoid spam
+      let lastSent = Date.now();
+      return async (nextText: string) => {
+        const isFinal = /COMPLETE|FAILED|DONE|HALTED/i.test(nextText);
+        if (isFinal || Date.now() - lastSent > 4000) {
+          lastSent = Date.now();
+          await replyOverride(wrap(nextText));
+        }
+      };
     }
     const sent = await socket.sendMessage(groupJid, { text: initialText }, { quoted: msg }) as { key?: import("@crysnovax/baileys").WAMessageKey } | undefined;
     const key = sent?.key;
     return async (nextText: string) => {
-      if (!key) {
-        await socket.sendMessage(groupJid, { text: nextText });
-        return;
-      }
-      try {
-        await socket.sendMessage(groupJid, { text: nextText, edit: key });
-      } catch {
-        await socket.sendMessage(groupJid, { text: nextText });
-      }
+      if (!key) { await socket.sendMessage(groupJid, { text: nextText }); return; }
+      try { await socket.sendMessage(groupJid, { text: nextText, edit: key }); }
+      catch { await socket.sendMessage(groupJid, { text: nextText }); }
     };
   };
   const commandText = (fallback = ''): string => args.join(' ').trim() || quotedText.trim() || fallback;
@@ -671,7 +676,29 @@ async function processMessage(
       }
 
       // Resolve targets: raw args → quoted message sender → @mentions
-      const targets = resolveTargetNumbers(args, msg);
+      let targets = resolveTargetNumbers(args, msg);
+
+      // If reply-based and result looks like a LID (no leading country code pattern),
+      // try to resolve via group participant phoneNumber field
+      if (targets.length > 0 && isGroup) {
+        const ci = msg.message?.extendedTextMessage?.contextInfo;
+        if (ci?.participant?.endsWith('@lid')) {
+          try {
+            const gm = await fetchGroupMeta(socket, groupJid);
+            if (gm) {
+              const lidNum = (ci.participant.split('@')[0] ?? '').split(':')[0] ?? '';
+              const member = gm.participants.find(
+                p => (p.id.split('@')[0] ?? '').split(':')[0] === lidNum
+              );
+              if (member?.phoneNumber) {
+                targets = [member.phoneNumber.replace(/\D/g, '')];
+              } else if (!member?.id.endsWith('@lid')) {
+                targets = [(member?.id.split('@')[0] ?? '').split(':')[0] ?? targets[0]!];
+              }
+            }
+          } catch { /* non-critical */ }
+        }
+      }
 
       if (targets.length === 0) {
         await reply(warningCard(
@@ -945,23 +972,15 @@ async function processMessage(
         await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}${command}${command.endsWith('x') ? ' <count>' : ''} <message>`));
         break;
       }
-      const updateProgress = await createProgressReply(asciiBox({
-        title: 'BROADCAST STARTED',
-        emoji: '📡',
-        rows: [['Repeats', String(repeat)], ['Mode', 'ALL STATUS']],
-        footer: 'Progress updates follow…',
-      }));
+      await reply(asciiBox({ title: 'BROADCAST STARTED', emoji: '📡', rows: [['Repeats', String(repeat)], ['Mode', 'ALL STATUS']], footer: 'Running in background…' }));
       void (async () => {
         for (let index = 0; index < repeat; index += 1) {
-          await cmdAllStatus(socket, sessionId, telegramId, text, {
-            onProgress: updateProgress,
-            existingPreview: quotedPreview,
-            sourceExt,
-          });
+          await cmdAllStatus(socket, sessionId, telegramId, text, { existingPreview: quotedPreview, sourceExt });
         }
+        await socket.sendMessage(groupJid, { text: asciiBox({ title: 'BROADCAST COMPLETE', emoji: '✅', rows: [['Repeats', String(repeat)], ['Mode', 'ALL STATUS']] }) });
       })().catch(async (error) => {
         logger.error('[EventHandler] allstatus failed', { sessionId, error: String(error) });
-        await updateProgress(errorCard('BROADCAST FAILED', 'The background campaign could not finish.', String(error)));
+        await socket.sendMessage(groupJid, { text: errorCard('BROADCAST FAILED', String(error)) });
       });
       break;
     }
@@ -1024,17 +1043,27 @@ async function processMessage(
     // ── joinall ──
     case 'joinall': {
       const { loadBucket } = await import('../services/workspace.js');
+      const { stopJoinAll, clearJoinAllStop, isJoinAllStopped } = await import('../services/join-manager.js');
       const links = loadBucket(telegramId, 'active').map((e) => e.link);
       if (links.length === 0) { await reply(warningCard('ACTIVE BUCKET EMPTY', 'Add links via Telegram /bucket first.')); break; }
-      const updateProgress = await createProgressReply(asciiBox({
-        title: 'JOINALL STARTED',
-        emoji: '🔗',
-        rows: [['Links', String(links.length)], ['Mode', 'RANDOMIZED']],
-        footer: 'Processing in background…',
-      }));
-      cmdJoinAll(socket, sessionId, telegramId, links, {
-        onProgress: updateProgress,
-      }).catch(async (error) => { await updateProgress(errorCard('JOINALL FAILED', String(error))); });
+      clearJoinAllStop(sessionId);
+      await reply(asciiBox({ title: 'JOINALL STARTED', emoji: '🔗', rows: [['Links', String(links.length)]], footer: `Use ${config.prefix}stopjoin to stop.` }));
+      cmdJoinAll(socket, sessionId, telegramId, links, {}).then(async (res) => {
+        await socket.sendMessage(groupJid, { text: asciiBox({
+          title: 'JOINALL COMPLETE', emoji: '✅',
+          rows: [['Joined', String(res.success)], ['Failed', String(res.failed)], ['Skipped', String(res.skipped)]],
+        }) });
+      }).catch(async (error) => {
+        await socket.sendMessage(groupJid, { text: errorCard('JOINALL FAILED', String(error)) });
+      });
+      break;
+    }
+
+    // ── stopjoin ──
+    case 'stopjoin': {
+      const { stopJoinAll } = await import('../services/join-manager.js');
+      stopJoinAll(sessionId);
+      await reply(successCard('JOINALL STOPPED', 'The join operation will stop after the current attempt.'));
       break;
     }
 
@@ -1505,14 +1534,12 @@ async function processMessage(
     // ── BlockAll ──
     case 'blockall': {
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
-      const updateBlockProgress = await createProgressReply(
-        asciiBox({ title: '🚫 BlockAll — Starting…', emoji: '⏳', rows: [['Status', 'Fetching group members…']] })
-      );
+      await reply(asciiBox({ title: '🚫 BlockAll — Starting…', emoji: '⏳', rows: [['Status', 'Fetching group members…']] }));
       const result = await cmdBlockAll(
         socket, telegramId, sessionId, groupJid, config.sudoNumbers ?? [],
-        updateBlockProgress,
+        // No live progress on WhatsApp — send one final result
       );
-      await updateBlockProgress(result);
+      await reply(result);
       break;
     }
 

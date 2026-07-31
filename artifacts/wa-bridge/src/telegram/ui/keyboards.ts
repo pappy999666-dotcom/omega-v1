@@ -156,10 +156,17 @@ export function linkCollectionKeyboard(sessionId: string, enabled: boolean): Inl
 
 export function joinManagerKeyboard(sessionId: string, status: string): InlineKeyboardMarkup {
   const controls: IKB[] = [];
-  if (status === 'running') controls.push(btn('Pause', `session:${sessionId}:join:pause`, 'danger'));
-  else controls.push(btn(status === 'paused' ? 'Resume' : 'Start', `session:${sessionId}:join:start`, 'success'));
-  if (status === 'running' || status === 'paused') controls.push(btn('Stop', `session:${sessionId}:join:stop`, 'danger'));
-  return { inline_keyboard: [controls, [btn('Refresh Log', `session:${sessionId}:joinmgr`, 'primary')], [btn('Back', `session:${sessionId}:menu`, 'primary')]] };
+  if (status === 'running') controls.push(btn('⏸ Pause', `session:${sessionId}:join:pause`, 'danger'));
+  else controls.push(btn(status === 'paused' ? '▶️ Resume' : '▶️ Start', `session:${sessionId}:join:start`, 'success'));
+  if (status === 'running' || status === 'paused') controls.push(btn('⏹ Stop', `session:${sessionId}:join:stop`, 'danger'));
+  return {
+    inline_keyboard: [
+      controls,
+      [btn('🔢 Set Join Limit', `session:${sessionId}:join:setlimit`, 'primary'), btn('⏱ Set Delay', `session:${sessionId}:join:setdelay`, 'primary')],
+      [btn('🔄 Refresh Log', `session:${sessionId}:joinmgr`, 'primary')],
+      [btn('🔙 Back', `session:${sessionId}:menu`, 'primary')],
+    ],
+  };
 }
 
 export function sessionPairKeyboard(sessionId: string): InlineKeyboardMarkup {

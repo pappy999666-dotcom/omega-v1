@@ -143,6 +143,7 @@ export const ALL_COMMANDS = [
   'poll',
   'mute', 'unmute',
   'blockall', 'autoblock',
+  'stopjoin',
   'setwelcome', 'welcomemsg', 'welcome',
   'setgoodbye', 'goodbyemsg', 'goodbye',
   'kickmsg', 'warnmsg', 'banmsg', 'unbanmsg',

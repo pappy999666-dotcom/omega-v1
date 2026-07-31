@@ -58,6 +58,7 @@ import {
   pauseJoinManager,
   startJoinManager,
   stopJoinManager,
+  subscribeJoinManager,
 } from '../../services/join-manager.js';
 
 // ── Fetch WA profile (name + photo) after connect ────────
@@ -100,7 +101,8 @@ export async function handleSessionsList(
   ctx: Context & { telegramId: string; isOwner?: boolean },
   page = 0
 ): Promise<void> {
-  const sessions = ctx.isOwner ? loadPlatformSessions() : Object.values(loadAllSessions(ctx.telegramId));
+  const allSessions = ctx.isOwner ? loadPlatformSessions() : Object.values(loadAllSessions(ctx.telegramId));
+  const sessions = allSessions.filter((s) => s.status !== 'closed' && s.status !== 'banned');
 
   if (sessions.length === 0) {
     await ctx.editMessageText?.(
@@ -559,30 +561,90 @@ export async function handleLinkCollection(
 }
 
 export async function handleJoinManager(
-  ctx: Context & { telegramId: string },
+  ctx: Context & { telegramId: string; chat?: { id: number } },
   sessionId: string,
-  operation?: 'start' | 'pause' | 'stop'
+  operation?: 'start' | 'pause' | 'stop' | 'setlimit' | 'setdelay'
 ): Promise<void> {
   const socket = getSocket(sessionId);
+
   if (operation === 'start') {
     if (!socket) {
       await ctx.answerCbQuery('Session is not connected', { show_alert: true }).catch(() => {});
     } else {
-      void startJoinManager(ctx.telegramId, sessionId, socket);
+      const { loadSessionMeta: lsm } = await import('../../services/workspace.js');
+      const m = lsm(ctx.telegramId, sessionId);
+      const limit = (m as any)?.joinSettings?.maxLinksPerRun ?? 0;
+      const delayMs = (m as any)?.joinSettings?.delayMs ?? 0;
+      void startJoinManager(ctx.telegramId, sessionId, socket, {
+        ...(limit > 0 ? { maxLinksPerRun: limit } : {}),
+        ...(delayMs > 0 ? { minDelayMs: delayMs, maxDelayMs: delayMs + 2000 } : {}),
+      });
     }
-  } else if (operation === 'pause') pauseJoinManager(ctx.telegramId, sessionId);
-  else if (operation === 'stop') stopJoinManager(ctx.telegramId, sessionId);
+  } else if (operation === 'pause') {
+    pauseJoinManager(ctx.telegramId, sessionId);
+  } else if (operation === 'stop') {
+    stopJoinManager(ctx.telegramId, sessionId);
+  } else if (operation === 'setlimit' || operation === 'setdelay') {
+    const isLimit = operation === 'setlimit';
+    await ctx.editMessageText(
+      card(isLimit ? 'Set Join Limit' : 'Set Join Delay', '⚙️', [['Session', sessionId]],
+        isLimit ? 'Send the max groups to join per run (e.g. 100). Send 0 for unlimited.'
+                : 'Send delay in seconds between each join (1–60).'),
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: `session:${sessionId}:joinmgr` }]] } }
+    ).catch(() => {});
+    await ctx.answerCbQuery(`Send the ${isLimit ? 'limit' : 'delay'} now`).catch(() => {});
+    return;
+  }
 
   const state = getJoinManagerState(ctx.telegramId, sessionId);
-  const logs = state.logs.slice(-8).map((line, index) => `${index + 1}. ${escape(line)}`).join('\n') || 'No activity yet.';
-  await ctx.editMessageText([
+  const { loadSessionMeta: lsm2 } = await import('../../services/workspace.js');
+  const m2 = lsm2(ctx.telegramId, sessionId) as any;
+  const limitDisplay = m2?.joinSettings?.maxLinksPerRun ? String(m2.joinSettings.maxLinksPerRun) : 'Unlimited';
+  const delayDisplay = m2?.joinSettings?.delayMs ? `${m2.joinSettings.delayMs / 1000}s` : 'Auto';
+  const logs = state.logs.slice(-10).map((line, i) => `${i + 1}. ${escape(line)}`).join('\n') || 'No activity yet.';
+
+  const msgText = [
     card('Link Join Manager', '🚪', [
       ['Source', 'Active bucket'], ['Status', state.status],
       ['Progress', `${state.cursor}/${state.total}`], ['Joined', String(state.joined)],
       ['Skipped', String(state.skipped)], ['Failed', String(state.failed)],
-    ], state.currentLink ? `Current: ${state.currentLink}` : 'Jobs are isolated per session and stop after five restriction failures.'),
+      ['Join Limit', limitDisplay], ['Delay', delayDisplay],
+    ], state.currentLink ? `Current: ${state.currentLink}` : 'Jobs stop after 5 consecutive restriction failures.'),
     H.blockquote(logs, true),
-  ].join('\n\n'), { parse_mode: 'HTML', reply_markup: joinManagerKeyboard(sessionId, state.status) }).catch(() => {});
+  ].join('\n\n');
+
+  const sentMsg = await ctx.editMessageText(msgText, {
+    parse_mode: 'HTML',
+    reply_markup: joinManagerKeyboard(sessionId, state.status),
+  }).catch(() => null);
+
+  // Live log: subscribe and auto-edit while running (max 90s, 1.5s throttle)
+  const chatId = ctx.chat?.id ?? (ctx as any).callbackQuery?.message?.chat?.id;
+  if (state.status === 'running' && sentMsg && chatId) {
+    const msgId = (sentMsg as unknown as { message_id?: number }).message_id;
+    if (!msgId) return;
+    let lastEdit = Date.now();
+    let unsub: (() => void) | null = null;
+    const timeout = setTimeout(() => { unsub?.(); }, 90_000);
+    unsub = subscribeJoinManager(sessionId, async (s) => {
+      if (Date.now() - lastEdit < 1500) return;
+      lastEdit = Date.now();
+      const ll = s.logs.slice(-10).map((line, i) => `${i + 1}. ${escape(line)}`).join('\n') || 'No activity yet.';
+      const lt = [
+        card('Link Join Manager', '🚪', [
+          ['Status', s.status], ['Progress', `${s.cursor}/${s.total}`],
+          ['Joined', String(s.joined)], ['Skipped', String(s.skipped)], ['Failed', String(s.failed)],
+          ['Join Limit', limitDisplay], ['Delay', delayDisplay],
+        ], s.currentLink ? `Current: ${s.currentLink}` : ''),
+        H.blockquote(ll, true),
+      ].join('\n\n');
+      await ctx.telegram.editMessageText(chatId, msgId, undefined, lt, {
+        parse_mode: 'HTML',
+        reply_markup: joinManagerKeyboard(sessionId, s.status),
+      }).catch(() => {});
+      if (s.status !== 'running') { clearTimeout(timeout); unsub?.(); }
+    });
+  }
 }
 
 // ── Bridge Mode ───────────────────────────────────────────

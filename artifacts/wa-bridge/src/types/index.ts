@@ -44,6 +44,7 @@ export interface SessionMeta {
   linkCollectionEnabled?: boolean;
   linksCollected?: number;
   joinManager?: JoinManagerState;
+  joinSettings?: { maxLinksPerRun?: number; delayMs?: number };
   autoPromote?: AutoPromoteSettings;
   menuMedia?: SessionMenuMedia | null;
 }

@@ -29,6 +29,12 @@ export const DEFAULT_JOIN_SETTINGS: JoinSettings = {
   restrictionThreshold: 5,
 };
 
+// ── Stop flag for cmdJoinAll (WhatsApp-side joinall) ──────
+const joinAllStop = new Set<string>(); // sessionId
+export function stopJoinAll(sessionId: string): void { joinAllStop.add(sessionId); }
+export function clearJoinAllStop(sessionId: string): void { joinAllStop.delete(sessionId); }
+export function isJoinAllStopped(sessionId: string): boolean { return joinAllStop.has(sessionId); }
+
 // ── Error Classification ──────────────────────────────────
 
 const RESTRICTION_PATTERNS =

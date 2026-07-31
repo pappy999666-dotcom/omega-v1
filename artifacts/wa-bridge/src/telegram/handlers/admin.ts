@@ -21,7 +21,7 @@ import {
   confirmKeyboard,
   backKeyboard,
 } from '../ui/keyboards.js';
-import { header, H, kv, bucketCard } from '../../utils/formatter.js';
+import { header, H, kv, bucketCard, noticeCard, escape } from '../../utils/formatter.js';
 import { logger } from '../../utils/logger.js';
 import { runDeployment } from '../../services/deployment.js';
 
@@ -198,35 +198,66 @@ export async function handleMasterBucket(ctx: Context): Promise<void> {
 // ── Omni-Bridge ───────────────────────────────────────────
 
 export async function handleOmniBridge(ctx: Context & { telegramId: string }): Promise<void> {
+  const { getUserSockets } = await import('../../whatsapp/socket-manager.js');
+  const count = getUserSockets(ctx.telegramId).length;
   await ctx.editMessageText(
-    `${header('Omni-Bridge', '📡')}\n\n` +
-    `Send a command to execute across ALL active sessions simultaneously.\n\n` +
-    `${H.blockquote('Available commands:\n• broadcast [message] — send to groups\n• status [text] — post to status')}\n\n` +
-    `Reply with: ${H.code('/omni [command] [text]')}`,
-    { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') }
+    [
+      header('Omni-Bridge', '📡'),
+      '',
+      `<b>Connected sessions:</b> ${count}`,
+      '',
+      H.blockquote('Runs any WhatsApp command on ALL your connected sessions simultaneously.\n\nExamples:\n• .ping\n• .menu\n• .allstatus hello\n• .info'),
+      '',
+      'Tap <b>Send Command</b> to open the input prompt.',
+    ].join('\n'),
+    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [
+      [{ text: '📡 Send Command', callback_data: 'bridge:global' }],
+      [{ text: '🔙 Back', callback_data: 'admin:panel' }],
+    ]} }
   ).catch(() => {});
 }
 
 export async function executeOmniCommand(
-  ctx: Context & { telegramId: string },
+  ctx: Context & { telegramId: string; chat?: { id: number } },
   command: string,
-  text: string
+  _unused: string
 ): Promise<void> {
-  const jobId = await enqueueJob('wa-omni', {
-    telegramId: ctx.telegramId,
-    sessionId: 'omni',
-    type: 'omni_bridge',
-    data: { command, text },
-    chatId: ctx.chat!.id,
-  });
-
-  await ctx.reply(
-    `${header('Omni-Bridge Dispatched', '📡')}\n\n${H.code(jobId)}\n\nExecuting across all sessions…`,
+  const { getUserSockets, getSocket, isFrozen } = await import('../../whatsapp/socket-manager.js');
+  const { executeBridgeCommand } = await import('../../whatsapp/event-handlers.js');
+  const sessionIds = getUserSockets(ctx.telegramId);
+  if (sessionIds.length === 0) {
+    await ctx.reply(noticeCard('No Active Sessions', 'No connected WhatsApp sessions found.', 'warning'), { parse_mode: 'HTML' });
+    return;
+  }
+  const progressMsg = await ctx.reply(
+    `${header('Omni-Bridge Running', '📡')}\n\n<blockquote>Executing <code>${escape(command)}</code> on ${sessionIds.length} session(s)…</blockquote>`,
     { parse_mode: 'HTML' }
   );
+  const results = await Promise.allSettled(
+    sessionIds.map(async (sid) => {
+      const socket = getSocket(sid);
+      if (!socket || isFrozen(sid)) throw new Error('Unavailable');
+      const replies: string[] = [];
+      await executeBridgeCommand(sid, ctx.telegramId, command, socket, async (r) => { if (r) replies.push(r); });
+      return { sid, reply: replies.join('\n').slice(0, 400) || '✅ Done' };
+    })
+  );
+  const lines = results.map((r, i) => {
+    const sid = sessionIds[i] ?? '?';
+    const shortId = sid.split('_').pop() ?? sid;
+    if (r.status === 'fulfilled') return `✅ ${shortId}\n${r.value.reply}`;
+    return `❌ ${shortId}: ${String(r.reason).slice(0, 80)}`;
+  });
+  const summary = [
+    header('Omni-Bridge Complete', '📡'),
+    '',
+    `<blockquote expandable>${escape(lines.join('\n\n').slice(0, 3800))}</blockquote>`,
+  ].join('\n');
+  await ctx.telegram.editMessageText(
+    ctx.chat!.id, progressMsg.message_id, undefined, summary,
+    { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') }
+  ).catch(() => ctx.reply(summary, { parse_mode: 'HTML' }));
 }
-
-// ── Global Controls ───────────────────────────────────────
 
 export async function handleGlobalPause(ctx: Context, paused: boolean): Promise<void> {
   setGlobalPause(paused);
