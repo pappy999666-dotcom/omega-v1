@@ -198,15 +198,20 @@ export async function handleMasterBucket(ctx: Context): Promise<void> {
 // ── Omni-Bridge ───────────────────────────────────────────
 
 export async function handleOmniBridge(ctx: Context & { telegramId: string }): Promise<void> {
-  const { getUserSockets } = await import('../../whatsapp/socket-manager.js');
-  const count = getUserSockets(ctx.telegramId).length;
+  const allSockets = getAllSockets();
+  const count = [...allSockets.values()].filter((h) => !h.frozen).length;
   await ctx.editMessageText(
     [
       header('Omni-Bridge', '📡'),
       '',
-      `<b>Connected sessions:</b> ${count}`,
+      `<b>Connected sessions (platform-wide):</b> ${count}`,
       '',
-      H.blockquote('Runs any WhatsApp command on ALL your connected sessions simultaneously.\n\nExamples:\n• .ping\n• .menu\n• .allstatus hello\n• .info'),
+      H.blockquote(
+        'Runs any WhatsApp command on ALL connected sessions across the entire platform.\n\n' +
+        'Uses a fixed <code>.</code> prefix — works regardless of each session\'s configured prefix.\n\n' +
+        'Long-running commands (allstatus, joinall, etc.) show a live log per session.\n\n' +
+        'Examples:\n• .ping\n• .menu\n• .allstatus hello\n• .info'
+      ),
       '',
       'Tap <b>Send Command</b> to open the input prompt.',
     ].join('\n'),
@@ -224,8 +229,8 @@ export async function executeOmniCommand(
 ): Promise<void> {
   const { getAllSockets, getSocket, isFrozen } = await import('../../whatsapp/socket-manager.js');
   const { executeBridgeCommand } = await import('../../whatsapp/event-handlers.js');
+  const { findSessionOwner } = await import('../../services/workspace.js');
 
-  // All connected sessions across every user on the platform
   const allSockets = getAllSockets();
   const sessionIds = [...allSockets.keys()].filter((sid) => {
     const h = allSockets.get(sid);
@@ -237,44 +242,69 @@ export async function executeOmniCommand(
     return;
   }
 
-  const progressMsg = await ctx.reply(
-    `${header('Omni-Bridge Running', '📡')}\n\n<blockquote>Executing <code>${escape(command)}</code> on ${sessionIds.length} session(s) across all users…</blockquote>`,
+  // Normalize command: always use dot prefix regardless of session config
+  const normalizedCmd = command.startsWith('.') ? command : `.${command.replace(/^[^a-zA-Z0-9]/, '')}`;
+
+  const chatId = ctx.chat!.id;
+
+  // Send one header message
+  await ctx.reply(
+    `${header('Omni-Bridge Running', '📡')}\n\n<blockquote>Command: <code>${escape(normalizedCmd)}</code>\nSessions: ${sessionIds.length}\n\nEach session result will appear below…</blockquote>`,
     { parse_mode: 'HTML' }
   );
 
-  // Find the telegramId owner for each session so executeBridgeCommand loads the right config
-  const { findSessionOwner } = await import('../../services/workspace.js');
-
-  const results = await Promise.allSettled(
+  // Run each session independently — send its own live-updating message
+  await Promise.allSettled(
     sessionIds.map(async (sid) => {
       const socket = getSocket(sid);
-      if (!socket || isFrozen(sid)) throw new Error('Unavailable');
+      if (!socket || isFrozen(sid)) {
+        await ctx.telegram.sendMessage(chatId,
+          `${header(`❌ ${sid.split('_').pop() ?? sid}`, '📡')}\n\n<blockquote>Session unavailable</blockquote>`,
+          { parse_mode: 'HTML' }
+        ).catch(() => {});
+        return;
+      }
       const ownerTelegramId = findSessionOwner(sid) ?? ctx.telegramId;
-      const replies: string[] = [];
-      await executeBridgeCommand(sid, ownerTelegramId, command, socket, async (r) => { if (r) replies.push(r); });
-      return { sid, reply: replies.join('\n').slice(0, 400) || '✅ Done' };
+      const shortId = sid.split('_').pop() ?? sid;
+
+      // Send initial per-session message
+      let msgId: number | null = null;
+      try {
+        const sent = await ctx.telegram.sendMessage(chatId,
+          `${header(`📡 ${shortId}`, '⏳')}\n\n<blockquote expandable>Running…</blockquote>`,
+          { parse_mode: 'HTML' }
+        );
+        msgId = sent.message_id;
+      } catch { return; }
+
+      const lines: string[] = [];
+      let lastEdit = 0;
+
+      const flush = async (final = false): Promise<void> => {
+        const now = Date.now();
+        if (!final && now - lastEdit < 2000) return;
+        lastEdit = now;
+        const body = lines.join('\n').slice(0, 900) || '✅ Done';
+        const text = `${header(`📡 ${shortId}`, final ? '✅' : '⏳')}\n\n<blockquote expandable>${escape(body)}</blockquote>`;
+        await ctx.telegram.editMessageText(chatId, msgId!, undefined, text, { parse_mode: 'HTML' }).catch(() => {});
+      };
+
+      try {
+        await executeBridgeCommand(sid, ownerTelegramId, normalizedCmd, socket, async (r) => {
+          if (r) { lines.push(r); await flush(); }
+        }, { forcePrefix: '.' });
+        await flush(true);
+      } catch (err) {
+        lines.push(`Error: ${String(err).slice(0, 200)}`);
+        await flush(true);
+      }
     })
   );
 
-  const lines = results.map((r, i) => {
-    const sid = sessionIds[i] ?? '?';
-    const shortId = sid.split('_').pop() ?? sid;
-    if (r.status === 'fulfilled') return `✅ ${shortId}\n${r.value.reply}`;
-    return `❌ ${shortId}: ${String(r.reason).slice(0, 80)}`;
-  });
-
-  const summary = [
-    header('Omni-Bridge Complete', '📡'),
-    '',
-    `<b>Sessions hit:</b> ${sessionIds.length}`,
-    '',
-    `<blockquote expandable>${escape(lines.join('\n\n').slice(0, 3800))}</blockquote>`,
-  ].join('\n');
-
-  await ctx.telegram.editMessageText(
-    ctx.chat!.id, progressMsg.message_id, undefined, summary,
+  await ctx.reply(
+    `${header('Omni-Bridge Complete', '📡')}\n\n<blockquote>All ${sessionIds.length} session(s) processed.</blockquote>`,
     { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') }
-  ).catch(() => ctx.reply(summary, { parse_mode: 'HTML' }));
+  ).catch(() => {});
 }
 
 export async function handleGlobalPause(ctx: Context, paused: boolean): Promise<void> {

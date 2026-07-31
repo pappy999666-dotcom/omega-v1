@@ -179,20 +179,37 @@ export async function executeBridgeCommand(
   telegramId: string,
   text: string,
   socket: WASocket,
-  onReply: (text: string) => Promise<void>
+  onReply: (text: string) => Promise<void>,
+  opts?: { forcePrefix?: string }
 ): Promise<void> {
   if (loadSessionConfig(telegramId, sessionId).sleeping) throw new Error('User sleep mode is active');
 
-  // Use the bot's own JID as remoteJid so isGroup=false but commands still run.
-  // For commands that need a group JID (allstatus, allchat etc.) the command
-  // itself fetches groups internally — remoteJid is only used for reply routing.
+  // Normalize to forced prefix (dot) so Omni/Global bridge always works
+  // regardless of what prefix the session owner configured on WhatsApp.
+  let normalizedText = text;
+  if (opts?.forcePrefix) {
+    const fp = opts.forcePrefix;
+    if (!text.startsWith(fp)) {
+      // Strip any existing prefix char(s) then prepend the forced one
+      normalizedText = fp + text.replace(/^[^a-zA-Z0-9]+/, '');
+    }
+  }
+
   const ownJid = (socket as unknown as { user?: { id?: string } }).user?.id ?? `${telegramId}@s.whatsapp.net`;
   const syntheticMessage = {
     key: { remoteJid: ownJid, fromMe: true, id: `bridge-${Date.now()}` },
-    message: { conversation: text },
+    message: { conversation: normalizedText },
   } as WebMessageInfo;
 
-  await processMessage(sessionId, telegramId, syntheticMessage, socket, onReply);
+  // If forcePrefix is set, temporarily override the session config prefix
+  // so parseCommand matches correctly.
+  if (opts?.forcePrefix) {
+    const origConfig = loadSessionConfig(telegramId, sessionId);
+    const patchedConfig = { ...origConfig, prefix: opts.forcePrefix, nullPrefix: false };
+    await processMessageWithConfig(sessionId, telegramId, syntheticMessage, socket, onReply, patchedConfig);
+  } else {
+    await processMessage(sessionId, telegramId, syntheticMessage, socket, onReply);
+  }
 }
 
 /**
@@ -290,6 +307,17 @@ async function processMessage(
   socket: WASocket,
   replyOverride?: (text: string) => Promise<void>
 ): Promise<void> {
+  return processMessageWithConfig(sessionId, telegramId, msg, socket, replyOverride, undefined);
+}
+
+async function processMessageWithConfig(
+  sessionId: string,
+  telegramId: string,
+  msg: WebMessageInfo,
+  socket: WASocket,
+  replyOverride?: (text: string) => Promise<void>,
+  configOverride?: ReturnType<typeof loadSessionConfig>
+): Promise<void> {
   const groupJid = msg.key.remoteJid ?? '';
   const isGroup = groupJid.endsWith('@g.us');
 
@@ -311,7 +339,7 @@ async function processMessage(
   const chatRoute = resolvePreviewRoute(msg, text);
   const sourceExt = chatRoute.route === 'AS_IS' ? chatRoute.sourceExt : undefined;
 
-  const config = loadSessionConfig(telegramId, sessionId);
+  const config = configOverride ?? loadSessionConfig(telegramId, sessionId);
   const sessionMeta = loadSessionMeta(telegramId, sessionId);
 
   // Passive collection is intentionally silent and runs before command parsing.

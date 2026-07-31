@@ -246,9 +246,9 @@ export function adminPanelKeyboard(paused = false, maintenance = false): InlineK
           : btn('🔧 Maintenance', 'admin:maintenance:on', 'danger'),
         btn('📊 Platform Stats', 'admin:stats', 'primary'),
       ],
-      [btn('🔄 Update Bot', 'admin:update', 'success'), btn('🔗 Menu URL', 'admin:menuurl', 'primary')],
-      [btn('🔁 Restart Bot', 'admin:restart', 'danger'), btn('📋 Logs', 'admin:logs', 'primary')],
-      [btn('🔙 Back', 'menu:main', 'primary')],
+      [btn('📋 All Sessions', 'admin:allsessions', 'primary'), btn('🔗 Menu URL', 'admin:menuurl', 'primary')],
+      [btn('🔄 Update Bot', 'admin:update', 'success'), btn('🔁 Restart Bot', 'admin:restart', 'danger')],
+      [btn('📋 Logs', 'admin:logs', 'primary'), btn('🔙 Back', 'menu:main', 'primary')],
     ],
   };
 }

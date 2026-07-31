@@ -1121,15 +1121,17 @@ export function createBot(): Telegraf<BotContext> {
       await ctx.reply(noticeCard('No Active Sessions', 'Connect at least one WhatsApp session first.', 'warning'), { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(ctx.isOwner) });
       return;
     }
+    // Always use dot prefix so it works regardless of session prefix config
+    const bridgeCmd = text.startsWith('.') ? text : `.${text.replace(/^[^a-zA-Z0-9]/, '')}`;
     const progressMsg = await ctx.reply(
-      card('Global Bridge Running', '📡', [['Sessions', String(sessionIds.length)], ['Command', text.slice(0, 60)]], 'Executing on all connected sessions…'),
+      card('Global Bridge Running', '📡', [['Sessions', String(sessionIds.length)], ['Command', bridgeCmd.slice(0, 60)]], 'Executing on all connected sessions…'),
       { parse_mode: 'HTML' }
     );
     const results = await Promise.allSettled(sessionIds.map(async (sessionId) => {
       const socket = getSocket(sessionId);
       if (!socket || isFrozen(sessionId)) throw new Error('Unavailable');
       const replies: string[] = [];
-      await executeBridgeCommand(sessionId, ctx.telegramId, text, socket, async (response) => { replies.push(response); });
+      await executeBridgeCommand(sessionId, ctx.telegramId, bridgeCmd, socket, async (response) => { replies.push(response); }, { forcePrefix: '.' });
       return { sessionId, reply: replies.join('\n') || '✅ Done' };
     }));
     const lines = results.map((r, i) => {
@@ -2620,12 +2622,33 @@ async function routeCallback(
     if (sub === 'omni' && params[1] === 'input') {
       ctx.session.awaitingOmniCommand = true;
       await ctx.editMessageText(
-        card('Omni-Bridge Input', '📡', [['Scope', 'All platform sessions']], 'Send any WhatsApp command now. It will run on every connected session across all users.'),
+        card('Omni-Bridge Input', '📡', [['Scope', 'All platform sessions']], 'Send any WhatsApp command now. Uses a fixed <code>.</code> prefix — works on every session regardless of their configured prefix.'),
         { parse_mode: 'HTML', reply_markup: backKeyboard('admin:omni') }
       ).catch(() => {});
       return;
     }
     if (sub === 'omni') { await handleOmniBridge(ctx); return; }
+    if (sub === 'allsessions') {
+      const { loadPlatformSessions } = await import('../services/workspace.js');
+      const all = loadPlatformSessions().filter((s: { status: string }) => s.status !== 'closed' && s.status !== 'banned');
+      const statusIcons: Record<string, string> = { open: '🟢', frozen: '🔵', error: '🔴', connecting: '🟡', closed: '⚫', banned: '💣' };
+      const lines = all.map((s: { status: string; label?: string; phone: string; telegramId: string }) => {
+        const icon = statusIcons[s.status] ?? '⚪';
+        return `${icon} <b>${escape(s.label ?? s.phone)}</b> — <code>${escape(s.phone)}</code> (${escape(s.telegramId)})`;
+      });
+      const text = [
+        header('All Platform Sessions', '📋'),
+        '',
+        `<b>Active:</b> ${all.length}`,
+        '',
+        all.length ? lines.join('\n') : H.italic('No active sessions.'),
+      ].join('\n');
+      await ctx.editMessageText(text.slice(0, 4096), {
+        parse_mode: 'HTML',
+        reply_markup: backKeyboard('admin:panel'),
+      }).catch(() => {});
+      return;
+    }
     if (sub === 'forcejoin') {
       ctx.session.awaitingForceJoin = true;
       await ctx.editMessageText(card('Force Join Targets', '🔐', [['Mode', 'Replace all targets']], 'Send @channels or numeric chat IDs separated by spaces/commas. Every target is verified before saving.'), { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') });
@@ -2679,7 +2702,7 @@ async function routeCallback(
   // ── Global Bridge, Sleep, and Support ──
   if (action === 'bridge' && params[0] === 'global') {
     ctx.session.awaitingGlobalBridge = true;
-    await ctx.editMessageText(card('Global Bridge', '📡', [['Connected sessions', String(getUserSockets(ctx.telegramId).length)]], 'Send one registered WhatsApp command. It will run independently on every available session.'), {
+    await ctx.editMessageText(card('Global Bridge', '📡', [['Connected sessions', String(getUserSockets(ctx.telegramId).length)]], 'Send any WhatsApp command. Uses a fixed <code>.</code> prefix — works even if you changed the prefix on WhatsApp. Runs on all your connected sessions.'), {
       parse_mode: 'HTML', reply_markup: backKeyboard('menu:main'),
     });
     return;
