@@ -57,6 +57,26 @@ export interface AutoPromoteSettings {
   lastPostedAt?: number;
 }
 
+export interface AutoPromoteJob {
+  sessionId: string;
+  telegramId: string;
+  link: string;
+  days: number;
+  startedAt: number;
+  endsAt: number;
+  lastRanAt?: number;
+  nextRunAt?: number;
+  history: AutoPromoteRun[];
+}
+
+export interface AutoPromoteRun {
+  at: number;          // timestamp
+  slot: 'morning' | 'evening';
+  success: number;
+  failed: number;
+  skipped: number;
+}
+
 export interface JoinManagerState {
   status: 'idle' | 'running' | 'paused' | 'stopped' | 'completed' | 'restricted';
   cursor: number;

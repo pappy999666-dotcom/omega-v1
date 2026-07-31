@@ -11,7 +11,7 @@ import { parseCommand, parseStickerCommand, hashSticker } from './command-parser
 import { resolveTarget, resolveTargetNumbers } from './utils/resolve-target.js';
 import { loadSessionConfig, loadSessionMeta, updateSessionMeta, saveSessionMeta, getGlobalMenuUrl } from '../services/workspace.js';
 import { stopSpamLoop, isSpamLoopActive, cmdToChat, cmdToChatX, cmdSStatus, cmdGroupStatus } from './commands/status.js';
-import { cmdAllStatus, stopAllStatus, isAllStatusRunning } from './commands/all-status.js';
+import { cmdAllStatus, cmdAllGStatus, stopAllStatus, isAllStatusRunning } from './commands/all-status.js';
 import { cmdAllChat, stopOutreach, isOutreachRunning } from './commands/mass-outreach.js';
 import { cmdJoin, cmdLeave, cmdJoinAll, cmdLeaveAll, resolveGroupJid } from './commands/lifecycle.js';
 import { cmdTag, cmdMTag, tagSummary } from './commands/tag.js';
@@ -1010,6 +1010,36 @@ async function processMessageWithConfig(
         logger.error('[EventHandler] allstatus failed', { sessionId, error: String(error) });
         await socket.sendMessage(groupJid, { text: errorCard('BROADCAST FAILED', String(error)) });
       });
+      break;
+    }
+
+    // ── allgstatus (raw — no design engine) ──
+    case 'allgstatus': {
+      const agText = commandText();
+      if (!agText) { await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}allgstatus <message or link>`)); break; }
+      await reply(asciiBox({ title: 'ALLGSTATUS STARTED', emoji: '📡', rows: [['Mode', 'RAW — NO DESIGN']], footer: 'Running in background…' }));
+      void cmdAllGStatus(socket, sessionId, telegramId, agText, { existingPreview: quotedPreview, sourceExt })
+        .then(async (r) => {
+          await socket.sendMessage(groupJid, { text: asciiBox({ title: 'ALLGSTATUS COMPLETE', emoji: '✅', rows: [['Sent', String(r.success)], ['Failed', String(r.failed)], ['Skipped', String(r.skipped)]] }) });
+        })
+        .catch(async (err) => {
+          await socket.sendMessage(groupJid, { text: errorCard('ALLGSTATUS FAILED', String(err)) });
+        });
+      break;
+    }
+
+    // ── allgstatus (raw — no design engine) ──
+    case 'allgstatus': {
+      const agText = commandText();
+      if (!agText) { await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}allgstatus <message or link>`)); break; }
+      await reply(asciiBox({ title: 'ALLGSTATUS STARTED', emoji: '📡', rows: [['Mode', 'RAW — NO DESIGN']], footer: 'Running in background…' }));
+      void cmdAllGStatus(socket, sessionId, telegramId, agText, { existingPreview: quotedPreview, sourceExt })
+        .then(async (r) => {
+          await socket.sendMessage(groupJid, { text: asciiBox({ title: 'ALLGSTATUS COMPLETE', emoji: '✅', rows: [['Sent', String(r.success)], ['Failed', String(r.failed)], ['Skipped', String(r.skipped)]] }) });
+        })
+        .catch(async (err) => {
+          await socket.sendMessage(groupJid, { text: errorCard('ALLGSTATUS FAILED', String(err)) });
+        });
       break;
     }
 

@@ -96,6 +96,7 @@ import {
   getGlobalMenuUrl,
   setGlobalMenuUrl,
   clearGlobalMenuUrl,
+  loadPlatformSessions,
 } from '../services/workspace.js';
 import { normalizePairingPhone } from '../whatsapp/socket-manager.js';
 import { resolveGroupJid } from '../whatsapp/commands/lifecycle.js';
@@ -162,6 +163,10 @@ interface BotContext extends Context {
     awaitingSudoAddSessionId?: string;
     awaitingJoinLimitSessionId?: string;
     awaitingJoinDelaySessionId?: string;
+    awaitingAutoPromoSessionId?: string;
+    awaitingAutoPromoDays?: string;
+    awaitingAutoPromoLink?: string;
+    awaitingAdminAutoPromoSessionId?: string;
     // Per-group bridge mode
     groupBridgeSessionId?: string;
     groupBridgeGcJid?: string;
@@ -925,6 +930,47 @@ export function createBot(): Telegraf<BotContext> {
       const m = loadSessionMeta(ctx.telegramId, sessionId) as any;
       updateSessionMeta(ctx.telegramId, sessionId, { joinSettings: { ...(m?.joinSettings ?? {}), delayMs: secs * 1000 } });
       await ctx.reply(noticeCard('Delay Set', `${secs}s between each join.`, 'success'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:joinmgr`) });
+      return;
+    }
+
+    // ── Auto-Promote: step 1 — receive link ──
+    if (ctx.session?.awaitingAutoPromoLink) {
+      const sessionId = ctx.session.awaitingAutoPromoLink;
+      delete ctx.session.awaitingAutoPromoLink;
+      const link = text.trim();
+      if (!link.startsWith('http')) {
+        await ctx.reply(noticeCard('Invalid Link', 'Send a valid URL (https://...).', 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:autopromo`) });
+        return;
+      }
+      ctx.session.awaitingAutoPromoSessionId = sessionId;
+      ctx.session.awaitingAutoPromoDays = link; // store link temporarily in days field
+      await ctx.reply(card('Auto-Promote — Step 2', '📅', [['Link', link.slice(0, 50)]], 'How many days should this run? Send a number (1–30).'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:autopromo`) });
+      return;
+    }
+
+    // ── Auto-Promote: step 2 — receive days ──
+    if (ctx.session?.awaitingAutoPromoSessionId && ctx.session?.awaitingAutoPromoDays) {
+      const sessionId = ctx.session.awaitingAutoPromoSessionId;
+      const link = ctx.session.awaitingAutoPromoDays;
+      delete ctx.session.awaitingAutoPromoSessionId;
+      delete ctx.session.awaitingAutoPromoDays;
+      const days = parseInt(text.trim(), 10);
+      if (isNaN(days) || days < 1 || days > 30) {
+        await ctx.reply(noticeCard('Invalid', 'Send a number between 1 and 30.', 'warning'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:autopromo`) });
+        return;
+      }
+      const { addJob } = await import('../services/auto-promote.js');
+      const job = addJob(ctx.telegramId, sessionId, link, days);
+      const endsDate = new Date(job.endsAt).toLocaleDateString('en-NG', { timeZone: 'Africa/Lagos' });
+      await ctx.reply(
+        card('Auto-Promote Scheduled', '📅', [
+          ['Link', link.slice(0, 50)],
+          ['Days', String(days)],
+          ['Runs', '7:00 AM + 6:00 PM WAT daily'],
+          ['Ends', endsDate],
+        ], 'The bot will post this link to all group statuses twice daily.'),
+        { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:autopromo`) }
+      );
       return;
     }
 
@@ -1816,6 +1862,49 @@ async function routeCallback(
       return;
     }
     if (sub === 'joinmgr') { await handleJoinManager(ctx, sessionId); return; }
+    if (sub === 'autopromo') {
+      const { loadJobs, removeJob } = await import('../services/auto-promote.js');
+      const op = params[2];
+      if (op === 'cancel') {
+        removeJob(ctx.telegramId, sessionId);
+        await ctx.answerCbQuery('Auto-Promote cancelled').catch(() => {});
+      }
+      const jobs = loadJobs(ctx.telegramId);
+      const job = jobs.find((j) => j.sessionId === sessionId);
+      const history = job?.history.slice(-10).reverse() ?? [];
+      const histLines = history.length
+        ? history.map((r) => `${r.slot === 'morning' ? '🌅' : '🌆'} ${new Date(r.at).toLocaleDateString('en-NG', { timeZone: 'Africa/Lagos' })} — ✅${r.success} ❌${r.failed}`).join('\n')
+        : 'No runs yet.';
+      const endsDate = job ? new Date(job.endsAt).toLocaleDateString('en-NG', { timeZone: 'Africa/Lagos' }) : '—';
+      const text = [
+        header('Auto-Promote', '📅'),
+        '',
+        job
+          ? `<b>Status:</b> 🟢 Active\n<b>Link:</b> <code>${escape(job.link.slice(0, 60))}</code>\n<b>Ends:</b> ${endsDate}\n<b>Schedule:</b> 7:00 AM + 6:00 PM WAT daily`
+          : '<b>Status:</b> ⚫ Not set',
+        '',
+        '<b>Recent Runs:</b>',
+        H.blockquote(histLines, true),
+      ].join('\n');
+      await ctx.editMessageText(text, {
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [
+          job
+            ? [btn('❌ Cancel Job', `session:${sessionId}:autopromo:cancel`, 'danger')]
+            : [btn('➕ Set Link', `session:${sessionId}:autopromo:set`, 'success')],
+          [btn('🔙 Back', `session:${sessionId}:menu`, 'primary')],
+        ]},
+      }).catch(() => {});
+      return;
+    }
+    if (sub === 'autopromo' && params[2] === 'set') {
+      ctx.session.awaitingAutoPromoLink = sessionId;
+      await ctx.editMessageText(
+        card('Auto-Promote — Step 1', '📅', [['Session', sessionId]], 'Send the link you want to post (WhatsApp group link or any URL).'),
+        { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:autopromo`) }
+      ).catch(() => {});
+      return;
+    }
     if (sub === 'join') {
       const operation = params[2] as 'start' | 'pause' | 'stop' | 'setlimit' | 'setdelay' | undefined;
       if (operation === 'setlimit') { ctx.session.awaitingJoinLimitSessionId = sessionId; await handleJoinManager(ctx, sessionId, 'setlimit'); return; }
@@ -2685,8 +2774,24 @@ async function routeCallback(
       return;
     }
     if (sub === 'omni') { await handleOmniBridge(ctx); return; }
+    if (sub === 'autopromo') {
+      const { getAllUserIds } = await import('../services/workspace.js');
+      const { loadJobs } = await import('../services/auto-promote.js');
+      const allJobs = getAllUserIds().flatMap((tid: string) => loadJobs(tid).filter((j: any) => Date.now() < j.endsAt));
+      const lines = allJobs.length
+        ? allJobs.map((j: any) => {
+            const ends = new Date(j.endsAt).toLocaleDateString('en-NG', { timeZone: 'Africa/Lagos' });
+            const last = j.lastRanAt ? new Date(j.lastRanAt).toLocaleDateString('en-NG', { timeZone: 'Africa/Lagos' }) : 'Never';
+            return `🟢 <code>${escape(j.sessionId.split('_').pop() ?? j.sessionId)}</code> (${escape(j.telegramId)})\n   🔗 ${escape(j.link.slice(0, 50))}\n   Ends: ${ends} | Last: ${last}`;
+          }).join('\n\n')
+        : 'No active auto-promote jobs.';
+      await ctx.editMessageText(
+        [header('Auto-Promote Jobs', '📅'), '', `<b>Active jobs:</b> ${allJobs.length}`, '', lines].join('\n').slice(0, 4096),
+        { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') }
+      ).catch(() => {});
+      return;
+    }
     if (sub === 'allsessions') {
-      const { loadPlatformSessions } = await import('../services/workspace.js');
       const page = parseInt(params[1] ?? '0', 10);
       const PAGE_SIZE = 10;
       const all = loadPlatformSessions().filter((s: { status: string; sessionId: string }) =>

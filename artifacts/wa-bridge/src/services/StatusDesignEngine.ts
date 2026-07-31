@@ -508,7 +508,14 @@ export class StatusDesignEngine {
       const family = THEME_TO_FAMILY[theme] ?? 'minimal';
 
       const rawTitle = compactSpaces((input.title ?? '').replaceAll(url, ''));
-      const title = rawTitle.length > 1 ? rawTitle : this.defaultTitle(theme, family, input.message);
+      // If URL is a WhatsApp group link and no title provided, use a clean default
+      // instead of letting the URL bleed into the title
+      const isWaLink = /chat\.whatsapp\.com\/|wa\.me\/join\//u.test(url);
+      const title = rawTitle.length > 1
+        ? rawTitle
+        : isWaLink
+          ? this.defaultTitle(theme, family, input.message)
+          : this.defaultTitle(theme, family, input.message);
 
       const seed =
         input.seed?.trim() ||

@@ -20,6 +20,7 @@ import { getAllUserIds, loadAllSessions } from './services/workspace.js';
 import { setOutreachBotRef } from './services/workers/outreach-worker.js';
 import { setValidatorBotRef } from './services/workers/validator-worker.js';
 import { setLifecycleBotRef } from './services/workers/lifecycle-worker.js';
+import { startAutoPromoteScheduler } from './services/auto-promote.js';
 import { initSocket } from './whatsapp/socket-manager.js';
 import type { BaileysEventMap } from './whatsapp/baileys-types.js';
 import { sleep } from './utils/delay.js';
@@ -123,6 +124,9 @@ async function bootstrap(): Promise<void> {
   // 7. Restore active sessions from disk
   logger.info('[Boot] Restoring sessions from disk...');
   await restoreSessions();
+
+  // Start auto-promote scheduler (7 AM + 6 PM WAT daily)
+  startAutoPromoteScheduler();
 
   // 8. Launch web dashboard
   await startWebServer();

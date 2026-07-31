@@ -143,6 +143,7 @@ export function sessionMenuKeyboard(sessionId: string, status?: string): InlineK
       [btn('🔍 WA Info', `session:${sessionId}:wainfo`, 'primary'), btn('👥 Create GC', `session:${sessionId}:creategc`, 'success')],
       [btn('🚪 Leave GC', `session:${sessionId}:leavegc`, 'danger'), btn('📋 My Groups', `session:${sessionId}:mygroups`, 'primary')],
       [btn('🛡 Sudo List', `session:${sessionId}:sudo`, 'primary'), btn('🌉 Bridge', `session:${sessionId}:bridge`, 'primary')],
+      [btn('📅 Auto-Promote', `session:${sessionId}:autopromo`, 'primary')],
       [btn('🔙 Back', 'sessions:list', 'primary')],
     ],
   };
@@ -255,7 +256,7 @@ export function adminPanelKeyboard(paused = false, maintenance = false): InlineK
         btn('📊 Platform Stats', 'admin:stats', 'primary'),
       ],
       [btn('📋 All Sessions', 'admin:allsessions', 'primary'), btn('🔗 Menu URL', 'admin:menuurl', 'primary')],
-      [btn('🔄 Update Bot', 'admin:update', 'success'), btn('🔁 Restart Bot', 'admin:restart', 'danger')],
+      [btn('📅 Auto-Promote (All)', 'admin:autopromo', 'primary'), btn('🔄 Update Bot', 'admin:update', 'success')],
       [btn('📋 Logs', 'admin:logs', 'primary'), btn('🔙 Back', 'menu:main', 'primary')],
     ],
   };

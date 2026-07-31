@@ -204,3 +204,97 @@ export async function cmdAllStatus(
 
   return result;
 }
+
+/**
+ * allgstatus — posts raw text + link to every group status.
+ * No StatusDesignEngine, no theme wrapping. The text is sent exactly as-is
+ * so the user controls the full format. Link preview is preserved naturally.
+ */
+export async function cmdAllGStatus(
+  socket: WASocket,
+  sessionId: string,
+  telegramId: string,
+  text: string,
+  opts: {
+    onProgress?: (msg: string) => Promise<void>;
+    existingPreview?: PartialLinkMeta;
+    sourceExt?: NonNullable<IMessage['extendedTextMessage']>;
+  } = {}
+): Promise<JobResult> {
+  const start = Date.now();
+  const result: JobResult = { success: 0, failed: 0, skipped: 0, rateLimited: 0, details: [], duration: 0 };
+
+  if (isFrozen(sessionId)) {
+    result.details.push('Session frozen — aborted');
+    result.duration = Date.now() - start;
+    return result;
+  }
+
+  activeRuns.set(sessionId, true);
+  const groups = await getJoinedGroups(socket);
+
+  // Resolve preview once — no design engine involved
+  const rawUrl = text.match(/https?:\/\/[^\s]+/u)?.[0];
+  let resolvedPreview: PartialLinkMeta | undefined = opts.existingPreview;
+  if (!opts.sourceExt && !resolvedPreview && rawUrl) {
+    resolvedPreview = await PreviewManager.resolvePreviewOnce(rawUrl, socket as never);
+  }
+
+  await opts.onProgress?.(`📡 Starting allgstatus for ${groups.length} groups…`);
+
+  for (let i = 0; i < groups.length; i++) {
+    const group = groups[i]!;
+
+    if (!activeRuns.get(sessionId)) {
+      result.details.push(`⛔ Stopped at ${i}/${groups.length}`);
+      break;
+    }
+
+    if (isFrozen(sessionId)) { result.skipped += groups.length - i; break; }
+
+    let posted = false;
+    let lastError = '';
+
+    for (let attempt = 1; attempt <= 3 && !posted; attempt++) {
+      try {
+        if (opts.sourceExt) {
+          const sent = await sendStatusAsIs(socket, group.id, text, opts.sourceExt);
+          if (sent) { posted = true; break; }
+        }
+        // Send raw — no design wrapping
+        await sendGroupStatus(socket, sessionId, group.id, text, { existingPreview: resolvedPreview });
+        posted = true;
+      } catch (err) {
+        lastError = String(err);
+        if (/rate|429|spam/i.test(lastError)) {
+          result.rateLimited++;
+          recordFailure(telegramId, sessionId, 'allstatus');
+          await exponentialBackoff(attempt, 5000, 60_000);
+        } else if (/not-authorized|forbidden|not in group|404/i.test(lastError)) {
+          result.skipped++;
+          break;
+        } else {
+          await exponentialBackoff(attempt, 2000, 15_000);
+        }
+      }
+    }
+
+    if (posted) {
+      result.success++;
+      recordSuccess(telegramId, sessionId, 'allstatus');
+    } else if (!result.details.at(-1)?.includes(group.subject)) {
+      result.failed++;
+      result.details.push(`❌ ${group.subject}: ${lastError.slice(0, 50)}`);
+    }
+
+    if (i % 10 === 0 && opts.onProgress) {
+      await opts.onProgress(`📡 allgstatus ${i + 1}/${groups.length} — ✅${result.success} ❌${result.failed}`);
+    }
+
+    await allstatusDelay();
+  }
+
+  activeRuns.delete(sessionId);
+  result.duration = Date.now() - start;
+  return result;
+}

@@ -1,3 +1,62 @@
+export async function handleStartFilterHttp(ctx: Context & { telegramId: string }): Promise<void> {
+  const main = loadBucket(ctx.telegramId, 'main').filter(e => e.status === 'unvalidated');
+  if (main.length === 0) {
+    await ctx.answerCbQuery('Main bucket is empty').catch(() => {});
+    return;
+  }
+  await ctx.answerCbQuery('HTTP validation started').catch(() => {});
+
+  const hubMsgId = (ctx.callbackQuery as any)?.message?.message_id;
+  const chatId = ctx.chat!.id;
+
+  // Update hub to show Stop button
+  await ctx.editMessageText(
+    bucketCard({
+      main: loadBucket(ctx.telegramId, 'main').length,
+      active: loadBucket(ctx.telegramId, 'active').length,
+      dead: loadBucket(ctx.telegramId, 'dead').length,
+      filterActive: true,
+    }),
+    { parse_mode: 'HTML', reply_markup: bucketMenuKeyboard(true) }
+  ).catch(() => {});
+
+  // Separate live dashboard message - validator updates this, NOT the hub
+  const msg = await ctx.telegram.sendMessage(
+    chatId,
+    `<blockquote><b>◈ OMEGA HTTP VALIDATOR</b>\n\nNo session needed.\nChecking ${main.length} links via HTTP…\n\nStatus     ● STARTING</blockquote>`,
+    { parse_mode: 'HTML' }
+  );
+  const msgId = msg.message_id;
+  let last = '';
+  const onProgress = async (html: string) => {
+    if (html === last) return;
+    last = html;
+    await ctx.telegram.editMessageText(chatId, msgId, undefined, html, { parse_mode: 'HTML' }).catch(() => {});
+  };
+  validateLinksHttp(ctx.telegramId, onProgress).then(async r => {
+    await ctx.telegram.editMessageText(chatId, msgId, undefined,
+      card('HTTP Validation Complete', '✅', [
+        ['Active', String(r.activated)],
+        ['Dead', String(r.killed)],
+        ['Errors', String(r.errors)],
+      ], 'Links validated without a WhatsApp session.'),
+      { parse_mode: 'HTML' }
+    ).catch(() => {});
+    // Restore hub to Start button
+    if (hubMsgId) {
+      await ctx.telegram.editMessageText(chatId, hubMsgId, undefined,
+        bucketCard({
+          main: loadBucket(ctx.telegramId, 'main').length,
+          active: loadBucket(ctx.telegramId, 'active').length,
+          dead: loadBucket(ctx.telegramId, 'dead').length,
+          filterActive: false,
+        }),
+        { parse_mode: 'HTML', reply_markup: bucketMenuKeyboard(false) }
+      ).catch(() => {});
+    }
+  }).catch(logger.error.bind(logger));
+}
+
 // ============================================================
 // WA-Bridge — Bucket Management Telegram Handlers
 // Tri-bucket validator UI: view, filter, export, purge
@@ -121,41 +180,6 @@ export async function handleAddLinks(
 }
 
 // ── Start / Stop Auto-Filter ──────────────────────────────
-
-export async function handleStartFilterHttp(ctx: Context & { telegramId: string }): Promise<void> {
-  const main = loadBucket(ctx.telegramId, 'main').filter(e => e.status === 'unvalidated');
-  if (main.length === 0) {
-    await ctx.answerCbQuery('Main bucket is empty').catch(() => {});
-    return;
-  }
-  await ctx.answerCbQuery('HTTP validation started').catch(() => {});
-  const msg = await ctx.reply(
-    `<blockquote><b>◈ OMEGA HTTP VALIDATOR</b>\n\nNo session needed.\nChecking ${main.length} links via HTTP…\n\nStatus     ● STARTING</blockquote>`,
-    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏹ Stop', callback_data: 'bucket:filter:stop' }]] } }
-  );
-  const chatId = ctx.chat!.id;
-  const msgId = msg.message_id;
-  let last = '';
-  const onProgress = async (html: string) => {
-    if (html === last) return;
-    last = html;
-    await ctx.telegram.editMessageText(chatId, msgId, undefined, html, {
-      parse_mode: 'HTML',
-      reply_markup: { inline_keyboard: [[{ text: '⏹ Stop', callback_data: 'bucket:filter:stop' }]] },
-    }).catch(() => {});
-  };
-  validateLinksHttp(ctx.telegramId, onProgress).then(async r => {
-    await ctx.telegram.editMessageText(chatId, msgId, undefined,
-      card('HTTP Validation Complete', '✅', [
-        ['Active', String(r.activated)],
-        ['Dead', String(r.killed)],
-        ['Errors', String(r.errors)],
-      ], 'Links validated without a WhatsApp session.'),
-      { parse_mode: 'HTML', reply_markup: bucketMenuKeyboard(false) }
-    ).catch(() => {});
-  }).catch(logger.error.bind(logger));
-}
-
 export async function handleStartFilter(ctx: Context & { telegramId: string }): Promise<void> {
   if (isAutoFilterRunning(ctx.telegramId)) {
     await ctx.answerCbQuery('Filter already running').catch(() => {});
@@ -180,8 +204,21 @@ export async function handleStartFilter(ctx: Context & { telegramId: string }): 
   const main = loadBucket(ctx.telegramId, 'main');
   const pending = main.filter((e) => e.status === 'unvalidated').length;
 
-  // ← Edit the bucket status message immediately to show Stop button
+  // 1. Update the hub message to show Stop button — keep it as the hub, don't replace it
   await ctx.editMessageText(
+    bucketCard({
+      main: main.length,
+      active: loadBucket(ctx.telegramId, 'active').length,
+      dead: loadBucket(ctx.telegramId, 'dead').length,
+      filterActive: true,
+    }),
+    { parse_mode: 'HTML', reply_markup: bucketMenuKeyboard(true) }
+  ).catch(() => {});
+
+  // 2. Send a SEPARATE live dashboard message — this is what the validator updates
+  const chatId = ctx.chat!.id;
+  const dashMsg = await ctx.telegram.sendMessage(
+    chatId,
     [
       `<blockquote>`,
       `<b>◈ OMEGA VALIDATOR</b>`,
@@ -196,18 +233,9 @@ export async function handleStartFilter(ctx: Context & { telegramId: string }): 
       `Speed      0.0 links/min`,
       `</blockquote>`,
     ].join('\n'),
-    { parse_mode: 'HTML', reply_markup: bucketMenuKeyboard(true) }
-  ).catch(async () => {
-    // If edit fails (e.g. message too old), send a new one
-    await ctx.reply(
-      `<blockquote><b>◈ OMEGA VALIDATOR</b>\n\nStatus     ● STARTING\nQueue      ${pending}</blockquote>`,
-      { parse_mode: 'HTML', reply_markup: bucketMenuKeyboard(true) }
-    );
-  });
-
-  const chatId = ctx.chat!.id;
-  // Use the message we just edited as the live dashboard target
-  const msgId = (ctx.callbackQuery as any)?.message?.message_id;
+    { parse_mode: 'HTML' }
+  );
+  const dashMsgId = dashMsg.message_id;
 
   const usedSessions = new Set<string>([primarySessionId]);
   const getAlternativeSocket = (_currentId: string): { socket: import('../../whatsapp/baileys-types.js').BridgeWASocket; sessionId: string } | null => {
@@ -220,14 +248,11 @@ export async function handleStartFilter(ctx: Context & { telegramId: string }): 
     return null;
   };
 
+  // Progress updates go to the separate dashboard message only
   const onProgress = async (html: string): Promise<void> => {
-    if (!msgId) return;
-    try {
-      await ctx.telegram.editMessageText(chatId, msgId, undefined, html, {
-        parse_mode: 'HTML',
-        reply_markup: bucketMenuKeyboard(true),
-      });
-    } catch { /* edit window expired */ }
+    await ctx.telegram.editMessageText(chatId, dashMsgId, undefined, html, {
+      parse_mode: 'HTML',
+    }).catch(() => {});
   };
 
   startAutoFilter(
@@ -239,28 +264,38 @@ export async function handleStartFilter(ctx: Context & { telegramId: string }): 
   ).then(async () => {
     const active = loadBucket(ctx.telegramId, 'active');
     const dead = loadBucket(ctx.telegramId, 'dead');
-    if (msgId) {
-      await ctx.telegram.editMessageText(chatId, msgId, undefined,
-        card('Validator Complete', '✅', [
-          ['Active', String(active.length)],
-          ['Dead', String(dead.length)],
-        ], 'Review or export the validated active bucket.'),
-        { parse_mode: 'HTML', reply_markup: bucketMenuKeyboard(false) }
-      ).catch(() => {});
-    } else {
-      await ctx.reply(
-        card('Validator Complete', '✅', [['Active', String(active.length)], ['Dead', String(dead.length)]], 'Review or export the validated active bucket.'),
-        { parse_mode: 'HTML', reply_markup: bucketMenuKeyboard(false) }
-      );
-    }
+    // Update dashboard message with final result
+    await ctx.telegram.editMessageText(chatId, dashMsgId, undefined,
+      card('Validator Complete', '✅', [
+        ['Active', String(active.length)],
+        ['Dead', String(dead.length)],
+      ], 'Review or export the validated active bucket.'),
+      { parse_mode: 'HTML' }
+    ).catch(() => {});
+    // Update hub message to show Start button again
+    await ctx.telegram.editMessageText(chatId,
+      (ctx.callbackQuery as any)?.message?.message_id,
+      undefined,
+      bucketCard({
+        main: loadBucket(ctx.telegramId, 'main').length,
+        active: active.length,
+        dead: dead.length,
+        filterActive: false,
+      }),
+      { parse_mode: 'HTML', reply_markup: bucketMenuKeyboard(false) }
+    ).catch(() => {});
   }).catch(logger.error.bind(logger));
 }
 
 export async function handleStopFilter(ctx: Context & { telegramId: string }): Promise<void> {
   stopAutoFilter(ctx.telegramId);
   await ctx.answerCbQuery('Filter stopped ⏹').catch(() => {});
+  // Refresh the hub message with current bucket counts and Start button
+  const main = loadBucket(ctx.telegramId, 'main');
+  const active = loadBucket(ctx.telegramId, 'active');
+  const dead = loadBucket(ctx.telegramId, 'dead');
   await ctx.editMessageText(
-    noticeCard('Validator Stopped', 'The filter was stopped. Validated links have been saved to their buckets.', 'warning'),
+    bucketCard({ main: main.length, active: active.length, dead: dead.length, filterActive: false }),
     { parse_mode: 'HTML', reply_markup: bucketMenuKeyboard(false) }
   ).catch(() => {});
 }

@@ -122,7 +122,7 @@ export const ALL_COMMANDS = [
   // Status & Target Broadcast
   'godcast', 'gstatus', 'tochat', 'togstatus', 'tochatx', 'togstatusx', 'sstatus', 'statusdesign', 'settheme', 'smedia',
   // Mass Outreach
-  'allstatus', 'allchat', 'allstatusx',
+  'allstatus', 'allgstatus', 'allchat', 'allstatusx',
   // Lifecycle
   'join', 'joinall', 'left', 'leave', 'leaveall',
   // Tagging
