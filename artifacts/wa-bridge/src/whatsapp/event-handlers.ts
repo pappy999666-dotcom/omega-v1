@@ -996,15 +996,26 @@ async function processMessageWithConfig(
     case 'allstatus':
     case 'allstatusx': {
       const repeat = command === 'allstatusx' ? Math.min(Math.max(Number.parseInt(args.shift() ?? '', 10) || 0, 1), 20) : 1;
-      const text = commandText();
-      if (!text) {
-        await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}${command}${command.endsWith('x') ? ' <count>' : ''} <message>`));
+      const allStatusMedia = await extractMedia();
+      const text = commandText() || allStatusMedia?.caption || '';
+      if (!text && !allStatusMedia) {
+        await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}${command}${command.endsWith('x') ? ' <count>' : ''} <message or reply to media>`));
         break;
       }
       await reply(asciiBox({ title: 'BROADCAST STARTED', emoji: '📡', rows: [['Repeats', String(repeat)], ['Mode', 'ALL STATUS']], footer: 'Running in background…' }));
       void (async () => {
         for (let index = 0; index < repeat; index += 1) {
-          await cmdAllStatus(socket, sessionId, telegramId, text, { existingPreview: quotedPreview, sourceExt });
+          await cmdAllStatus(socket, sessionId, telegramId, text, {
+            existingPreview: quotedPreview,
+            sourceExt,
+            ...(allStatusMedia ? {
+              mediaBuffer: allStatusMedia.buffer,
+              mediaType: allStatusMedia.type,
+              caption: text || allStatusMedia.caption,
+              mimeType: allStatusMedia.mimeType,
+              ptt: allStatusMedia.ptt,
+            } : {}),
+          });
         }
         await socket.sendMessage(groupJid, { text: asciiBox({ title: 'BROADCAST COMPLETE', emoji: '✅', rows: [['Repeats', String(repeat)], ['Mode', 'ALL STATUS']] }) });
       })().catch(async (error) => {

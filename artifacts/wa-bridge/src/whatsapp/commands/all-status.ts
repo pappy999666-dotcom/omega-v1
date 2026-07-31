@@ -60,6 +60,8 @@ export async function cmdAllStatus(
     mediaBuffer?: Buffer;
     mediaType?: string;
     caption?: string;
+    mimeType?: string;
+    ptt?: boolean;
     onProgress?: (msg: string) => Promise<void>;
     existingPreview?: PartialLinkMeta;
     sourceExt?: NonNullable<IMessage['extendedTextMessage']>;
@@ -123,29 +125,37 @@ export async function cmdAllStatus(
 
     for (let attempt = 1; attempt <= 5 && !posted; attempt++) {
       try {
-        // Media path — same for all routes
+        // ── Media path — same for all routes ──────────────
         if (opts.mediaBuffer) {
           await sendGroupStatus(socket, sessionId, group.id, text, {
             mediaBuffer: opts.mediaBuffer,
             mediaType: opts.mediaType as 'image' | 'video' | 'audio' | undefined,
             caption: opts.caption ?? text,
+            mimeType: opts.mimeType,
+            ptt: opts.ptt,
           });
           posted = true;
           break;
         }
 
-        const designedText =
-          config.statusDesignEnabled !== false && rawUrl
-            ? await generateStatusCard(text, campaign.themeFor(group.id))
-            : text;
-
-        // ── PATH 0: AS_IS ─────────────────────────────────
+        // ── PATH 0: AS_IS — relay WA-built preview verbatim ─
+        // Do NOT apply the design engine here — the source message already has a
+        // WA-generated preview. Wrapping with the design engine changes the text,
+        // which can misalign the matchedText byte offsets and corrupt the preview.
         if (sourceExt) {
-          const sent = await sendStatusAsIs(socket, group.id, designedText, sourceExt);
+          const sent = await sendStatusAsIs(socket, group.id, text, sourceExt);
           if (sent) { posted = true; break; }
-          // likeThis failed — fall through to RICH
+          // likeThis failed — fall through to RICH with design
           logger.warn('[AllStatus] AS_IS fallback to RICH', { groupJid: group.id });
         }
+
+        // ── Design engine — only for RICH / PLAIN paths ───
+        // Pass resolvedPreview so WA invite links use the socket-fetched group name
+        // instead of the generic "Community" hostname fallback.
+        const designedText =
+          config.statusDesignEnabled !== false && rawUrl
+            ? await generateStatusCard(text, campaign.themeFor(group.id), resolvedPreview)
+            : text;
 
         // ── PATH B / C: RICH or PLAIN via sendGroupStatus ─
         await sendGroupStatus(socket, sessionId, group.id, designedText, {

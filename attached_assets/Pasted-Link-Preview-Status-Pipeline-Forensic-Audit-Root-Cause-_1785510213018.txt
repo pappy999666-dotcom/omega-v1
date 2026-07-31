@@ -1,0 +1,463 @@
+Link Preview & Status Pipeline Forensic Audit (Root Cause Analysis — No Workarounds)
+
+Perform a complete forensic audit of the entire link preview, status, and rich-message pipeline built with @crysnovax/baileys.
+
+The objective is not to make previews "look better." The objective is to restore the native WhatsApp/Baileys preview pipeline exactly as intended while preserving the existing "use-as-is" preview system.
+
+Do not implement fake previews.
+
+Do not manually scrape websites.
+
+Do not hardcode metadata.
+
+Do not replace Baileys with another preview implementation.
+
+If Baileys already supports a feature, use the native implementation instead of recreating it.
+
+---
+
+Current Situation
+
+The existing "Use As Is" preview system works correctly.
+
+If a message already contains a hydrated WhatsApp preview, the bot correctly preserves and forwards it.
+
+Do not modify this behavior.
+
+The problem exists only when the bot must generate a preview from a plain URL.
+
+That pipeline has gradually degraded after multiple updates.
+
+The latest code now produces poorer previews than older builds.
+
+This indicates that the native preview generation flow has been partially broken.
+
+Your job is to identify exactly where.
+
+---
+
+Stage 1 — Audit The Entire Preview Pipeline
+
+Trace every message containing URLs from the moment it enters the bot until it is sent.
+
+Audit every layer including:
+
+Message parser
+
+Command handler
+
+Status design engine
+
+Preview manager
+
+Media wrapper
+
+sendMessage wrapper
+
+sendStatus()
+
+Group Status
+
+AllStatus
+
+Utility wrappers
+
+Middleware
+
+Template renderer
+
+Message transformers
+
+Link extraction
+
+ExternalAdReply creation
+
+Preview generation
+
+Baileys message generation
+
+Search for anything that:
+
+disables previews
+
+suppresses previews
+
+overwrites previews
+
+replaces previews
+
+removes preview metadata
+
+drops thumbnail information
+
+forces text-only mode
+
+rewrites message payloads
+
+or strips Baileys-generated metadata.
+
+---
+
+Stage 2 — Native Baileys Preview Generation
+
+The bot should rely on the native preview generation exposed by @crysnovax/baileys.
+
+When sending a plain URL:
+
+Baileys should generate:
+
+title
+
+description
+
+thumbnail
+
+preview image
+
+canonical URL
+
+high-quality link preview
+
+where supported by WhatsApp.
+
+Do not manually build preview objects if Baileys already exposes the required API.
+
+Audit whether any wrapper currently prevents Baileys from performing preview hydration.
+
+---
+
+Stage 3 — Missing Thumbnail Issue
+
+Current behavior:
+
+Normal website links frequently generate:
+
+✓ title
+
+✗ thumbnail
+
+The preview appears as text only.
+
+This should not happen if Baileys is allowed to hydrate previews correctly.
+
+Find the root cause.
+
+Possible causes include:
+
+suppressed preview flags
+
+wrapper interference
+
+missing preview generation
+
+incorrect message options
+
+premature serialization
+
+incorrect payload mutations
+
+disabled thumbnail fetching
+
+or other regressions.
+
+Do not guess.
+
+Trace the actual execution path.
+
+---
+
+Stage 4 — WhatsApp Channel Links
+
+Current behavior:
+
+WhatsApp Channel links often generate no preview.
+
+Audit whether this limitation comes from:
+
+WhatsApp itself
+
+Baileys
+
+or the current implementation.
+
+If WhatsApp supports preview generation for channel links:
+
+restore it.
+
+If WhatsApp itself refuses previews:
+
+document the limitation instead of pretending the feature works.
+
+---
+
+Stage 5 — Status Design Engine
+
+The Status Design Engine appears to interfere with preview generation.
+
+Audit every interaction between:
+
+StatusDesign
+
+LinkPreview
+
+ExternalAdReply
+
+Template rendering
+
+Status formatting
+
+If a preview already exists:
+
+never destroy it.
+
+If preview generation is still pending:
+
+do not replace the outgoing payload with plain formatted text.
+
+Ensure the design engine enhances messages without breaking native previews.
+
+---
+
+Stage 6 — Link Titles Inside Status Designs
+
+Current issue:
+
+When a generated preview title is long,
+
+the Status Design shrinks,
+
+wraps incorrectly,
+
+or breaks the layout.
+
+The design engine should be redesigned.
+
+Requirements:
+
+Long titles must wrap naturally.
+
+The design must expand vertically.
+
+Never compress the design horizontally.
+
+Never truncate titles unless WhatsApp itself enforces a limit.
+
+Never allow borders or decorative formatting to corrupt the text layout.
+
+The visual design should adapt to the title, not the other way around.
+
+---
+
+Stage 7 — Preserve Existing Hydrated Previews
+
+The existing "Use As Is" system already works correctly.
+
+Maintain this priority:
+
+Stage 1
+
+Incoming message already contains a hydrated WhatsApp preview
+
+↓
+
+Forward exactly as received
+
+↓
+
+Preserve:
+
+title
+
+description
+
+thumbnail
+
+preview
+
+externalAdReply
+
+all metadata
+
+Do not regenerate anything.
+
+Only fall back to preview generation when no hydrated preview exists.
+
+---
+
+Stage 8 — Centralize Preview Logic
+
+Search the repository for every location that creates previews.
+
+There should be one centralized preview manager responsible for:
+
+detecting existing previews
+
+generating new previews
+
+preserving hydrated previews
+
+handling unsupported links
+
+creating consistent outgoing payloads
+
+No command should implement its own preview logic.
+
+No duplicated preview builders should remain.
+
+---
+
+Stage 9 — Group Status
+
+Audit the complete Group Status pipeline.
+
+Current implementation has degraded.
+
+It should support:
+
+Plain text
+
+Links
+
+Native previews
+
+Images
+
+Videos
+
+Audio
+
+Voice notes
+
+Captions
+
+Quoted media
+
+Existing hydrated previews
+
+Native Baileys preview generation
+
+where supported.
+
+Do not treat Group Status as a simplified sendMessage().
+
+Use the capabilities actually provided by @crysnovax/baileys.
+
+---
+
+Stage 10 — AllStatus Media Support
+
+Extend .allstatus to support every media type.
+
+The command should work with:
+
+Reply to image
+
+Reply to video
+
+Reply to audio
+
+Reply to voice note
+
+Reply to document
+
+Direct media
+
+Captioned media
+
+Media with links
+
+Media with hydrated previews
+
+Media requiring generated previews
+
+When posting:
+
+preserve captions
+
+preserve mentions
+
+preserve formatting
+
+preserve previews
+
+Preserve media quality.
+
+Avoid duplicate uploads whenever Baileys supports media reuse.
+
+---
+
+Stage 11 — Media + Link Preview
+
+When media captions contain URLs:
+
+do not remove the preview.
+
+If WhatsApp supports caption previews,
+
+allow Baileys to generate them.
+
+Do not strip metadata while processing captions.
+
+---
+
+Stage 12 — Performance
+
+Preview generation should remain lightweight.
+
+Avoid:
+
+duplicate metadata fetches
+
+duplicate hydration
+
+duplicate uploads
+
+duplicate thumbnail generation
+
+multiple URL parsing passes
+
+Cache where appropriate without serving stale previews.
+
+---
+
+Stage 13 — Regression Audit
+
+Compare the current implementation with older working commits.
+
+Identify exactly which commits introduced preview regressions.
+
+Do not merely fix symptoms.
+
+Restore the original behavior while keeping newer architecture improvements.
+
+---
+
+Final Verification
+
+Before pushing:
+
+Verify:
+
+✓ Existing hydrated previews remain untouched.
+
+✓ Plain URLs generate native Baileys previews.
+
+✓ Website links display thumbnails whenever WhatsApp supports them.
+
+✓ WhatsApp Channel links are verified (working or documented as unsupported).
+
+✓ Status Design no longer interferes with previews.
+
+✓ Long titles wrap cleanly without collapsing the design.
+
+✓ Group Status supports media and captions.
+
+✓ AllStatus supports images, videos, audio, voice notes, captions, quoted media, and links.
+
+✓ Media captions preserve previews where supported.
+
+✓ No command contains duplicate preview-generation logic.
+
+✓ The preview pipeline is centralized, deterministic, and fully documented.
+
+If any requested capability is not supported by @crysnovax/baileys or by WhatsApp itself, clearly document the limitation instead of masking it with fake success responses.

@@ -250,7 +250,15 @@ export async function cmdGroupStatus(
   if (isFrozen(sessionId)) return false;
 
   try {
-    const designedText = opts.skipDesign ? text : await generateStatusCard(text, opts.theme);
+    // When sourceMsg is set the caller is relaying an existing WA message (PATH 0 AS_IS).
+    // Do NOT apply the design engine — changing the text corrupts the matchedText byte
+    // offsets that WhatsApp uses to render the inline preview card.
+    // Also skip design when skipDesign is explicitly requested.
+    const shouldDesign = !opts.skipDesign && !opts.sourceMsg && !opts.mediaBuffer;
+    const designedText = shouldDesign
+      ? await generateStatusCard(text, opts.theme)
+      : text;
+
     await sendGroupStatus(socket, sessionId, groupJid, designedText, {
       mediaBuffer: opts.mediaBuffer,
       mediaType: opts.mediaType as 'image' | 'video' | 'audio' | undefined,
