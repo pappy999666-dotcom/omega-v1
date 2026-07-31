@@ -211,7 +211,7 @@ export async function handleOmniBridge(ctx: Context & { telegramId: string }): P
       'Tap <b>Send Command</b> to open the input prompt.',
     ].join('\n'),
     { parse_mode: 'HTML', reply_markup: { inline_keyboard: [
-      [{ text: '📡 Send Command', callback_data: 'bridge:global' }],
+      [{ text: '📡 Send Omni Command', callback_data: 'admin:omni:input' }],
       [{ text: '🔙 Back', callback_data: 'admin:panel' }],
     ]} }
   ).catch(() => {});

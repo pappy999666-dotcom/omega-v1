@@ -133,6 +133,7 @@ interface BotContext extends Context {
     awaitingPrefix?: boolean;
     bridgeSessionId?: string;
     awaitingGlobalBridge?: boolean;
+    awaitingOmniCommand?: boolean;
     awaitingSupport?: boolean;
     awaitingProfilePhotoSessionId?: string;
     awaitingGcPfpSessionId?: string;
@@ -1107,6 +1108,12 @@ export function createBot(): Telegraf<BotContext> {
     }
 
     // ── Awaiting Prefix ───────────────��───────────────────
+    if (ctx.session?.awaitingOmniCommand) {
+      ctx.session.awaitingOmniCommand = false;
+      await executeOmniCommand(ctx as BotContext, text.trim(), '');
+      return;
+    }
+
     if (ctx.session?.awaitingGlobalBridge) {
     ctx.session.awaitingGlobalBridge = false;
     const sessionIds = getUserSockets(ctx.telegramId);
@@ -2608,6 +2615,14 @@ async function routeCallback(
         saveBucket(ctx.telegramId, 'active', master);
         await handleExportBucket(ctx, params[2] as 'txt' ?? 'txt');
       }
+      return;
+    }
+    if (sub === 'omni' && params[1] === 'input') {
+      ctx.session.awaitingOmniCommand = true;
+      await ctx.editMessageText(
+        card('Omni-Bridge Input', '📡', [['Scope', 'All platform sessions']], 'Send any WhatsApp command now. It will run on every connected session across all users.'),
+        { parse_mode: 'HTML', reply_markup: backKeyboard('admin:omni') }
+      ).catch(() => {});
       return;
     }
     if (sub === 'omni') { await handleOmniBridge(ctx); return; }
