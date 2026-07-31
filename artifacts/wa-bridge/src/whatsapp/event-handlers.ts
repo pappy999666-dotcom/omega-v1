@@ -361,7 +361,8 @@ async function processMessageWithConfig(
   // Parse command. Unknown text and unbound stickers are always ignored.
   let parsed = text ? parseCommand(text, config) : null;
   if (!parsed && stickerMsg?.fileSha256) {
-    parsed = parseStickerCommand(Buffer.from(stickerMsg.fileSha256 as Uint8Array), config);
+    // fileSha256 can be Uint8Array or base64 string depending on Baileys version
+    parsed = parseStickerCommand(stickerMsg.fileSha256 as unknown as Buffer, config);
   }
   if (!parsed) return;
 
@@ -429,7 +430,7 @@ async function processMessageWithConfig(
     const quoted = unwrapMessage(getContextInfo()?.quotedMessage);
     const sticker = quoted?.stickerMessage ?? anyMessage.stickerMessage;
     const sha = sticker?.fileSha256;
-    return sha ? hashSticker(Buffer.from(sha as Uint8Array)) : null;
+    return sha ? hashSticker(sha as Buffer | Uint8Array | string) : null;
   };
   const downloadMessageMedia = async (source: WebMessageInfo): Promise<Buffer | null> => {
     try {
@@ -875,17 +876,10 @@ async function processMessageWithConfig(
       const text = commandText() || media?.caption || '';
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Run this command inside a WhatsApp group.')); break; }
       if (!text && !media) { await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}gstatus [message], or reply to media/text.`)); break; }
-      // Resolve group subject for title in status design
-      let gstatusTitle: string | undefined;
-      try {
-        const gMeta = await socket.groupMetadata(groupJid);
-        gstatusTitle = gMeta?.subject;
-      } catch { /* non-critical */ }
       const sent = await cmdGroupStatus(socket, sessionId, groupJid, text, {
         theme: config.statusDesignTheme,
         existingPreview: quotedPreview,
         sourceMsg: msg,
-        groupTitle: gstatusTitle,
         ...(media ? { mediaBuffer: media.buffer, mediaType: media.type, caption: text, ptt: media.ptt, mimeType: media.mimeType } : {}),
       });
       await reply(sent

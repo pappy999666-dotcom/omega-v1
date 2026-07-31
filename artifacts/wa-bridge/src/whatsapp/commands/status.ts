@@ -250,7 +250,7 @@ export async function cmdGroupStatus(
   if (isFrozen(sessionId)) return false;
 
   try {
-    const designedText = opts.skipDesign ? text : await generateStatusCard(text, opts.theme, opts.groupTitle);
+    const designedText = opts.skipDesign ? text : await generateStatusCard(text, opts.theme);
     await sendGroupStatus(socket, sessionId, groupJid, designedText, {
       mediaBuffer: opts.mediaBuffer,
       mediaType: opts.mediaType as 'image' | 'video' | 'audio' | undefined,

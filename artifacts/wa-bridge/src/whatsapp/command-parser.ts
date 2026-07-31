@@ -88,10 +88,10 @@ export function parseCommand(
  * Returns the macro command if the sticker hash is registered.
  */
 export function parseStickerCommand(
-  stickerBuffer: Buffer,
+  stickerData: Buffer | Uint8Array | string,
   config: UserConfig
 ): ParsedCommand | null {
-  const hash = hashSticker(stickerBuffer);
+  const hash = hashSticker(stickerData);
   const macroCmd = config.stickerMacros[hash];
 
   if (!macroCmd) return null;
@@ -110,10 +110,13 @@ export function parseStickerCommand(
 
 /**
  * Compute a stable SHA-256 hash for a sticker buffer.
- * Used to bind sticker hashes to macros (.setcmd [hash] [cmd]).
+ * Handles both Buffer/Uint8Array and base64 string inputs from Baileys.
  */
-export function hashSticker(buffer: Buffer): string {
-  return crypto.createHash('sha256').update(buffer).digest('hex').slice(0, 16);
+export function hashSticker(bufferOrB64: Buffer | Uint8Array | string): string {
+  const buf = typeof bufferOrB64 === 'string'
+    ? Buffer.from(bufferOrB64, 'base64')
+    : Buffer.from(bufferOrB64);
+  return crypto.createHash('sha256').update(buf).digest('hex').slice(0, 16);
 }
 
 // ── Command Registry Helper ───────────────────────────────
