@@ -875,10 +875,17 @@ async function processMessageWithConfig(
       const text = commandText() || media?.caption || '';
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Run this command inside a WhatsApp group.')); break; }
       if (!text && !media) { await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}gstatus [message], or reply to media/text.`)); break; }
+      // Resolve group subject for title in status design
+      let gstatusTitle: string | undefined;
+      try {
+        const gMeta = await socket.groupMetadata(groupJid);
+        gstatusTitle = gMeta?.subject;
+      } catch { /* non-critical */ }
       const sent = await cmdGroupStatus(socket, sessionId, groupJid, text, {
         theme: config.statusDesignTheme,
         existingPreview: quotedPreview,
         sourceMsg: msg,
+        groupTitle: gstatusTitle,
         ...(media ? { mediaBuffer: media.buffer, mediaType: media.type, caption: text, ptt: media.ptt, mimeType: media.mimeType } : {}),
       });
       await reply(sent

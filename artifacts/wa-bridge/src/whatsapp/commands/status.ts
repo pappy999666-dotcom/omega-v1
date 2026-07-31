@@ -245,12 +245,12 @@ export async function cmdGroupStatus(
   sessionId: string,
   groupJid: string,
   text: string,
-  opts: { mediaBuffer?: Buffer; mediaType?: string; caption?: string; mimeType?: string; ptt?: boolean; theme?: string; skipDesign?: boolean; existingPreview?: PartialLinkMeta; sourceMsg?: { message?: import('../baileys-types.js').IMessage | null } } = {}
+  opts: { mediaBuffer?: Buffer; mediaType?: string; caption?: string; mimeType?: string; ptt?: boolean; theme?: string; skipDesign?: boolean; existingPreview?: PartialLinkMeta; sourceMsg?: { message?: import('../baileys-types.js').IMessage | null }; groupTitle?: string } = {}
 ): Promise<boolean> {
   if (isFrozen(sessionId)) return false;
 
   try {
-    const designedText = opts.skipDesign ? text : await generateStatusCard(text, opts.theme);
+    const designedText = opts.skipDesign ? text : await generateStatusCard(text, opts.theme, opts.groupTitle);
     await sendGroupStatus(socket, sessionId, groupJid, designedText, {
       mediaBuffer: opts.mediaBuffer,
       mediaType: opts.mediaType as 'image' | 'video' | 'audio' | undefined,

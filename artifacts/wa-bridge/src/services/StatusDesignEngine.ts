@@ -384,10 +384,9 @@ function compactSpaces(value: string): string {
   return value.replace(/\s+/gu, ' ').trim();
 }
 
-function clampTitle(title: string, maxChars = 28): string {
-  const cleaned = compactSpaces(title);
-  if (cleaned.length <= maxChars) return cleaned;
-  return `${cleaned.slice(0, maxChars - 1)}…`;
+function clampTitle(title: string): string {
+  // No character limit — full group name, just clean whitespace
+  return compactSpaces(title).trim();
 }
 
 // ── Unicode font converters ───────────────────────────────
@@ -507,15 +506,19 @@ export class StatusDesignEngine {
       const theme = this.normalizeTheme(input.theme);
       const family = THEME_TO_FAMILY[theme] ?? 'minimal';
 
-      const rawTitle = compactSpaces((input.title ?? '').replaceAll(url, ''));
-      // If URL is a WhatsApp group link and no title provided, use a clean default
-      // instead of letting the URL bleed into the title
-      const isWaLink = /chat\.whatsapp\.com\/|wa\.me\/join\//u.test(url);
-      const title = rawTitle.length > 1
-        ? rawTitle
-        : isWaLink
-          ? this.defaultTitle(theme, family, input.message)
-          : this.defaultTitle(theme, family, input.message);
+      // Title priority:
+      // 1. Explicit input.title (e.g. group subject passed from allstatus)
+      // 2. input.message stripped of the URL
+      // 3. defaultTitle based on theme
+      let title = '';
+      if (input.title && input.title.trim().length > 1) {
+        // Use explicit title as-is — no truncation
+        title = compactSpaces(input.title.trim());
+      } else {
+        // Strip URL from message to get clean title text
+        const msgClean = compactSpaces((input.message ?? '').replace(url, '').replace(/https?:\/\/\S+/gu, '').trim());
+        title = msgClean.length > 1 ? msgClean : this.defaultTitle(theme, family, undefined);
+      }
 
       const seed =
         input.seed?.trim() ||
@@ -545,7 +548,7 @@ export class StatusDesignEngine {
   private defaultTitle(theme: StatusTheme, family: ThemeFamily, message?: string): string {
     const hint = compactSpaces(message ?? '');
     if (hint) {
-      return clampTitle(hint, 28);
+      return clampTitle(hint);
     }
 
     const labels: Partial<Record<StatusTheme, string>> = {

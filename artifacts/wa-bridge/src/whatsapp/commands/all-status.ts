@@ -136,7 +136,7 @@ export async function cmdAllStatus(
 
         const designedText =
           config.statusDesignEnabled !== false && rawUrl
-            ? await generateStatusCard(text, campaign.themeFor(group.id))
+            ? await generateStatusCard(text, campaign.themeFor(group.id), group.subject)
             : text;
 
         // ── PATH 0: AS_IS ─────────────────────────────────
