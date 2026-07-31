@@ -541,17 +541,68 @@ export function stopLogStream(telegramId: string): void {
 // ── Restart Bot ────────────────────────────────────────────
 
 export async function handleRestartBot(ctx: Context & { telegramId: string }): Promise<void> {
-  await ctx.answerCbQuery('Restarting…').catch(() => {});
+  await ctx.answerCbQuery('Building & Restarting…').catch(() => {});
+
+  let msgId: number;
+  try {
+    const sent = await ctx.telegram.sendMessage(
+      parseInt(ctx.telegramId, 10),
+      `${header('Build & Restart', '🔄')}\n\n<blockquote expandable>\u23f3 Running npm run build\u2026</blockquote>`,
+      { parse_mode: 'HTML' }
+    );
+    msgId = sent.message_id;
+  } catch {
+    msgId = 0;
+  }
+
   await ctx.editMessageText(
-    `${header('Restarting…', '🔁')}\n\nPM2 is restarting the bot. You will receive a startup message in a few seconds.`,
+    `${header('Build & Restart Started', '🔄')}\n\nBuilding then restarting. Check the message above for live output.`,
     { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') }
   ).catch(() => {});
-  // Delay slightly so Telegram gets the response before the process dies
-  setTimeout(() => {
-    import('child_process').then(({ exec }) => {
+
+  const { exec } = await import('child_process');
+  const chatId = parseInt(ctx.telegramId, 10);
+
+  const edit = async (text: string, final = false): Promise<void> => {
+    if (!msgId) return;
+    const body = `${header('Build & Restart', final ? '\u2705' : '🔄')}\n\n<blockquote expandable>${text.slice(0, 3800)}</blockquote>`;
+    await ctx.telegram.editMessageText(chatId, msgId, undefined, body, {
+      parse_mode: 'HTML',
+      ...(final ? { reply_markup: backKeyboard('admin:panel') } : {}),
+    }).catch(() => {});
+  };
+
+  // Run build first, stream output
+  const buildProc = exec('npm run build --prefix /root/omega-v1/artifacts/wa-bridge 2>&1');
+  const lines: string[] = [];
+  let lastEdit = Date.now();
+
+  const onData = (d: Buffer | string): void => {
+    const chunk = d.toString();
+    lines.push(...chunk.split('\n').filter(Boolean));
+    const now = Date.now();
+    if (now - lastEdit > 1500) {
+      lastEdit = now;
+      edit(lines.slice(-40).join('\n')).catch(() => {});
+    }
+  };
+
+  buildProc.stdout?.on('data', onData);
+  buildProc.stderr?.on('data', onData);
+
+  buildProc.on('close', (code) => {
+    if (code !== 0) {
+      lines.push(`\n\u274c Build failed (exit ${code}). Not restarting.`);
+      edit(lines.slice(-40).join('\n'), true).catch(() => {});
+      return;
+    }
+    lines.push('\n\u2705 Build complete. Restarting via PM2\u2026');
+    edit(lines.slice(-40).join('\n')).catch(() => {});
+    // Small delay so Telegram gets the edit before process dies
+    setTimeout(() => {
       exec('pm2 restart wa-bridge --update-env', (err) => {
         if (err) logger.error('[Admin] Restart failed', { err: String(err) });
       });
-    }).catch(() => {});
-  }, 800);
+    }, 800);
+  });
 }
