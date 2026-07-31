@@ -1865,6 +1865,14 @@ async function routeCallback(
     if (sub === 'autopromo') {
       const { loadJobs, removeJob } = await import('../services/auto-promote.js');
       const op = params[2];
+      if (op === 'set') {
+        ctx.session.awaitingAutoPromoLink = sessionId;
+        await ctx.editMessageText(
+          card('Auto-Promote — Step 1', '📅', [['Session', sessionId]], 'Send the link you want to post (WhatsApp group link or any URL).'),
+          { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:autopromo`) }
+        ).catch(() => {});
+        return;
+      }
       if (op === 'cancel') {
         removeJob(ctx.telegramId, sessionId);
         await ctx.answerCbQuery('Auto-Promote cancelled').catch(() => {});
@@ -1897,14 +1905,7 @@ async function routeCallback(
       }).catch(() => {});
       return;
     }
-    if (sub === 'autopromo' && params[2] === 'set') {
-      ctx.session.awaitingAutoPromoLink = sessionId;
-      await ctx.editMessageText(
-        card('Auto-Promote — Step 1', '📅', [['Session', sessionId]], 'Send the link you want to post (WhatsApp group link or any URL).'),
-        { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:autopromo`) }
-      ).catch(() => {});
-      return;
-    }
+    if (sub === 'autopromo' && params[2] === 'set') { return; } // dead — handled above
     if (sub === 'join') {
       const operation = params[2] as 'start' | 'pause' | 'stop' | 'setlimit' | 'setdelay' | undefined;
       if (operation === 'setlimit') { ctx.session.awaitingJoinLimitSessionId = sessionId; await handleJoinManager(ctx, sessionId, 'setlimit'); return; }
