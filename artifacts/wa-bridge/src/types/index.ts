@@ -60,21 +60,23 @@ export interface AutoPromoteSettings {
 export interface AutoPromoteJob {
   sessionId: string;
   telegramId: string;
-  link: string;
+  links: string[];          // up to 24 links in queue order
   days: number;
   startedAt: number;
   endsAt: number;
   lastRanAt?: number;
-  nextRunAt?: number;
   history: AutoPromoteRun[];
 }
 
 export interface AutoPromoteRun {
-  at: number;          // timestamp
+  at: number;
   slot: 'morning' | 'evening';
+  link: string;             // which link was run
+  linkIndex: number;        // position in queue
   success: number;
   failed: number;
   skipped: number;
+  durationMs: number;
 }
 
 export interface JoinManagerState {
