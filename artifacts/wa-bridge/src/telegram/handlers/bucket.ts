@@ -180,8 +180,8 @@ export async function handleStartFilter(ctx: Context & { telegramId: string }): 
   const main = loadBucket(ctx.telegramId, 'main');
   const pending = main.filter((e) => e.status === 'unvalidated').length;
 
-  // Send the initial dashboard shell
-  const progressMsg = await ctx.reply(
+  // ← Edit the bucket status message immediately to show Stop button
+  await ctx.editMessageText(
     [
       `<blockquote>`,
       `<b>◈ OMEGA VALIDATOR</b>`,
@@ -196,34 +196,38 @@ export async function handleStartFilter(ctx: Context & { telegramId: string }): 
       `Speed      0.0 links/min`,
       `</blockquote>`,
     ].join('\n'),
-    { parse_mode: 'HTML' }
-  );
+    { parse_mode: 'HTML', reply_markup: bucketMenuKeyboard(true) }
+  ).catch(async () => {
+    // If edit fails (e.g. message too old), send a new one
+    await ctx.reply(
+      `<blockquote><b>◈ OMEGA VALIDATOR</b>\n\nStatus     ● STARTING\nQueue      ${pending}</blockquote>`,
+      { parse_mode: 'HTML', reply_markup: bucketMenuKeyboard(true) }
+    );
+  });
 
   const chatId = ctx.chat!.id;
-  const msgId = progressMsg.message_id;
+  // Use the message we just edited as the live dashboard target
+  const msgId = (ctx.callbackQuery as any)?.message?.message_id;
 
-  // Session failover: returns next healthy session
   const usedSessions = new Set<string>([primarySessionId]);
   const getAlternativeSocket = (_currentId: string): { socket: import('../../whatsapp/baileys-types.js').BridgeWASocket; sessionId: string } | null => {
     for (const sid of sessionIds) {
       if (!usedSessions.has(sid)) {
         const alt = getSocket(sid);
-        if (alt) {
-          usedSessions.add(sid);
-          return { socket: alt, sessionId: sid };
-        }
+        if (alt) { usedSessions.add(sid); return { socket: alt, sessionId: sid }; }
       }
     }
     return null;
   };
 
-  // Progress callback: edit the existing dashboard message (HTML — do NOT escape)
   const onProgress = async (html: string): Promise<void> => {
+    if (!msgId) return;
     try {
-      await ctx.telegram.editMessageText(chatId, msgId, undefined, html, { parse_mode: 'HTML' });
-    } catch {
-      // Edit window expired or message deleted — ignore
-    }
+      await ctx.telegram.editMessageText(chatId, msgId, undefined, html, {
+        parse_mode: 'HTML',
+        reply_markup: bucketMenuKeyboard(true),
+      });
+    } catch { /* edit window expired */ }
   };
 
   startAutoFilter(
@@ -235,14 +239,20 @@ export async function handleStartFilter(ctx: Context & { telegramId: string }): 
   ).then(async () => {
     const active = loadBucket(ctx.telegramId, 'active');
     const dead = loadBucket(ctx.telegramId, 'dead');
-    // Final summary card
-    await ctx.reply(
-      card('Validator Complete', '✅', [
-        ['Active', String(active.length)],
-        ['Dead', String(dead.length)],
-      ], 'Review or export the validated active bucket.'),
-      { parse_mode: 'HTML', reply_markup: bucketMenuKeyboard(false) }
-    );
+    if (msgId) {
+      await ctx.telegram.editMessageText(chatId, msgId, undefined,
+        card('Validator Complete', '✅', [
+          ['Active', String(active.length)],
+          ['Dead', String(dead.length)],
+        ], 'Review or export the validated active bucket.'),
+        { parse_mode: 'HTML', reply_markup: bucketMenuKeyboard(false) }
+      ).catch(() => {});
+    } else {
+      await ctx.reply(
+        card('Validator Complete', '✅', [['Active', String(active.length)], ['Dead', String(dead.length)]], 'Review or export the validated active bucket.'),
+        { parse_mode: 'HTML', reply_markup: bucketMenuKeyboard(false) }
+      );
+    }
   }).catch(logger.error.bind(logger));
 }
 

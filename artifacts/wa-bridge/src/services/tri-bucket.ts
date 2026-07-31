@@ -192,8 +192,6 @@ export async function validateAllLinks(
     sessionSwitched: false,
   };
 
-  const toActivate: BucketEntry[] = [];
-  const toDead: BucketEntry[] = [];
   let consecutiveRateErrors = 0;
   const startedAt = Date.now();
   let currentSocket = socket;
@@ -271,38 +269,30 @@ export async function validateAllLinks(
       const vr = await validateLink(currentSocket, entry.link);
 
       if (vr.isValid) {
-        toActivate.push({
+        // Flush immediately to disk so join manager can use it right away
+        moveToActiveBucket(telegramId, [{
           ...entry,
           jid: vr.jid,
           title: vr.title,
           memberCount: vr.memberCount,
           validatedAt: Date.now(),
           status: 'active',
-        });
+        }]);
         result.activated++;
         consecutiveRateErrors = 0;
         recordSuccess(telegramId, currentSessionId, 'validator');
-
-        // Flush to disk every 50 to avoid data loss on crash
-        if (toActivate.length > 0 && toActivate.length % 50 === 0) {
-          moveToActiveBucket(telegramId, toActivate.splice(0));
-        }
       } else if (vr.transient) {
         result.errors++;
         logger.warn(`[Validator] Transient failure preserved in Main: ${entry.link} — ${vr.reason}`);
       } else {
-        toDead.push({
+        // Flush dead immediately too
+        moveToDeadBucket(telegramId, [{
           ...entry,
           deadReason: vr.reason,
           validatedAt: Date.now(),
           status: 'dead',
-        });
+        }]);
         result.killed++;
-
-        // Flush dead links every 50
-        if (toDead.length > 0 && toDead.length % 50 === 0) {
-          moveToDeadBucket(telegramId, toDead.splice(0));
-        }
       }
 
       await jitter(800, 2000);
@@ -350,10 +340,7 @@ export async function validateAllLinks(
     }
   }
 
-  // Persist remaining buffered results
-  if (toActivate.length > 0) moveToActiveBucket(telegramId, toActivate);
-  if (toDead.length > 0) moveToDeadBucket(telegramId, toDead);
-
+  // No final flush needed — every link is written to disk immediately
   result.remaining = loadBucket(telegramId, 'main').filter((e) => e.status === 'unvalidated').length;
 
   return result;
