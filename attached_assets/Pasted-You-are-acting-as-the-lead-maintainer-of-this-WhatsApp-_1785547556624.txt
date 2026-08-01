@@ -1,0 +1,406 @@
+You are acting as the lead maintainer of this WhatsApp bot. Do NOT make isolated fixes. Perform a complete forensic audit of the entire WhatsApp subsystem and eliminate the root causes behind every regression introduced by recent changes.
+
+This is NOT a patch task.
+This is a stabilization and architecture task.
+
+==================================================
+PRIMARY GOAL
+==================================================
+
+Restore the bot to a production-ready state.
+
+Every command, AntiSystem module, moderation flow, status pipeline, link preview pipeline, tag system, hidden commands, and media pipeline must work reliably together without breaking existing functionality.
+
+Never introduce a fix that creates another regression.
+
+Before changing code:
+
+• Understand the complete execution flow.
+• Trace every call path.
+• Identify the real source of each bug.
+• Remove duplicate logic.
+• Consolidate overlapping implementations.
+• Prefer fixing architecture over adding conditions.
+
+When finished:
+
+Run a full repository audit for similar issues that were NOT explicitly reported.
+
+==================================================
+1. LINK PREVIEW SYSTEM
+==================================================
+
+Fully audit the preview pipeline.
+
+Current regressions:
+
+• Status Design is skipped whenever preview generation runs.
+• WhatsApp group links sometimes generate title-only previews with no thumbnail.
+• WhatsApp channel links often fail to generate previews.
+• Generated previews are less reliable than before.
+• Existing hydrated previews ("Use As Sent") still work correctly.
+
+Required architecture:
+
+Command
+↓
+Status Design Renderer
+↓
+Inject generated title into design
+↓
+Baileys Preview Hydration
+↓
+Single sendMessage()
+
+Never replace Status Design with native preview.
+
+Status Design owns the message.
+
+Preview generation only enriches it.
+
+Audit:
+
+• generateLinkPreview
+• sendMessage wrappers
+• generateWAMessage
+• prepareWAMessageMedia
+• externalAdReply
+• contextInfo
+• previewType
+• jpegThumbnail
+• thumbnail generation
+• preview suppression
+• status pipeline
+• allstatus
+• media captions
+
+Never fabricate previews manually when Baileys can generate them.
+
+==================================================
+2. ANTISYSTEM
+==================================================
+
+Perform a complete audit of every Anti module.
+
+Current behaviour is incorrect.
+
+Fix every module so it only reacts to the events it is designed for.
+
+==================================================
+ANTILINK
+==================================================
+
+Current bug:
+
+Members sending normal messages or voice notes are sometimes kicked.
+
+AntiLink should ONLY trigger when an actual prohibited link is detected.
+
+It must ignore:
+
+• voice notes
+• audio
+• stickers
+• images
+• videos
+• normal text
+• documents
+
+unless they actually contain blocked URLs.
+
+Audit:
+
+• URL detection
+• regex
+• message extraction
+• caption extraction
+• quoted messages
+• edited messages
+
+==================================================
+ANTI GROUP STATUS MENTION
+==================================================
+
+Current bug:
+
+It kicks random members who simply send messages.
+
+This is completely wrong.
+
+AntiGM means:
+
+Anti Group Mention To Status.
+
+It should ONLY detect actual WhatsApp Group Status Mention messages.
+
+Never trigger on:
+
+• normal chat
+• replies
+• reactions
+• joins
+• leaves
+• text
+• media
+• mentions
+
+Only trigger on real Group Status Mention protocol messages supported by @crysnovax/baileys.
+
+Audit every detection method.
+
+Remove false positives completely.
+
+==================================================
+ANTI GSTATUS
+==================================================
+
+Implement AntiGStatus correctly.
+
+Understand how my allstatus / gstatus command publishes group status.
+
+That exact protocol should be detected.
+
+If another bot or unauthorized source attempts to publish Group Status into my group using the same mechanism:
+
+Block it.
+
+Never punish ordinary users.
+
+Only detect real Group Status publishing events.
+
+==================================================
+ALL OTHER ANTI MODULES
+==================================================
+
+Audit every Anti module.
+
+Verify:
+
+• trigger conditions
+• permissions
+• exemptions
+• permit list
+• owner bypass
+• sudo bypass
+• admin bypass
+• bot bypass
+• warning flow
+• delete flow
+• kick flow
+• ban flow
+
+Each module should only react to what it is responsible for.
+
+No cross-triggering.
+
+No duplicated detection.
+
+==================================================
+3. MODERATION PIPELINE
+==================================================
+
+Audit:
+
+kick
+
+ban
+
+remove
+
+warn
+
+permit
+
+allow
+
+LID resolution
+
+participant resolution
+
+groupParticipantsUpdate()
+
+Retry handling
+
+Transient failures
+
+Logging
+
+Announcement flow
+
+Permission checks
+
+Duplicate replies
+
+Ensure LIDs never reach moderation actions.
+
+==================================================
+4. TAG SYSTEM
+==================================================
+
+Current issue:
+
+Tag works but sends extra unwanted text afterwards.
+
+Tag should perform exactly one action:
+
+Mention the requested users.
+
+Nothing else.
+
+Remove duplicate replies.
+
+Remove unnecessary confirmation messages.
+
+Audit:
+
+tag
+
+tagall
+
+hidetag
+
+mention formatting
+
+vertical mention layout
+
+==================================================
+5. HIDDEN COMMANDS IN STICKERS
+==================================================
+
+Current issue:
+
+Commands hidden inside stickers are unreliable or not detected.
+
+Audit the complete sticker command pipeline.
+
+Verify:
+
+sticker metadata
+
+EXIF parsing
+
+embedded commands
+
+hidden payload extraction
+
+quoted stickers
+
+forwarded stickers
+
+animated stickers
+
+Ensure hidden commands execute exactly like typed commands.
+
+==================================================
+6. ALLSTATUS
+==================================================
+
+Current implementation is incomplete.
+
+Support:
+
+✅ text
+✅ image
+✅ video
+✅ caption
+✅ URL preview
+✅ Status Design
+✅ mentions
+✅ media with captions
+
+Media + Caption + URL should preserve ALL THREE.
+
+Nothing should be discarded.
+
+==================================================
+7. RESPONSE PIPELINE
+==================================================
+
+Audit the response system.
+
+Ensure:
+
+Only one response is sent.
+
+No duplicate success cards.
+
+No duplicate moderation announcements.
+
+No extra "Completed" messages after successful actions.
+
+==================================================
+8. CODE QUALITY
+==================================================
+
+Search entire repository for:
+
+duplicate implementations
+
+dead code
+
+obsolete helpers
+
+duplicate preview builders
+
+duplicate moderation logic
+
+duplicate participant lookup
+
+duplicate AntiSystem detection
+
+duplicate send wrappers
+
+Consolidate wherever appropriate.
+
+==================================================
+9. REGRESSION TESTS
+==================================================
+
+Before finishing, verify:
+
+✓ AntiLink
+✓ AntiGM
+✓ AntiGStatus
+✓ AntiSpam
+✓ AntiWords
+✓ AntiBot
+✓ AntiForward
+✓ AntiChannel
+✓ AntiMedia
+✓ AntiSticker
+✓ AntiEmoji
+✓ AntiVN
+✓ AntiTxt
+✓ Tag
+✓ TagAll
+✓ HideTag
+✓ Hidden sticker commands
+✓ Kick
+✓ Ban
+✓ Remove
+✓ Group Status
+✓ AllStatus
+✓ Status Design
+✓ Group invite preview
+✓ Channel preview
+✓ Image + URL
+✓ Video + URL
+✓ Caption + URL
+✓ Existing hydrated preview
+✓ Multi-link messages
+
+==================================================
+DELIVERABLE
+==================================================
+
+Do NOT stop after fixing the reported bugs.
+
+Continue auditing until there are no obvious architectural inconsistencies remaining.
+
+Prefer deleting broken or duplicated logic over adding more layers.
+
+Keep changes minimal but correct.
+
+Maintain backward compatibility.
+
+The final repository should be stable, deterministic, regression-resistant, and ready to push directly to GitHub with a single clean commit (or a small, well-structured series of commits).
