@@ -548,14 +548,38 @@ export async function cmdPoll(
 //
 // "Already blocked" errors are counted separately — not as failures.
 
-/** Return true when the error message signals the contact is already blocked. */
+/** Return true when the error signals the contact is already blocked. */
 function isAlreadyBlockedError(err: unknown): boolean {
-  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  const txt = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  // String patterns from Baileys / WA error messages
+  if (
+    txt.includes('already') ||
+    txt.includes('conflict') ||
+    txt.includes('blocked')
+  ) return true;
+  // Numeric codes: 409 Conflict
+  if (txt.includes('409')) return true;
+  // Baileys error objects sometimes carry a numeric `output.statusCode`
+  const code = (err as Record<string, unknown>)?.['output'] as Record<string, unknown> | undefined;
+  if (code?.['statusCode'] === 409) return true;
+  return false;
+}
+
+/**
+ * Return true when the error signals the JID doesn't exist on WhatsApp
+ * (not registered, deleted account, or bad number). These should be
+ * silently skipped — not counted as failures.
+ */
+function isNotFoundError(err: unknown): boolean {
+  const txt = (err instanceof Error ? err.message : String(err)).toLowerCase();
   return (
-    msg.includes('already') ||
-    msg.includes('conflict') ||
-    msg.includes('409') ||
-    msg.includes('blocked')
+    txt.includes('not-on-whatsapp') ||
+    txt.includes('not on whatsapp') ||
+    txt.includes('no-such-user') ||
+    txt.includes('not found') ||
+    txt.includes('404') ||
+    txt.includes('gone') ||
+    txt.includes('410')
   );
 }
 
@@ -623,6 +647,7 @@ export async function cmdBlockAll(
 
   let done = 0;
   let alreadyBlocked = 0;
+  let notFound = 0;
   let failed = 0;
   const total = eligible.length;
   const protected_ = meta.participants.length - total;
@@ -633,9 +658,10 @@ export async function cmdBlockAll(
       title: status === 'RUNNING' ? '🚫 BlockAll — Running…' : '✅ BlockAll — Complete',
       emoji: status === 'RUNNING' ? '⏳' : '🚫',
       rows: [
-        ['Progress', `${done}/${total}`],
-        ['✅ Newly blocked', String(done - alreadyBlocked)],
+        ['Progress', `${done + alreadyBlocked + notFound + failed}/${total}`],
+        ['✅ Newly blocked', String(done)],
         ['⏩ Already blocked', String(alreadyBlocked)],
+        ['👻 Not on WhatsApp', String(notFound)],
         ['❌ Failed', String(failed)],
         ['🛡️ Protected (skipped)', String(protected_)],
         ['Total members', String(meta.participants.length)],
@@ -655,24 +681,33 @@ export async function cmdBlockAll(
     const p = eligible[i]!;
     const candidates = blockCandidates(p);
 
-    let succeeded = false;
+    // Track the outcome for this participant across all JID candidate attempts.
+    // 'fresh'        — successfully blocked now
+    // 'alreadyBlocked' — Baileys confirmed it's already blocked (not a failure)
+    // 'notFound'     — JID not on WhatsApp / account deleted (not a failure)
+    // 'failed'       — every candidate JID returned an unexpected error
+    let outcome: 'fresh' | 'alreadyBlocked' | 'notFound' | 'failed' = 'failed';
     let lastErr: unknown = null;
 
     for (const jid of candidates) {
       try {
         await sock.updateBlockStatus(jid, 'block');
-        succeeded = true;
+        outcome = 'fresh';
         logger.debug('[BlockAll] Blocked via JID', { jid, participantId: p.id });
         break;
       } catch (err) {
         if (isAlreadyBlockedError(err)) {
-          alreadyBlocked++;
-          succeeded = true;
+          outcome = 'alreadyBlocked';
           logger.debug('[BlockAll] Already blocked', { jid, participantId: p.id });
           break;
         }
+        if (isNotFoundError(err)) {
+          outcome = 'notFound';
+          logger.debug('[BlockAll] Not on WhatsApp — skipping', { jid, participantId: p.id });
+          break;
+        }
         lastErr = err;
-        logger.debug('[BlockAll] Attempt failed, trying next form', {
+        logger.debug('[BlockAll] Attempt failed, trying next candidate JID', {
           jid,
           err: String(err),
           participantId: p.id,
@@ -680,15 +715,18 @@ export async function cmdBlockAll(
       }
     }
 
-    if (succeeded) {
-      done++;
-    } else {
-      failed++;
-      logger.warn('[BlockAll] All JID forms failed', {
-        participantId: p.id,
-        candidates,
-        err: String(lastErr),
-      });
+    switch (outcome) {
+      case 'fresh':         done++;          break;
+      case 'alreadyBlocked': alreadyBlocked++; break;
+      case 'notFound':      notFound++;      break;
+      case 'failed':
+        failed++;
+        logger.warn('[BlockAll] All JID forms failed for participant', {
+          participantId: p.id,
+          candidates,
+          err: String(lastErr),
+        });
+        break;
     }
 
     // Emit live progress every N members

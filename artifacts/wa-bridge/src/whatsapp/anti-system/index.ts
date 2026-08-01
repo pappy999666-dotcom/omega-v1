@@ -226,7 +226,9 @@ export async function runAntiChecks(
   tryModule('antigroupcall', 'AntiGroupCall', () => messageIsGroupCall(msg), 'antigroupcall');
 
   // ── AntiGroupMention ─────────────────────────────────────
-  tryModule('antigroupmention', 'AntiGroupMention', () => messageIsGroupMention(msg), 'antigroupmention');
+  // Pass currentGroupJid so the module can filter out self-referential
+  // contextInfo.groupMentions and empty join-notification wrappers.
+  tryModule('antigroupmention', 'AntiGroupMention', () => messageIsGroupMention(msg, groupJid), 'antigroupmention');
 
   // ── AntiGM: group mentioned from WhatsApp Status ──────────
   tryModule('antigm', 'AntiGM', () => messageIsGroupStatusMention(msg, groupJid), 'antigm');
