@@ -1040,21 +1040,6 @@ async function processMessageWithConfig(
       break;
     }
 
-    // ── allgstatus (raw — no design engine) ──
-    case 'allgstatus': {
-      const agText = commandText();
-      if (!agText) { await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}allgstatus <message or link>`)); break; }
-      await reply(asciiBox({ title: 'ALLGSTATUS STARTED', emoji: '📡', rows: [['Mode', 'RAW — NO DESIGN']], footer: 'Running in background…' }));
-      void cmdAllGStatus(socket, sessionId, telegramId, agText, { existingPreview: quotedPreview, sourceExt })
-        .then(async (r) => {
-          await socket.sendMessage(groupJid, { text: asciiBox({ title: 'ALLGSTATUS COMPLETE', emoji: '✅', rows: [['Sent', String(r.success)], ['Failed', String(r.failed)], ['Skipped', String(r.skipped)]] }) });
-        })
-        .catch(async (err) => {
-          await socket.sendMessage(groupJid, { text: errorCard('ALLGSTATUS FAILED', String(err)) });
-        });
-      break;
-    }
-
     // ── allchat ──
     case 'allchat': {
       const text = commandText();
@@ -1156,9 +1141,9 @@ async function processMessageWithConfig(
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
       const text = commandText('📢');
       const res = await cmdTag(socket, sessionId, groupJid, text, { existingPreview: quotedPreview, sourceExt });
-      await reply(res.success
-        ? ''
-        : errorCard('TAG FAILED', res.error ?? 'Could not fetch group participants.'));
+      // On success: cmdTag already sent the tagged message — do NOT reply with empty string
+      // (reply('') would send a blank WhatsApp bubble as an extra unwanted message).
+      if (!res.success) await reply(errorCard('TAG FAILED', res.error ?? 'Could not fetch group participants.'));
       break;
     }
 

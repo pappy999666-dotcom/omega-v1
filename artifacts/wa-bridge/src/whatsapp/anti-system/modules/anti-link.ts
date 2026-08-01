@@ -32,7 +32,10 @@ function extractAllText(msg: WebMessageInfo): string[] {
   add((m['extendedTextMessage'] as AnyMsg | undefined)?.['canonicalUrl']);
   add((m['extendedTextMessage'] as AnyMsg | undefined)?.['matchedText']);
 
-  // Media captions
+  // Media captions — only check user-visible text (captions), never CDN URLs.
+  // audioMessage.url / videoMessage.url / imageMessage.url are CDN download URLs
+  // (e.g. https://mmg.whatsapp.net/…) and must NOT be scanned for links — they
+  // would trigger AntiLink for every voice note and media message.
   add((m['imageMessage'] as AnyMsg | undefined)?.['caption']);
   add((m['videoMessage'] as AnyMsg | undefined)?.['caption']);
   add((m['documentMessage'] as AnyMsg | undefined)?.['caption']);
@@ -40,7 +43,6 @@ function extractAllText(msg: WebMessageInfo): string[] {
     ((m['documentWithCaptionMessage'] as AnyMsg | undefined)?.['message'] as AnyMsg | undefined)
       ?.['documentMessage'] as AnyMsg | undefined
   );
-  add((m['audioMessage'] as AnyMsg | undefined)?.['url']);
 
   // View-once containers
   for (const voKey of ['viewOnceMessage', 'viewOnceMessageV2', 'viewOnceMessageV2Extension']) {

@@ -10,6 +10,8 @@ import type { BridgeWASocket as WASocket, IMessage } from './baileys-types.js';
 import { UrlDetector } from '../preview-engine/index.js';
 import type { PartialLinkMeta } from '../preview-engine/types.js';
 import { PreviewHydrator } from '../preview-engine/PreviewHydrator.js';
+import { MetadataResolver } from '../preview-engine/MetadataResolver.js';
+import { ThumbnailResolver } from '../preview-engine/ThumbnailResolver.js';
 import { resolvePreviewRoute } from './preview-router.js';
 import { sendStatusAsIs } from './status-as-is.js';
 import { logger } from '../utils/logger.js';
@@ -182,12 +184,54 @@ export async function sendGroupStatus(
       }
     } else {
       preview = await buildStatusPreview(url, sock);
+
+      // buildStatusPreview uses Baileys' buildLinkPreview which can fail for JS-rendered
+      // pages like WhatsApp channel links (whatsapp.com/channel/...).
+      // Fall back to our multi-stage MetadataResolver so we always get at least a title.
+      if (!preview) {
+        try {
+          const meta = await MetadataResolver.resolve(url);
+          let smallThumb: Buffer | null = null;
+          if (meta.imageUrl) {
+            const thumbRaw = await ThumbnailResolver.download(meta.imageUrl).catch(() => undefined);
+            if (thumbRaw) {
+              const normalized = await ThumbnailResolver.normalize(thumbRaw).catch(() => undefined);
+              smallThumb = Buffer.from(normalized ?? thumbRaw);
+            }
+          }
+          // Only set preview if we got something meaningful
+          if (meta.title || meta.description) {
+            preview = {
+              url,
+              title: meta.title ?? '',
+              description: meta.description ?? '',
+              smallThumb,
+              hq: null,
+            };
+          }
+        } catch (err) {
+          logger.warn('[GroupStatus] MetadataResolver fallback failed', { url, err: String(err) });
+        }
+      }
+
+      // Last resort: use existingPreview metadata (title/description) even without thumbnail.
+      // This preserves the generated title from status-card-pipeline for channel links.
+      if (!preview && options.existingPreview) {
+        preview = {
+          url,
+          title: options.existingPreview.title ?? '',
+          description: options.existingPreview.description ?? '',
+          smallThumb: null,
+          hq: null,
+        };
+      }
     }
 
     const msg = PreviewHydrator.buildGroupStatusMessage(text, {
       url: preview?.url ?? url,
-      title: preview?.title ?? '',
-      description: preview?.description ?? '',
+      // Use preview title first, then fall back to existingPreview.title (pre-resolved metadata)
+      title: preview?.title || options.existingPreview?.title || '',
+      description: preview?.description || options.existingPreview?.description || '',
       thumbnail: preview?.smallThumb ? Buffer.from(preview.smallThumb) : undefined,
     }, preview?.hq ?? undefined);
 

@@ -189,14 +189,34 @@ export class PreviewManager {
       return PreviewHydrator.hydrateChat(text, groupPreview ?? existingPreview);
     }
 
-    // All other URLs: use existingPreview if available, else fetch fresh
-    // Clone existing preview to prevent mutation and ensure Buffer
-    const clonedPreview = existingPreview ? {
-      ...existingPreview,
-      thumbnail: existingPreview.thumbnail ? Buffer.from(existingPreview.thumbnail) : undefined
-    } : undefined;
+    // All other URLs: use existingPreview if available (clone to prevent mutation)
+    if (existingPreview) {
+      const clonedPreview = {
+        ...existingPreview,
+        thumbnail: existingPreview.thumbnail ? Buffer.from(existingPreview.thumbnail) : undefined,
+      };
+      return PreviewHydrator.hydrateChat(text, clonedPreview);
+    }
 
-    return PreviewHydrator.hydrateChat(text, clonedPreview);
+    // No existing preview — fetch fresh metadata + thumbnail so the designed text
+    // always gets an explicit linkPreview rather than falling back to Baileys'
+    // auto-native generation (which can discard or replace the designed layout).
+    try {
+      const meta = await MetadataResolver.resolve(url);
+      let thumbnail: Uint8Array | undefined;
+      if (meta.imageUrl) {
+        thumbnail = await ThumbnailResolver.download(meta.imageUrl).catch(() => undefined);
+        if (thumbnail) {
+          const normalized = await ThumbnailResolver.normalize(thumbnail).catch(() => undefined);
+          if (normalized) thumbnail = normalized;
+        }
+      }
+      const finalMeta: PartialLinkMeta = thumbnail ? { ...meta, thumbnail } : meta;
+      return PreviewHydrator.hydrateChat(text, finalMeta);
+    } catch {
+      // Non-critical — send without explicit linkPreview (Baileys auto-generates)
+      return PreviewHydrator.hydrateChat(text, undefined);
+    }
   }
 
   // ── Chat Preview Builder ──────────────────────────────────
