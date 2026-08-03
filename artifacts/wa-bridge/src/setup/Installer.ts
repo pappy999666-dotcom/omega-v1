@@ -21,20 +21,52 @@ export class Installer {
     }
 
     static installSystemDependency(depName: string): boolean {
-        console.log(`Attempting to install system dependency: ${depName}...`);
+        console.log(`\x1b[33mAttempting to install system dependency: ${depName}...\x1b[0m`);
         try {
-            // Check for sudo availability
+            // Detect package manager
+            let command = '';
             let sudo = '';
+            
             try {
                 execSync('sudo -n true', { stdio: 'ignore' });
                 sudo = 'sudo ';
-            } catch (e) {}
+            } catch (e) {
+                // Check if we are already root
+                if (process.getuid && process.getuid() === 0) {
+                    sudo = '';
+                } else {
+                    console.warn('\x1b[31mWarning: No sudo access. Installation might fail.\x1b[0m');
+                    sudo = 'sudo '; // Try anyway, it might prompt
+                }
+            }
 
-            execSync(`${sudo}apt-get update && ${sudo}apt-get install -y ${depName}`, { stdio: 'inherit' });
+            if (this.checkCommand('apt-get')) {
+                command = `${sudo}apt-get update -y && ${sudo}apt-get install -y ${depName}`;
+            } else if (this.checkCommand('yum')) {
+                command = `${sudo}yum install -y ${depName}`;
+            } else if (this.checkCommand('dnf')) {
+                command = `${sudo}dnf install -y ${depName}`;
+            } else if (this.checkCommand('brew')) {
+                command = `brew install ${depName}`;
+            } else {
+                throw new Error('No supported package manager found (apt, yum, dnf, brew).');
+            }
+
+            console.log(`Running: ${command}`);
+            execSync(command, { stdio: 'inherit' });
             return true;
         } catch (error: any) {
-            console.error(`Failed to install ${depName}: ${error.message}`);
+            console.error(`\x1b[31mFailed to install ${depName}: ${error.message}\x1b[0m`);
             console.log(`Please install ${depName} manually.`);
+            return false;
+        }
+    }
+
+    private static checkCommand(cmd: string): boolean {
+        try {
+            execSync(`command -v ${cmd}`, { stdio: 'ignore' });
+            return true;
+        } catch (e) {
             return false;
         }
     }

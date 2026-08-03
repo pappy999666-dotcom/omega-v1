@@ -1,14 +1,16 @@
 #!/bin/bash
 
 # ============================================================
-# OMEGA-V1 • CYBERNETIC BOOTLOADER
+# OMEGA-V1 • UNIVERSAL CYBERNETIC INSTALLER
 # ============================================================
 
 set -e
 
-# Neon Green Color
+# Colors
 G='\033[0;32m'
-NC='\033[0m' # No Color
+R='\033[0;31m'
+Y='\033[0;33m'
+NC='\033[0m'
 
 echo -e "${G}"
 echo " ██████╗ ███╗   ███╗███████╗ ██████╗  █████╗ "
@@ -17,32 +19,66 @@ echo "██║   ██║██╔████╔██║█████╗  
 echo "██║   ██║██║╚██╔╝██║██╔══╝  ██║   ██║██╔══██║"
 echo "╚██████╔╝██║ ╚═╝ ██║███████╗╚██████╔╝██║  ██║"
 echo " ╚═════╝ ╚═╝     ╚═╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝"
-echo -e "          SYSTEM INITIALIZATION${NC}\n"
+echo -e "          UNIVERSAL SYSTEM BOOTLOADER${NC}\n"
 
-# 1. Check for Node.js
+# Function to check for sudo
+check_sudo() {
+    if [ "$EUID" -ne 0 ]; then
+        SUDO="sudo"
+    else
+        SUDO=""
+    fi
+}
+
+# 1. Check & Install Node.js
 if ! command -v node &> /dev/null; then
-    echo -e "❌ ERROR: Node.js is not installed. Please install Node.js first."
-    exit 1
+    echo -e "${Y}⚠️  Node.js not detected. Attempting automatic installation...${NC}"
+    check_sudo
+    if command -v apt-get &> /dev/null; then
+        echo -e "📦 Installing Node.js via apt..."
+        $SUDO apt-get update -y
+        $SUDO apt-get install -y curl
+        curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash -
+        $SUDO apt-get install -y nodejs
+    else
+        echo -e "${R}❌ Error: Package manager not supported. Please install Node.js manually.${NC}"
+        exit 1
+    fi
 fi
+echo -e "✅ Node.js: ${G}$(node -v)${NC}"
 
-# 2. Determine Package Manager
-if command -v pnpm &> /dev/null; then
-    PM="pnpm"
-    RUN_CMD="pnpm --filter @workspace/wa-bridge run setup"
-elif command -v npm &> /dev/null; then
-    PM="npm"
-    echo -e "⚠️  pnpm not found. Falling back to npm/npx..."
-    RUN_CMD="npx pnpm --filter @workspace/wa-bridge run setup"
-else
-    echo -e "❌ ERROR: Neither pnpm nor npm found. Please install a package manager."
-    exit 1
+# 2. Check & Install Git
+if ! command -v git &> /dev/null; then
+    echo -e "${Y}⚠️  Git not detected. Installing...${NC}"
+    check_sudo
+    $SUDO apt-get install -y git
 fi
+echo -e "✅ Git: ${G}$(git --version)${NC}"
 
-# 3. Execute Setup Wizard
-echo -e "🚀 Launching Setup Wizard via ${G}${PM}${NC}...\n"
+# 3. Check & Install PNPM
+if ! command -v pnpm &> /dev/null; then
+    echo -e "${Y}⚠️  pnpm not detected. Installing globally...${NC}"
+    check_sudo
+    if command -v npm &> /dev/null; then
+        $SUDO npm install -g pnpm
+    else
+        echo -e "📦 Installing pnpm via standalone script..."
+        curl -fsSL https://get.pnpm.io/install.sh | sh -
+        source ~/.bashrc || true
+    fi
+fi
+echo -e "✅ pnpm: ${G}$(pnpm -v || echo 'Installed (restart shell to see version)')${NC}"
+
+# 4. Final Environment Check
+echo -e "\n🚀 ${G}System core verified. Launching Omega Setup Wizard...${NC}\n"
 
 # Ensure we are in the root directory
 cd "$(dirname "$0")"
 
-# Execute
-$RUN_CMD
+# Execute Wizard
+# We use npx pnpm to be safe if pnpm is just installed
+if command -v pnpm &> /dev/null; then
+    pnpm --filter @workspace/wa-bridge run setup
+else
+    npx pnpm --filter @workspace/wa-bridge run setup
+fi
