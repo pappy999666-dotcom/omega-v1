@@ -271,5 +271,4 @@ bootstrap().catch((err) => {
   logger.error('[Boot] Fatal error during startup', { err: String(err) });
   process.exit(1);
 });
-// New feature
-SYNTAX ERROR
+

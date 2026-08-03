@@ -4,12 +4,12 @@
 // ============================================================
 
 import { spawn } from 'child_process';
-import { existsSync, rmSync } from 'fs';
+import fs, { existsSync, rmSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { logger } from '../utils/logger.js';
 import { generateReleaseNotes } from '../utils/release-notes.js';
-import { loadPlatformConfig } from './workspace.js';
+import { DependencyChecker } from '../setup/DependencyChecker.js';
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -29,21 +29,10 @@ type ProgressCallback = (lines: string[]) => Promise<void>;
 // ── Helpers ───────────────────────────────────────────────
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const workspaceInfo = DependencyChecker.detectWorkspaceInfo();
 
-function resolveAppDir(): string {
-    // Dynamically resolve APP_DIR based on current script location
-    let current = path.resolve(__dirname);
-    for (let i = 0; i < 10; i++) {
-        if (existsSync(path.join(current, ".git"))) return current;
-        const parent = path.dirname(current);
-        if (parent === current) break;
-        current = parent;
-    }
-    return process.cwd();
-}
-
-const APP_DIR = resolveAppDir();
-const WA_BRIDGE_DIR = path.join(APP_DIR, 'artifacts/wa-bridge');
+const APP_DIR = workspaceInfo.root;
+const WA_BRIDGE_DIR = workspaceInfo.botPackagePath;
 
 function runLive(cmd: string, args: string[], cwd: string, onLine: (line: string) => void): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -101,6 +90,18 @@ async function safeExec(cmd: string, cwd = APP_DIR): Promise<string> {
   try { return await exec(cmd, cwd); } catch { return ''; }
 }
 
+function getSuggestedFix(step: string, error: string): string {
+    const lowerError = error.toLowerCase();
+    if (step === 'Verify Repo') return 'Ensure the current directory is a valid git repository.';
+    if (step === 'Pull Commits') return 'Check your internet connection and git permissions.';
+    if (step === 'Install Deps') return 'Check if pnpm is installed and package.json is valid.';
+    if (step === 'Rebuild') return 'Fix TypeScript errors in your source code.';
+    if (lowerError.includes('redis')) return 'Ensure Redis server is running: sudo systemctl start redis-server';
+    if (lowerError.includes('mongo')) return 'Ensure MongoDB server is running: sudo systemctl start mongod';
+    if (lowerError.includes('pm2')) return 'Try restarting PM2 manually or check "pm2 logs".';
+    return 'Check the logs for detailed error information.';
+}
+
 // ── Main Deploy Pipeline ──────────────────────────────────
 
 export async function runDeployment(onProgress: ProgressCallback): Promise<DeployResult> {
@@ -123,21 +124,25 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
 
   const fail = async (step: string, err: unknown): Promise<DeployResult> => {
     const msg = err instanceof Error ? err.message : String(err);
-    log.push('', `❌ <b>Step [${step}] failed</b>`, `<code>${msg.slice(0, 400)}</code>`);
+    const exitCode = (err as any).exitCode;
+    const fix = getSuggestedFix(step, msg);
+
+    log.push('', `❌ <b>Step [${step}] failed</b>`);
+    if (exitCode !== undefined) log.push(`  - Exit Code: ${exitCode}`);
+    log.push(`  - Error: <code>${msg.slice(0, 400)}</code>`);
+    log.push(`  - <b>Suggested Fix:</b> ${fix}`);
+    
     await flush();
     logger.error('[Deploy] Step failed', { step, err: msg });
     
     // ── ROLLBACK SYSTEM ──
-    // Only attempt rollback if a previous commit was successfully recorded
     if (prevCommit) {
       log.push('🔄 <b>ROLLBACK INITIATED...</b>');
       await flush();
       try {
-        // Ensure the repository is clean before attempting rollback
         await safeExec(`git reset --hard ${prevCommit}`, APP_DIR);
-        await safeExec(`git clean -fd`, APP_DIR); // Clean untracked files and directories
+        await safeExec(`git clean -fd`, APP_DIR);
         
-        // Restore dist_old if it exists
         const DIST_PATH = path.join(WA_BRIDGE_DIR, 'dist');
         const DIST_OLD = path.join(WA_BRIDGE_DIR, 'dist_old');
         if (existsSync(DIST_OLD)) {
@@ -160,7 +165,7 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
   try {
     // 1. Verify repository
     log.push('🔍 <b>[1/14] Verifying repository...</b>');
-    if (!existsSync(`${APP_DIR}/.git`)) return await fail('Verify Repo', new Error(`No git repo at ${APP_DIR}`));
+    if (!existsSync(path.join(APP_DIR, '.git'))) return await fail('Verify Repo', new Error(`No git repo at ${APP_DIR}`));
     prevCommit = await safeExec('git rev-parse --short HEAD');
     log.push(`✅ Repo verified at <code>${prevCommit}</code>`);
 
@@ -210,7 +215,7 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
     await safeExec('rm -rf node_modules/.cache', APP_DIR);
     log.push('✅ Cache cleared');
 
-    // 7. Rebuild (Isolated to wa-bridge)
+    // 7. Rebuild
     log.push('🔨 <b>[7/14] Rebuilding wa-bridge...</b>');
     buildStart = Date.now();
     const DIST_PATH = path.join(WA_BRIDGE_DIR, 'dist');
@@ -219,7 +224,6 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
     
     rmSync(DIST_NEW, { recursive: true, force: true });
     
-    // Use OUT_DIR to build to a fresh directory
     try {
       await runLive('sh', ['-c', `export OUT_DIR=dist_new && pnpm --filter @workspace/wa-bridge run build`], APP_DIR, (l) => push(`  <code>${l}</code>`));
     } catch (e: any) { e.step = 'Rebuild'; throw e; }
@@ -228,8 +232,14 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
 
     // 8. Atomic Swap
     log.push('🔄 <b>[8/14] Performing atomic dist swap...</b>');
-    if (!existsSync(path.join(DIST_NEW, 'index.js'))) {
-      return await fail('Verify Build', new Error('Build output missing index.js in dist_new'));
+    // Detect real entry point in dist_new
+    let entryFile = 'index.js';
+    if (!existsSync(path.join(DIST_NEW, entryFile))) {
+        // Try to find any js file in root of dist_new
+        const files = fs.readdirSync(DIST_NEW);
+        const jsFile = files.find(f => f.endsWith('.js'));
+        if (jsFile) entryFile = jsFile;
+        else return await fail('Verify Build', new Error('Build output missing entry JS file in dist_new'));
     }
     
     rmSync(DIST_OLD, { recursive: true, force: true });
@@ -242,7 +252,6 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
     // 10. Restart PM2
     log.push('🔄 <b>[10/14] Overhauling PM2 process...</b>');
     
-    // Detect existing process
     const jlistBefore = await safeExec('pm2 jlist');
     const procsBefore = JSON.parse(jlistBefore || '[]');
     const oldProc = procsBefore.find((p: any) => p.name === 'wa-bridge');
@@ -251,85 +260,65 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
     if (oldProc) {
       log.push(`  - Stopping existing process (PID: ${oldPid})...`);
       await safeExec('pm2 stop wa-bridge');
-      
-      // Wait for stop confirmation
       let stopped = false;
       for (let i = 0; i < 5; i++) {
         const check = JSON.parse(await safeExec('pm2 jlist') || '[]');
         const p = check.find((x: any) => x.name === 'wa-bridge');
-        if (!p || p.pm2_env?.status === 'stopped') {
-          stopped = true;
-          break;
-        }
+        if (!p || p.pm2_env?.status === 'stopped') { stopped = true; break; }
         await new Promise(r => setTimeout(r, 1000));
       }
       if (!stopped) log.push('  ⚠️ PM2 stop timed out, forcing...');
     }
 
-    // Kill orphaned processes
     log.push('  - Cleaning orphaned Node processes...');
-        // Kill orphaned processes more robustly
-        await safeExec("pkill -f 'node .*wa-bridge/dist/index.js' || true");
+    await safeExec(`pkill -f 'node .*${WA_BRIDGE_DIR}/dist/${entryFile}' || true`);
     
-    // Start new process
     log.push('  - Starting new version...');
-    await exec('pm2 start artifacts/wa-bridge/dist/index.js --name wa-bridge --update-env', APP_DIR);
+    const entryFullPath = path.join(WA_BRIDGE_DIR, 'dist', entryFile);
+    await exec(`pm2 start ${entryFullPath} --name wa-bridge --update-env`, APP_DIR);
     
-    // Wait for "online"
     let isOnline = false;
     for (let i = 0; i < 15; i++) {
       const check = JSON.parse(await safeExec('pm2 jlist') || '[]');
       const p = check.find((x: any) => x.name === 'wa-bridge');
-      if (p && p.pm2_env?.status === 'online' && p.pid !== oldPid) {
-        isOnline = true;
-        break;
-      }
+      if (p && p.pm2_env?.status === 'online' && p.pid !== oldPid) { isOnline = true; break; }
       await new Promise(r => setTimeout(r, 1000));
     }
 
-    if (!isOnline) {
-      return await fail('PM2 Start', new Error('Process failed to reach ONLINE status within 15s'));
-    }
+    if (!isOnline) return await fail('PM2 Start', new Error('Process failed to reach ONLINE status within 15s'));
     log.push('✅ PM2 process online');
 
     // 11. Deep Health Verification
     log.push('🔍 <b>[11/14] Deep Health Verification...</b>');
     const { ConnectionTester } = await import('../setup/ConnectionTester.js') as any;
     
-    // Load config to check what services are enabled
     const configPath = path.join(WA_BRIDGE_DIR, 'config.json');
     let config: any = {};
     try {
-      if (existsSync(configPath)) {
-        config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      }
+      if (existsSync(configPath)) config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     } catch (e) {
       log.push('⚠️ Failed to load config.json for granular health checks, using defaults.');
     }
 
-    // Redis
     if (config.useRedis !== false) {
       log.push('  - Checking Redis...');
       const redisOk = await ConnectionTester.testRedis().catch(() => false);
-      if (!redisOk) return await fail('Health Check', new Error('Redis connection failed. Check if Redis server is running and accessible.'));
+      if (!redisOk) return await fail('Health Check', new Error('Redis connection failed.'));
     }
     
-    // MongoDB
     if (config.database?.type === 'MongoDB') {
       log.push('  - Checking MongoDB...');
       const mongoOk = await ConnectionTester.testMongo().catch(() => false);
-      if (!mongoOk) return await fail('Health Check', new Error('MongoDB connection failed. Check if MongoDB server is running and accessible.'));
+      if (!mongoOk) return await fail('Health Check', new Error('MongoDB connection failed.'));
     }
 
-    // Telegram
     log.push('  - Checking Telegram...');
     const tgToken = process.env.TELEGRAM_BOT_TOKEN;
     if (tgToken) {
       const tgOk = await ConnectionTester.testTelegram(tgToken);
-      if (!tgOk) return await fail('Health Check', new Error('Telegram API connection failed. Check TELEGRAM_BOT_TOKEN and network connectivity.'));
+      if (!tgOk) return await fail('Health Check', new Error('Telegram API connection failed.'));
     }
 
-    // Stability wait
     log.push('  - Verifying stability (10s)...');
     await new Promise(r => setTimeout(r, 10000));
     
@@ -337,7 +326,7 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
     const procFinal = JSON.parse(jlistFinal || '[]').find((p: any) => p.name === 'wa-bridge');
     if (!procFinal || procFinal.pm2_env?.status !== 'online' || procFinal.pm2_env?.unstable_restarts > 0) {
       const logs = await safeExec('pm2 logs wa-bridge --lines 20 --nostream');
-      return await fail('Stability Check', new Error(`Process crashed during stability window or is unstable (restarts: ${procFinal?.pm2_env?.unstable_restarts || 0}).\nLogs:\n${logs}`));
+      return await fail('Stability Check', new Error(`Process crashed or is unstable.\nLogs:\n${logs}`));
     }
     log.push('✅ Health checks passed');
 
@@ -359,7 +348,6 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
     const totalDurationMs = Date.now() - startedAt;
     log.push('', `🚀 <b>[14/14] Deployment Summary</b>`, 
       `• Duration: ${(totalDurationMs / 1000).toFixed(1)}s`,
-      `• Build: ${(buildDurationMs / 1000).toFixed(1)}s`,
       `• Version: ${currCommit}`,
       `• Files: ${filesChanged}`
     );
@@ -368,9 +356,7 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
     return { success: true, prevCommit, currCommit, filesChanged, buildDurationMs, totalDurationMs };
 
   } catch (err) {
-    // If it's already a DeployResult (from fail call), return it
     if (err && typeof err === 'object' && 'success' in err) return err as any;
-    
     const step = (err as any).step || 'Unexpected Error';
     return await fail(step, err);
   }

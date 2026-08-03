@@ -1,149 +1,129 @@
 import { QuestionManager } from './QuestionManager.js';
 import { Validator } from './Validator.js';
-
 import { ConfigWriter } from './ConfigWriter.js';
 import { ConnectionTester } from './ConnectionTester.js';
 import { SummaryGenerator } from './SummaryGenerator.js';
+import { DependencyChecker } from './DependencyChecker.js';
+import { Installer } from './Installer.js';
+import { DeploymentManager } from './DeploymentManager.js';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { stdin as input, stdout as output } from 'process';
+import { execSync } from 'child_process';
 
 export async function runSetupWizard() {
     const qm = new QuestionManager();
     const config: any = {};
     const env: Record<string, string> = {};
     
-    let mongodbInstalledLocally = false;
-    let redisInstalledLocally = false;
-
     console.log('\n\x1b[32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('      OMEGA-V1 • CYBERNETIC SETUP WIZARD');
+    console.log('      OMEGA-V1 • ZERO-CONFIG SETUP WIZARD');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m\n');
 
     const isQuick = (!input.isTTY || !output.isTTY);
-    const setupMode = isQuick ? 'Quick Setup (Zero-Config, uses smart defaults)' : await qm.select('Choose Setup Mode', [
-        'Quick Setup (Zero-Config, uses smart defaults)',
-        'Advanced Setup (Custom configuration)'
-    ]);
+    
+    // 1. Automatic System Detection & Dependency Installation
+    console.log('\n\x1b[36m[1/6] Automatic System Detection...\x1b[0m');
+    
+    const workspaceInfo = DependencyChecker.detectWorkspaceInfo();
+    console.log(`✓ Workspace Root: ${workspaceInfo.root}`);
+    
+    const requiredDeps = ['git', 'curl', 'ffmpeg', 'imagemagick', 'redis', 'mongodb', 'nginx', 'pm2'];
+    const missingDeps = DependencyChecker.getMissingDependencies(requiredDeps);
+    
+    if (missingDeps.length > 0) {
+        console.log(`\x1b[33mFound ${missingDeps.length} missing dependencies: ${missingDeps.join(', ')}\x1b[0m`);
+        for (const dep of missingDeps) {
+            const success = Installer.installSystemDependency(dep);
+            if (!success) {
+                console.log(`\x1b[31mCRITICAL: Failed to install ${dep}. Please install it manually.\x1b[0m`);
+            }
+        }
+    } else {
+        console.log('✓ All system dependencies are already installed.');
+    }
 
-    // 1. Dependency Detection is now handled by the main setup script.
-    console.log('\n\x1b[36m[1/6] System Dependencies assumed ready by main setup script.\x1b[0m');
-    // Set these to true as the main setup script ensures they are installed
-    mongodbInstalledLocally = true;
-    redisInstalledLocally = true;
+    // Verify services are running
+    Installer.configureService('redis');
+    Installer.configureService('mongodb');
+    Installer.configureService('nginx');
 
-    // 2. Interactive Questions
+    // 2. Identity & Access (The only required inputs)
     console.log('\n\x1b[36m[2/6] Identity & Access Configuration...\x1b[0m');
     
-    // Telegram
-    env.TELEGRAM_BOT_TOKEN = isQuick && process.env.TELEGRAM_BOT_TOKEN ? process.env.TELEGRAM_BOT_TOKEN : await qm.askWithValidation(
+    env.TELEGRAM_BOT_TOKEN = await qm.askWithValidation(
         'Telegram Bot Token (@BotFather)',
         Validator.isTelegramToken,
-        'Invalid Token format. Expected 123456789:ABCDefghIJKLmnopQRSTuvwxYZ'
+        'Invalid Token format. Expected 123456789:ABCDefghIJKLmnopQRSTuvwxYZ',
+        process.env.TELEGRAM_BOT_TOKEN || ''
     );
 
-    env.TELEGRAM_OWNER_ID = isQuick && process.env.TELEGRAM_OWNER_ID ? process.env.TELEGRAM_OWNER_ID : await qm.askWithValidation(
+    env.TELEGRAM_OWNER_ID = await qm.askWithValidation(
         'Owner Telegram ID (numeric)',
         Validator.isNumeric,
-        'Owner ID must be numeric. Use @userinfobot to find it.'
+        'Owner ID must be numeric. Use @userinfobot to find it.',
+        process.env.TELEGRAM_OWNER_ID || ''
     );
 
-    env.TELEGRAM_OWNER_USERNAME = isQuick ? 'admin' : await qm.ask('Owner Username (without @)');
-    env.TELEGRAM_ADMIN_IDS = isQuick ? env.TELEGRAM_OWNER_ID : await qm.ask('Admin IDs (comma separated, optional)', env.TELEGRAM_OWNER_ID);
-    env.TELEGRAM_LOG_CHAT_ID = isQuick ? '' : await qm.ask('Log Chat ID (optional, bot must be member)');
+    env.TELEGRAM_OWNER_USERNAME = await qm.ask('Owner Username (without @)', 'admin');
+    env.TELEGRAM_ADMIN_IDS = env.TELEGRAM_OWNER_ID;
+    env.TELEGRAM_LOG_CHAT_ID = '';
 
-    // 3. Infrastructure
-    console.log('\n\x1b[36m[3/6] Database & Infrastructure...\x1b[0m');
+    // 3. Infrastructure (Auto-detected)
+    console.log('\n\x1b[36m[3/6] Infrastructure (Auto-Detected)...\x1b[0m');
     
-    // Database
-    const dbType = isQuick ? (mongodbInstalledLocally ? 'MongoDB' : 'SQLite') : await qm.select('Primary Database Type', ['MongoDB', 'SQLite', 'PostgreSQL', 'MySQL']);
-    config.database = { type: dbType };
-    
-    if (dbType === 'MongoDB') {
-        if (isQuick && mongodbInstalledLocally) {
-            env.MONGO_URI = 'mongodb://localhost:27017/omega';
-            console.log(`\x1b[32m✔ MongoDB auto-configured to local instance\x1b[0m`);
-        } else {
-            env.MONGO_URI = await qm.askWithValidation(
-                'MongoDB URI',
-                Validator.isMongoURI,
-                'Invalid MongoDB URI format',
-                'mongodb://localhost:27017/omega'
-            );
-        }
-    } else if (dbType === 'SQLite') {
-        config.database.path = isQuick ? './database.sqlite' : await qm.ask('SQLite path', './database.sqlite');
+    const hasMongo = DependencyChecker.checkMongo();
+    const hasRedis = DependencyChecker.checkRedis();
+
+    config.database = { type: hasMongo ? 'MongoDB' : 'SQLite' };
+    if (hasMongo) {
+        env.MONGO_URI = 'mongodb://localhost:27017/omega';
+        console.log('✓ MongoDB: Detected & Configured (localhost)');
     } else {
-        env.DB_HOST = await qm.ask('Host', 'localhost');
-        env.DB_PORT = await qm.ask('Port', dbType === 'PostgreSQL' ? '5432' : '3306');
-        env.DB_USER = await qm.ask('User');
-        env.DB_PASS = await qm.ask('Password');
-        env.DB_NAME = await qm.ask('Database Name', 'omega_bot');
+        config.database.path = './database.sqlite';
+        console.log('✓ MongoDB: Not found, using SQLite fallback');
     }
 
-    // Redis
-    config.useRedis = isQuick ? redisInstalledLocally : await qm.confirm('Enable Redis for high-performance queues?', true);
-    if (config.useRedis) {
-        if (isQuick && redisInstalledLocally) {
-            env.REDIS_URL = 'redis://localhost:6379';
-            console.log(`\x1b[32m✔ Redis auto-configured to local instance\x1b[0m`);
-        } else {
-            env.REDIS_URL = await qm.askWithValidation(
-                'Redis URL',
-                Validator.isRedisURL,
-                'Invalid Redis URL format',
-                'redis://localhost:6379'
-            );
-        }
+    config.useRedis = hasRedis;
+    if (hasRedis) {
+        env.REDIS_URL = 'redis://localhost:6379';
+        console.log('✓ Redis: Detected & Configured (localhost)');
+    } else {
+        console.log('✓ Redis: Not found, proceeding without cache');
     }
 
-    // WhatsApp
-    console.log('\n\x1b[36m[4/6] WhatsApp Engine...\x1b[0m');
+    // 4. WhatsApp Engine
     config.whatsapp = {
-        pairingMode: isQuick ? 'QR' : await qm.select('Default Pairing Mode', ['QR', 'Pairing Code']),
-        sessionFolder: isQuick ? './sessions' : await qm.ask('Session storage path', './sessions')
+        pairingMode: 'QR',
+        sessionFolder: './sessions'
     };
 
-    // 4. Web Dashboard
-    console.log('\n\x1b[36m[5/6] Web Dashboard...\x1b[0m');
-    config.enableWebDashboard = isQuick ? true : await qm.confirm('Enable Web Control Panel?', true);
+    // 5. Web Dashboard & Nginx
+    console.log('\n\x1b[36m[4/6] Web Dashboard & Nginx...\x1b[0m');
+    
+    config.enableWebDashboard = await qm.confirm('Enable Web Control Panel?', true);
     if (config.enableWebDashboard) {
-        const port = isQuick ? '3000' : await qm.askWithValidation(
-            'Dashboard Port',
-            async (p) => {
-                const res = await Validator.isPortAvailable(p);
-                return res === true;
-            },
-            'Port is unavailable or invalid',
-            '3000'
-        );
-        
         config.web = {
-            port: port,
-            domain: isQuick ? 'localhost' : await qm.ask('Domain / IP', 'localhost'),
-            useHttps: isQuick ? false : await qm.confirm('Use HTTPS (Reverse Proxy recommended)?', false),
+            port: '3000',
+            domain: await qm.ask('Domain Name (e.g. omega.example.com)', 'localhost'),
+            useHttps: false, // Will be handled by smart deployment if domain is not localhost
             auth: {
-                username: isQuick ? 'admin' : await qm.ask('Admin Username', 'admin'),
-                password: isQuick ? crypto.randomBytes(4).toString('hex') : await qm.ask('Admin Password', crypto.randomBytes(4).toString('hex'))
+                username: 'admin',
+                password: crypto.randomBytes(4).toString('hex')
             }
         };
+        
+        if (config.web.domain !== 'localhost') {
+            config.web.useHttps = await qm.confirm(`Enable HTTPS for ${config.web.domain}?`, true);
+            if (config.web.useHttps) {
+                config.web.httpsEmail = await qm.ask('Email for Let\'s Encrypt certificates');
+            }
+        }
+
         env.WEB_PORT = config.web.port;
         env.WEB_DOMAIN = config.web.domain;
         env.WEB_SESSION_SECRET = crypto.randomBytes(32).toString('hex');
-    }
-
-    // 5. Plugins
-    console.log('\n\x1b[36m[6/6] AI & Plugins...\x1b[0m');
-    const plugins = ['OpenAI', 'Gemini', 'Claude', 'Pinterest', 'Weather'];
-    config.plugins = {};
-    for (const plugin of plugins) {
-        const shouldEnable = isQuick ? false : await qm.confirm(`Enable ${plugin} support?`, false);
-        if (shouldEnable) {
-            const key = await qm.ask(`${plugin} API Key`);
-            config.plugins[plugin.toLowerCase()] = { apiKey: key };
-            env[`${plugin.toUpperCase()}_API_KEY`] = key;
-        }
     }
 
     // 6. Finalization
@@ -156,40 +136,59 @@ export async function runSetupWizard() {
         'Owner ID': env.TELEGRAM_OWNER_ID,
         'Database': config.database.type,
         'Redis': config.useRedis ? 'Enabled' : 'Disabled',
-        'Web Dashboard': config.enableWebDashboard ? `Port ${config.web.port}` : 'Disabled',
-        'Setup Mode': isQuick ? 'Quick (Zero-Config)' : 'Advanced'
+        'Web Dashboard': config.enableWebDashboard ? `${config.web.domain}:${config.web.port}` : 'Disabled',
+        'HTTPS': config.web?.useHttps ? 'Enabled' : 'Disabled'
     };
     SummaryGenerator.display(summaryData);
 
-    if (isQuick || await qm.confirm('\nSave configuration and proceed to startup?')) {
-        console.log('\nWriting files...');
-        ConfigWriter.writeEnv(env);
-        ConfigWriter.writeConfigJson(config);
-        
-        // Ensure directories
-        ['logs', 'uploads', 'sessions', 'temp', 'cache'].forEach(dir => ConfigWriter.ensureDirectory(dir));
+    console.log('\nWriting configuration files...');
+    ConfigWriter.writeEnv(env);
+    ConfigWriter.writeConfigJson(config);
+    
+    // Ensure directories
+    ['logs', 'uploads', 'sessions', 'temp', 'cache'].forEach(dir => ConfigWriter.ensureDirectory(dir));
 
-        console.log('\nRunning health checks...');
-        
-        // Connectivity checks
-        if (config.useRedis) {
-            const redisOk = await ConnectionTester.testRedis(env.REDIS_URL);
-            console.log(`Redis: ${redisOk ? '\x1b[32mConnected ✓\x1b[0m' : '\x1b[31mConnection Failed ✖\x1b[0m'}`);
-        }
-
-        if (dbType === 'MongoDB') {
-            const mongoOk = await ConnectionTester.testMongo(env.MONGO_URI);
-            console.log(`MongoDB: ${mongoOk ? '\x1b[32mConnected ✓\x1b[0m' : '\x1b[31mConnection Failed ✖\x1b[0m'}`);
-        }
-
-        const telegramOk = await ConnectionTester.testTelegram(env.TELEGRAM_BOT_TOKEN);
-        console.log(`Telegram API: ${telegramOk ? '\x1b[32mConnected ✓\x1b[0m' : '\x1b[31mInvalid Token ✖\x1b[0m'}`);
-
-        console.log('\n\x1b[32m✅ Setup complete!\x1b[0m');
-    } else {
-        console.log('\n\x1b[33mSetup cancelled. Configuration NOT saved.\x1b[0m');
-        process.exit(0);
+    console.log('\nRunning final health checks...');
+    
+    if (config.useRedis) {
+        const redisOk = await ConnectionTester.testRedis(env.REDIS_URL);
+        console.log(`Redis: ${redisOk ? '\x1b[32mConnected ✓\x1b[0m' : '\x1b[31mConnection Failed ✖\x1b[0m'}`);
     }
+
+    if (config.database.type === 'MongoDB') {
+        const mongoOk = await ConnectionTester.testMongo(env.MONGO_URI);
+        console.log(`MongoDB: ${mongoOk ? '\x1b[32mConnected ✓\x1b[0m' : '\x1b[31mConnection Failed ✖\x1b[0m'}`);
+    }
+
+    const telegramOk = await ConnectionTester.testTelegram(env.TELEGRAM_BOT_TOKEN);
+    console.log(`Telegram API: ${telegramOk ? '\x1b[32mConnected ✓\x1b[0m' : '\x1b[31mInvalid Token ✖\x1b[0m'}`);
+
+    // 7. Auto-Deployment
+    console.log('\n\x1b[36m[6/6] Production Deployment...\x1b[0m');
+    
+    if (await qm.confirm('Launch bot under PM2 now?', true)) {
+        // Detect entry point
+        const distPath = path.join(workspaceInfo.botPackagePath, 'dist/index.js');
+        
+        if (!fs.existsSync(distPath)) {
+            console.log('\n\x1b[33mBuild output not found. Running build...\x1b[0m');
+            try {
+                execSync('pnpm run build', { cwd: workspaceInfo.botPackagePath, stdio: 'inherit' });
+            } catch (e) {
+                console.log('\x1b[31mBuild failed. Please check the errors above.\x1b[0m');
+            }
+        }
+
+        await DeploymentManager.configurePM2('wa-bridge', distPath);
+        
+        if (config.enableWebDashboard && config.web.domain !== 'localhost') {
+            await DeploymentManager.configureNginx(config.web.domain, config.web.port, config.web.httpsEmail);
+        }
+    }
+
+    console.log('\n\x1b[32m✅ Setup & Deployment complete!\x1b[0m');
+    console.log('The bot is now running in the background.');
+    console.log('Use "pm2 logs wa-bridge" to monitor the logs.');
 
     qm.close();
 }

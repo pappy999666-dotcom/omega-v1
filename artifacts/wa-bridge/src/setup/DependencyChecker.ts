@@ -8,12 +8,10 @@ export class DependencyChecker {
      */
     static checkCommand(command: string): boolean {
         try {
-            // Use 'command -v' or 'which' for more reliable detection across platforms
             const checkCmd = process.platform === 'win32' ? `where ${command}` : `command -v ${command}`;
             execSync(checkCmd, { stdio: 'ignore' });
             return true;
         } catch (e) {
-            // Fallback to --version check
             try {
                 execSync(`${command} --version`, { stdio: 'ignore' });
                 return true;
@@ -23,19 +21,26 @@ export class DependencyChecker {
         }
     }
 
-    static checkFile(filePath: string): boolean {
-        return fs.existsSync(path.resolve(process.cwd(), filePath));
-    }
-
-    static checkDirectory(dirPath: string): boolean {
-        const fullPath = path.resolve(process.cwd(), dirPath);
-        return fs.existsSync(fullPath) && fs.lstatSync(fullPath).isDirectory();
+    static checkService(serviceName: string): boolean {
+        try {
+            if (process.platform === 'win32') return false;
+            execSync(`systemctl is-active --quiet ${serviceName}`, { stdio: 'ignore' });
+            return true;
+        } catch (e) {
+            try {
+                execSync(`service ${serviceName} status`, { stdio: 'ignore' });
+                return true;
+            } catch (e2) {
+                return false;
+            }
+        }
     }
 
     /**
-     * Checks if Redis is available either locally via CLI or as a service.
+     * Checks if Redis is available and running.
      */
     static checkRedis(): boolean {
+        if (this.checkService('redis-server') || this.checkService('redis')) return true;
         if (this.checkCommand('redis-cli')) {
             try {
                 const output = execSync('redis-cli ping', { encoding: 'utf8', timeout: 2000 }).trim();
@@ -48,32 +53,37 @@ export class DependencyChecker {
     }
 
     /**
-     * Checks if MongoDB is available (checks for mongod or mongo shell).
+     * Checks if MongoDB is available and running.
      */
     static checkMongo(): boolean {
+        if (this.checkService('mongod') || this.checkService('mongodb')) return true;
         return this.checkCommand('mongod') || this.checkCommand('mongosh') || this.checkCommand('mongo');
     }
 
-    static checkPermissions(filePath: string): boolean {
-        try {
-            fs.accessSync(filePath, fs.constants.R_OK | fs.constants.W_OK);
-            return true;
-        } catch (e) {
-            return false;
-        }
+    /**
+     * Checks if Nginx is available and running.
+     */
+    static checkNginx(): boolean {
+        return this.checkCommand('nginx') && (this.checkService('nginx'));
     }
 
     /**
      * Returns a list of missing dependencies from the provided list.
      */
-    static checkMissingDependencies(deps: string[]): string[] {
+    static getMissingDependencies(deps: string[]): string[] {
         const missing: string[] = [];
         for (const dep of deps) {
             let exists = false;
-            if (dep === 'redis') {
+            const lowerDep = dep.toLowerCase();
+            
+            if (lowerDep === 'redis') {
                 exists = this.checkRedis();
-            } else if (dep === 'mongodb') {
+            } else if (lowerDep === 'mongodb') {
                 exists = this.checkMongo();
+            } else if (lowerDep === 'nginx') {
+                exists = this.checkNginx();
+            } else if (lowerDep === 'imagemagick') {
+                exists = this.checkCommand('magick') || this.checkCommand('convert');
             } else {
                 exists = this.checkCommand(dep);
             }
@@ -83,5 +93,31 @@ export class DependencyChecker {
             }
         }
         return missing;
+    }
+
+    /**
+     * Automatically detect workspace root and bot package info.
+     */
+    static detectWorkspaceInfo() {
+        let current = process.cwd();
+        let root = current;
+        
+        // Find workspace root (has pnpm-workspace.yaml or .git)
+        for (let i = 0; i < 5; i++) {
+            if (fs.existsSync(path.join(current, 'pnpm-workspace.yaml')) || fs.existsSync(path.join(current, '.git'))) {
+                root = current;
+                break;
+            }
+            current = path.dirname(current);
+        }
+
+        const botPackagePath = path.join(root, 'artifacts/wa-bridge');
+        const hasBotPackage = fs.existsSync(botPackagePath);
+
+        return {
+            root,
+            botPackagePath: hasBotPackage ? botPackagePath : current,
+            isWorkspace: fs.existsSync(path.join(root, 'pnpm-workspace.yaml'))
+        };
     }
 }
