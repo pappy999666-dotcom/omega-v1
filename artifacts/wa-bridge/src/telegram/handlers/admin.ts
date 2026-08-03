@@ -135,7 +135,7 @@ export async function handleInspectUser(ctx: Context & { telegramId?: string }, 
   ].join('\n');
 
   const sessionButtons = sessions.map((s) => {
-    const icon = { open: '🟢', frozen: '🔵', error: '🔴', connecting: '🟡', closed: '⚫', banned: '💀' }[s.status] ?? '⚪';
+    const icon = { open: '🟢', frozen: '🔵', dead: '💀', purged: '🗑️', error: '🔴', connecting: '🟡', closed: '⚫', banned: '💀' }[s.status] ?? '⚪';
     return [{ text: `${icon} ${s.label ?? s.phone}`, callback_data: `session:${s.sessionId}:menu` }];
   });
 

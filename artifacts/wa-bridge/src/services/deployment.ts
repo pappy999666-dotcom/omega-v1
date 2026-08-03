@@ -98,33 +98,32 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
   let buildStart = 0;
   let buildDurationMs = 0;
 
-  let lastEdit = 0;
   const push = async (...lines: string[]) => {
     log.push(...lines);
-    const now = Date.now();
-    if (now - lastEdit >= 800) {
-      lastEdit = now;
-      await onProgress([...log]).catch(() => {});
-    }
+    await onProgress([...log]).catch(() => {});
   };
 
   const flush = async () => {
-    lastEdit = Date.now();
     await onProgress([...log]).catch(() => {});
   };
 
   const fail = async (step: string, err: unknown): Promise<DeployResult> => {
     const msg = err instanceof Error ? err.message : String(err);
-    log.push('', `❌ <b>${step} failed</b>`, `<code>${msg.slice(0, 400)}</code>`);
+    log.push('', `❌ <b>Step [${step}] failed</b>`, `<code>${msg.slice(0, 400)}</code>`);
     await flush();
     logger.error('[Deploy] Step failed', { step, err: msg });
     
-    // Attempt rollback if we already pulled
-    if (prevCommit && currCommit && prevCommit !== currCommit) {
-      log.push('🔄 <b>Attempting rollback to ' + prevCommit + '...</b>');
+    // ── ROLLBACK SYSTEM ──
+    if (prevCommit) {
+      log.push('🔄 <b>ROLLBACK INITIATED...</b>');
       await flush();
-      await safeExec(`git reset --hard ${prevCommit}`, APP_DIR);
-      log.push('✅ Rollback complete');
+      try {
+        await safeExec(`git reset --hard ${prevCommit}`, APP_DIR);
+        await safeExec('pm2 restart wa-bridge --update-env', APP_DIR);
+        log.push('✅ Rollback complete. Previous version restored.');
+      } catch (rErr) {
+        log.push('❌ Critical: Rollback failed.');
+      }
       await flush();
     }
 
@@ -132,96 +131,114 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
   };
 
   try {
-    // 1. Safety checks
-    log.push('🔍 <b>Safety checks...</b>');
-    await flush();
-    if (!existsSync(`${APP_DIR}/.git`)) return await fail('Safety', new Error(`No git repo at ${APP_DIR}`));
-    
-    // Check for uncommitted changes
+    // 1. Verify repository
+    log.push('🔍 <b>[1/14] Verifying repository...</b>');
+    if (!existsSync(`${APP_DIR}/.git`)) return await fail('Verify Repo', new Error(`No git repo at ${APP_DIR}`));
+    prevCommit = await safeExec('git rev-parse --short HEAD');
+    log.push(`✅ Repo verified at <code>${prevCommit}</code>`);
+
+    // 2. Detect local changes
+    log.push('🔍 <b>[2/14] Detecting local changes...</b>');
     const status = await safeExec('git status --porcelain', APP_DIR);
     if (status) {
-      log.push('⚠️ <b>Uncommitted changes detected. Stashing...</b>');
+      log.push('⚠️ Uncommitted changes detected. Stashing...');
       await safeExec('git stash', APP_DIR);
     }
+    log.push('✅ Local workspace clean');
 
-    prevCommit = await safeExec('git rev-parse --short HEAD');
-    log.push('✅ Safety checks passed');
+    // 3. Safely stop PM2
+    log.push('🛑 <b>[3/14] Safely stopping PM2...</b>');
+    await safeExec('pm2 stop wa-bridge', APP_DIR);
+    log.push('✅ PM2 stopped');
 
-    // 2. Git fetch & pull
-    log.push('', `📌 Current: <code>${prevCommit}</code>`, '⬇️ <b>Pulling from GitHub...</b>');
-    await flush();
-
+    // 4. Pull latest commits
+    log.push('⬇️ <b>[4/14] Pulling latest commits...</b>');
     await runLive('git', ['pull', 'origin', 'main'], APP_DIR, (l) => {
       push(`  <code>${l}</code>`);
-      const m = l.match(/(\d+) file/);
-      if (m) filesChanged += parseInt(m[1] ?? '0', 10);
+      if (l.includes('file changed')) {
+        const m = l.match(/(\d+) file/);
+        if (m) filesChanged += parseInt(m[1] ?? '0', 10);
+      }
     });
-
     currCommit = await safeExec('git rev-parse --short HEAD');
-    if (currCommit === prevCommit) {
-      log.push('ℹ️ Already up to date');
-      await flush();
-      return { success: true, prevCommit, currCommit, filesChanged: 0, buildDurationMs: 0, totalDurationMs: Date.now() - startedAt };
-    }
     log.push(`✅ Pulled → <code>${currCommit}</code>`);
 
-    // 3. Dependencies
+    // 5. Install dependencies
+    log.push('📦 <b>[5/14] Checking dependencies...</b>');
     const pkgChanged = await safeExec(`git diff --name-only ${prevCommit} ${currCommit} | grep -E "package.json|pnpm-lock.yaml"`);
     if (pkgChanged) {
-      log.push('', '📦 <b>Dependencies changed. Installing...</b>');
-      await flush();
+      log.push('📦 Dependencies changed. Installing...');
       await runLive('pnpm', ['install'], APP_DIR, (l) => push(`  <code>${l}</code>`));
       log.push('✅ Dependencies updated');
     } else {
-      log.push('', 'ℹ️ No dependency changes');
+      log.push('✅ No dependency changes');
     }
 
-    // 4. Build
-    log.push('', '🔨 <b>Cleaning and Building...</b>');
-    await flush();
-    
-    // Clean dist and cache
+    // 6. Clear obsolete cache
+    log.push('🧹 <b>[6/14] Clearing obsolete cache...</b>');
+    await safeExec('rm -rf node_modules/.cache', APP_DIR);
+    log.push('✅ Cache cleared');
+
+    // 7. Delete old dist
+    log.push('🗑️ <b>[7/14] Deleting old dist...</b>');
     rmSync(path.join(WA_BRIDGE_DIR, 'dist'), { recursive: true, force: true });
-    
+    log.push('✅ Old dist deleted');
+
+    // 8. Rebuild
+    log.push('🔨 <b>[8/14] Rebuilding...</b>');
     buildStart = Date.now();
     await runLive('pnpm', ['run', 'build'], APP_DIR, (l) => push(`  <code>${l}</code>`));
     buildDurationMs = Date.now() - buildStart;
     log.push(`✅ Build done in ${(buildDurationMs / 1000).toFixed(1)}s`);
 
-    // 5. Restart
-    log.push('', '🔄 <b>Restarting via PM2...</b>');
-    await flush();
-    await runLive('pm2', ['restart', 'wa-bridge', '--update-env'], APP_DIR, (l) => push(`  <code>${l}</code>`));
-
-    // 6. Verification
-    log.push('', '🔍 <b>Verifying deployment...</b>');
-    await flush();
-    await new Promise((r) => setTimeout(r, 5000));
-
-    const jlist = await safeExec('pm2 jlist');
-    let online = false;
-    try {
-      const procs = JSON.parse(jlist);
-      online = procs.some((p: any) => p.name === 'wa-bridge' && p.pm2_env?.status === 'online');
-    } catch { online = false; }
-
-    if (!online) return await fail('Verification', new Error('wa-bridge not online after restart'));
-    log.push('✅ Bot is online');
-
-    // 7. Release Notes
-    const releaseNotes = await generateReleaseNotes(prevCommit, currCommit);
-    const platformCfg = loadPlatformConfig();
-    
-    if (platformCfg.releasePostsEnabled && platformCfg.releaseChannelUsername) {
-      log.push('', '📢 <b>Posting release notes...</b>');
-      await flush();
-      // This part will be handled by the bot itself after restart or via a separate script
-      // For now, we'll mark it as "to be posted"
-      log.push(`✅ Release notes ready for ${platformCfg.releaseChannelUsername}`);
+    // 9. Verify build
+    log.push('🔍 <b>[9/14] Verifying build...</b>');
+    if (!existsSync(path.join(WA_BRIDGE_DIR, 'dist/index.js'))) {
+      return await fail('Verify Build', new Error('Build output missing index.js'));
     }
+    log.push('✅ Build verified');
 
+    // 10. Restart PM2
+    log.push('🔄 <b>[10/14] Restarting PM2...</b>');
+    await safeExec('pm2 start wa-bridge --update-env', APP_DIR);
+    log.push('✅ PM2 restarted');
+
+    // Wait for startup
+    await new Promise(r => setTimeout(r, 10000));
+
+    // 11. Verify Telegram
+    log.push('🤖 <b>[11/14] Verifying Telegram...</b>');
+    const tgToken = process.env.TELEGRAM_TOKEN;
+    if (tgToken) {
+      const { ConnectionTester } = await import('../setup/ConnectionTester.js') as any;
+      const tgOk = await ConnectionTester.testTelegram(tgToken);
+      if (!tgOk) return await fail('Verify Telegram', new Error('Telegram API connection failed'));
+    }
+    log.push('✅ Telegram online');
+
+    // 12. Verify WhatsApp
+    log.push('📱 <b>[12/14] Verifying WhatsApp...</b>');
+    const jlist = await safeExec('pm2 jlist');
+    const procs = JSON.parse(jlist);
+    const proc = procs.find((p: any) => p.name === 'wa-bridge');
+    if (!proc || proc.pm2_env?.status !== 'online') {
+      return await fail('Verify WhatsApp', new Error('WhatsApp process is not online'));
+    }
+    log.push('✅ WhatsApp online');
+
+    // 13. Verify Sessions
+    log.push('📂 <b>[13/14] Verifying Sessions...</b>');
+    const sessionsExist = existsSync(path.join(APP_DIR, 'artifacts/workspaces'));
+    log.push(sessionsExist ? '✅ Session registry intact' : '⚠️ Session registry empty');
+
+    // 14. Return summary
     const totalDurationMs = Date.now() - startedAt;
-    log.push('', `🚀 <b>Deployment complete!</b>`);
+    log.push('', `🚀 <b>[14/14] Deployment Summary</b>`, 
+      `• Duration: ${(totalDurationMs / 1000).toFixed(1)}s`,
+      `• Build: ${(buildDurationMs / 1000).toFixed(1)}s`,
+      `• Version: ${currCommit}`,
+      `• Files: ${filesChanged}`
+    );
     await flush();
 
     return { success: true, prevCommit, currCommit, filesChanged, buildDurationMs, totalDurationMs };

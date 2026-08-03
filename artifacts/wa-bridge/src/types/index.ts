@@ -60,7 +60,7 @@ export interface SessionMeta {
   telegramId: string;
   phone: string;
   label?: string;
-  status: 'connecting' | 'open' | 'frozen' | 'banned' | 'error' | 'closed';
+  status: 'connecting' | 'open' | 'frozen' | 'dead' | 'purged' | 'banned' | 'error' | 'closed';
   pairMethod: 'qr' | 'code';
   pairedAt?: number;
   lastSeen?: number;

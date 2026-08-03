@@ -224,11 +224,11 @@ export class PreviewDispatcher {
           // WhatsApp nativeFlow supports up to 10 buttons total
           if (finalContent.nativeFlow.buttons.length >= 10) break;
           
-          if (!existingUrls.has(b.url)) {
+          if (!existingUrls.has(b.url) && b.enabled) { // Only add enabled buttons
             finalContent.nativeFlow.buttons.push({
               name: 'cta_url',
               buttonParamsJson: JSON.stringify({
-                display_text: b.text,
+                display_text: b.name, // Fixed: use 'name' as per MenuButton interface
                 url: b.url,
                 merchant_url: b.url,
               }),

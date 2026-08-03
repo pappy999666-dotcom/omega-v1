@@ -4,6 +4,7 @@
 // ============================================================
 
 import { Telegraf, session, type Context } from 'telegraf';
+import type { MenuButton } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 import {
   authMiddleware,
@@ -1906,7 +1907,7 @@ async function routeCallback(
           waName = c?.name ?? c?.notify ?? '';
         } catch { /* ignore */ }
       }
-      const statusEmoji = { open: '🟢', connecting: '🟡', frozen: '🔵', error: '🔴', banned: '💀', closed: '⚫' }[meta.status] ?? '⚪';
+      const statusEmoji = { open: '🟢', connecting: '🟡', frozen: '🔵', dead: '💀', purged: '🗑️', error: '🔴', banned: '💀', closed: '⚫' }[meta.status] ?? '⚪';
       const text = [
         `${statusEmoji} <b>Session Info</b>`,
         `<code>------------------------------</code>`,

@@ -226,7 +226,7 @@ export function whatsappMenu(
   sections: { heading: string; items: { cmd: string; desc: string }[] }[]
 ): string {
   const cleanCommand = (cmd: string): string => cmd.trim().split(/\s+/u)[0] ?? cmd.trim();
-  const safeDivider = '────────────────────';
+  const safeDivider = '━━━━━━━━━━━━━━━━━━━━';
   
   // Menu also uses the PAPPY engine for consistency
   const rows: [string, string][] = [
@@ -237,19 +237,19 @@ export function whatsappMenu(
 
   let menuBody = '';
   for (const section of sections) {
-    menuBody += `\n${safeDivider}\n${bold(section.heading)}\n${safeDivider}\n`;
+    menuBody += `\n┃\n┃ ${bold(section.heading.toUpperCase())}\n${safeDivider}\n`;
     for (const item of section.items) {
-      menuBody += `◈ *${cleanCommand(item.cmd)}*\n  └ ${item.desc}\n`;
+      menuBody += `┃ ◈ *${cleanCommand(item.cmd)}*\n┃   └ ${item.desc}\n`;
     }
   }
 
-  menuBody += `\n${safeDivider}\n${bold('PREMIUM HIGHLIGHT')}\n${safeDivider}\n◉ ${getPremiumTip()}\n`;
+  menuBody += `\n┃\n┃ ${bold('PREMIUM HIGHLIGHT')}\n${safeDivider}\n┃ ◉ ${getPremiumTip()}\n`;
 
   return asciiBox({
-    title: 'OMEGA • CORE',
-    emoji: '◈',
+    title: 'PAPPY • OS',
+    emoji: '⚔',
     moduleIdentity: 'CONTROL INTERFACE',
     rows,
-    footer: menuBody + `\n${safeDivider}\n⟦ Awaiting Operator Command... ⟧`
+    footer: menuBody + `\n┃\n┃ ⟦ AWAITING OPERATOR COMMAND... ⟧`
   });
 }

@@ -244,18 +244,14 @@ async function restoreSessions(): Promise<void> {
     const sessions = loadAllSessions(telegramId);
 
     for (const meta of Object.values(sessions)) {
-      // Restore open sessions and frozen sessions (frozen = user-paused, still paired).
-      // On restart the in-memory freeze flag is gone, so frozen sessions come back live.
-      // We reset their status to 'open' before restoring so they reconnect normally.
+      // Restore open sessions.
+      // FROZEN sessions must survive restart but NOT be reinitialized.
       if (!meta.pairedAt) continue;
-      if (meta.status !== 'open' && meta.status !== 'frozen') continue;
-
-      // Clear stale frozen status — bot restarted, no reason to stay frozen
       if (meta.status === 'frozen') {
-        meta.status = 'open';
-        const { saveSessionMeta } = await import('./services/workspace.js');
-        saveSessionMeta(meta);
+        logger.info(`[Boot] Session ${meta.sessionId} is FROZEN. Skipping restoration.`);
+        continue;
       }
+      if (meta.status !== 'open') continue;
 
       try {
         registerSessionOwner(meta.sessionId, telegramId);

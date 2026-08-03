@@ -25,25 +25,23 @@ export interface RenderableResponse {
 export function renderResponse(res: RenderableResponse): string {
   const theme = res.theme ? THEMES.find(t => t.name.toLowerCase() === res.theme?.toLowerCase()) : undefined;
   
-  switch (res.type) {
-    case 'success':
-      return successCard(res.title, res.message || '', res.rows || [], res.module);
-    case 'warning':
-      return warningCard(res.title, res.message || '', res.rows || [], res.module);
-    case 'error':
-      return errorCard(res.title, res.message || '', res.details, res.module);
-    case 'info':
-    case 'result':
-    case 'custom':
-    default:
-      return asciiBox({
-        title: res.title,
-        rows: res.rows || [],
-        footer: res.message || res.footer,
-        emoji: res.emoji,
-        moduleIdentity: res.module
-      });
-  }
+  const emojiMap = {
+    success: '✅',
+    warning: '⚠️',
+    error: '❌',
+    info: 'ℹ️',
+    result: '📊',
+    custom: res.emoji || '◈'
+  };
+
+  return pappyBox({
+    title: res.title,
+    emoji: emojiMap[res.type] || res.emoji,
+    rows: res.rows || [],
+    footer: res.message || res.footer || res.details,
+    moduleIdentity: res.module,
+    theme
+  });
 }
 
 export type { Theme, PappyBoxOptions };

@@ -559,17 +559,15 @@ async function processMessageWithConfig(
   const isAuthorized = replyOverride || isAuthorizedCommandSender(isOwnerSender, sudoCheckJid, config.sudoNumbers);
 
   if (!isAuthorized) {
-    const { MENU_CATALOG } = await import('./menu-registry.js');
-    const entry = MENU_CATALOG[command];
-    const isPublicCommand = entry && (entry.target === 'group' || entry.target === 'both');
+    // PUBLIC MODE: Only specific commands are allowed to respond to public users.
+    // Every other command MUST be completely silent (no reply, no reaction, no leak).
+    const publicWhitelist = ['pair', 'ping', 'menu', 'gmenu'];
     
-    if (config.publicMode && isPublicCommand) {
-      // Allow public commands - internal command checks will handle specific permissions
+    if (config.publicMode && publicWhitelist.includes(command)) {
+      // Allow whitelisted public commands
     } else {
-      if (config.publicMode && config.permissionDeniedResponse) {
-        await reply(errorCard('PERMISSION DENIED', config.permissionDeniedResponse));
-      }
-      logger.warn('[EventHandler] Silently ignored unauthorized WhatsApp command', {
+      // COMPLETELY SILENT for everything else
+      logger.warn('[EventHandler] Silently ignored unauthorized WhatsApp command (Public Mode)', {
         sessionId,
         command,
         sender: normalizeWhatsAppNumber(senderJid),

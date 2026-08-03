@@ -73,66 +73,53 @@ export function pappyBox(opts: PappyBoxOptions): string {
 
   const lines: string[] = [];
 
-  // 1. Header
-  lines.push(header);
-  lines.push('');
+  // 1. Premium Box Header
+  const boxTitle = opts.moduleIdentity ? `⚔ ${opts.moduleIdentity.toUpperCase()}` : `${opts.emoji ? `${opts.emoji} ` : ''}${opts.title.toUpperCase()}`;
+  lines.push(`╭━━━〔 ${boxTitle} 〕━━━╮`);
+  lines.push(border);
 
-  // 2. Title / Module Identity
-  if (opts.moduleIdentity) {
-    lines.push(`☩ ${opts.moduleIdentity.toUpperCase()}`);
-  } else {
-    lines.push(`${opts.emoji ? `${opts.emoji} ` : ''}${bold(opts.title.toUpperCase())}`);
+  // 2. Main Message / Description
+  if (opts.footer && !opts.footer.includes('◈')) { // If footer is actually the main message
+    lines.push(`${border} ${opts.footer}`);
+    lines.push(border);
   }
-  lines.push('');
 
   // 3. Information Panel (Rows)
-  // Layout varies based on theme preference
-  switch (layout) {
-    case 'matrix':
-      for (const [label, value] of opts.rows) {
-        lines.push(`${border} ${symbol} ${label.toUpperCase()}`);
-        lines.push(`${border} ┗▶ ${value}`);
-        lines.push(border);
-      }
-      break;
-    case 'compact':
-      for (const [label, value] of opts.rows) {
-        lines.push(`${border} ${bold(label)}: ${value}`);
-      }
-      break;
-    case 'minimal':
-      for (const [label, value] of opts.rows) {
-        lines.push(`${symbol} ${label} → ${value}`);
-      }
-      break;
-    case 'gothic':
-      for (const [label, value] of opts.rows) {
-        lines.push(`${border} ☩ ${label}`);
-        lines.push(`${border}   ${italic(value)}`);
-        lines.push(border);
-      }
-      break;
-    case 'standard':
-    default:
-      for (const [label, value] of opts.rows) {
-        lines.push(`${border} ${symbol} ${label}`);
-        lines.push(`${border}   ${value}`);
-        lines.push(border);
-      }
-      break;
+  if (opts.rows.length > 0) {
+    switch (layout) {
+      case 'matrix':
+        for (const [label, value] of opts.rows) {
+          lines.push(`${border} ${symbol} ${bold(label.toUpperCase())}`);
+          lines.push(`${border} ┗▶ ${value}`);
+          lines.push(border);
+        }
+        break;
+      case 'gothic':
+        for (const [label, value] of opts.rows) {
+          lines.push(`${border} ☩ ${bold(label)}`);
+          lines.push(`${border}   ${italic(value)}`);
+          lines.push(border);
+        }
+        break;
+      case 'standard':
+      default:
+        for (const [label, value] of opts.rows) {
+          lines.push(`${border} ${symbol} ${bold(label)}`);
+          lines.push(`${border}   ${value}`);
+          lines.push(border);
+        }
+        break;
+    }
   }
 
-  // 4. Content (Footer text)
-  if (opts.footer) {
-    if (layout !== 'minimal') lines.push(divider);
+  // 4. Special Footer Content (e.g. Menu items)
+  if (opts.footer && opts.footer.includes('◈')) {
     lines.push(opts.footer);
   }
 
-  // 5. Footer
-  lines.push('');
-  lines.push(themeFooter);
-  lines.push('');
-  lines.push('𝕻𝕬𝕻𝕻𝖄 ×͜×');
+  // 5. Premium Box Footer
+  lines.push(border);
+  lines.push(`╰━━━━━━━ ⸸ 𝕻𝕬𝕻𝕻𝖄 ×͜× ⸸ ━━━━━━━╯`);
 
   return lines.join('\n');
 }

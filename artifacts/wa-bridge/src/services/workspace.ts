@@ -11,6 +11,8 @@ import type {
   UserConfig,
   SessionMeta,
   BucketEntry,
+  PlatformConfig,
+  MenuButton,
 } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 
@@ -181,12 +183,32 @@ export function sessionConfigPath(telegramId: string, sessionId: string): string
 export function loadSessionConfig(telegramId: string, sessionId: string): UserConfig {
   const base = loadConfig(telegramId);
   const p = sessionConfigPath(telegramId, sessionId);
-  if (!fs.existsSync(p)) return { ...base, stickerMacros: { ...base.stickerMacros }, sudoNumbers: [...(base.sudoNumbers ?? [])], forceJoinTargets: [...(base.forceJoinTargets ?? [])], statusDesignStickyThemes: { ...(base.statusDesignStickyThemes ?? {}) } };
+  
+  // DEFAULT ISOLATION: New sessions always start with prefix '.'
+  // Changing the global user config prefix must NEVER affect existing or new sessions.
+  const isolatedDefaults = {
+    prefix: '.',
+    nullPrefix: false,
+    publicMode: true,
+  };
+
+  if (!fs.existsSync(p)) {
+    return { 
+      ...base, 
+      ...isolatedDefaults,
+      stickerMacros: { ...base.stickerMacros }, 
+      sudoNumbers: [...(base.sudoNumbers ?? [])], 
+      forceJoinTargets: [...(base.forceJoinTargets ?? [])], 
+      statusDesignStickyThemes: { ...(base.statusDesignStickyThemes ?? {}) } 
+    };
+  }
+  
   try {
     const stored = JSON.parse(fs.readFileSync(p, 'utf8')) as Partial<UserConfig>;
     return {
       ...base,
-      ...stored,
+      ...isolatedDefaults, // Apply defaults first
+      ...stored,           // Then session overrides
       telegramId,
       stickerMacros: { ...(base.stickerMacros ?? {}), ...(stored.stickerMacros ?? {}) },
       sudoNumbers: stored.sudoNumbers ?? base.sudoNumbers ?? [],
@@ -194,7 +216,7 @@ export function loadSessionConfig(telegramId: string, sessionId: string): UserCo
       statusDesignStickyThemes: { ...(base.statusDesignStickyThemes ?? {}), ...(stored.statusDesignStickyThemes ?? {}) },
     };
   } catch {
-    return base;
+    return { ...base, ...isolatedDefaults };
   }
 }
 
@@ -269,15 +291,40 @@ export function updateSessionMeta(
 }
 
 /**
- * Purge a session completely — removes auth state and meta.
- * Called on 401/Bad MAC errors.
+ * Purge a session completely — removes auth state, meta, and database records.
+ * Called on 401/Bad MAC errors or manual deletion.
  */
-export function purgeSession(telegramId: string, sessionId: string): void {
+export async function purgeSession(telegramId: string, sessionId: string): Promise<void> {
   const dir = sessionDir(telegramId, sessionId);
+  
+  // 1. Session Files
   if (fs.existsSync(dir)) {
     fs.rmSync(dir, { recursive: true, force: true });
-    logger.warn(`[Workspace] Purged session ${sessionId} for ${telegramId}`);
   }
+
+  // 2. Redis Cleanup (Queues, Cache, Circuit Breakers)
+  try {
+    const { getRedis } = await import('./queue.js');
+    const redis = getRedis();
+    const keys = await redis.keys(`*${sessionId}*`);
+    if (keys.length > 0) {
+      await redis.del(...keys);
+    }
+  } catch (err) {
+    logger.warn(`[Workspace] Redis purge failed for ${sessionId}`, { err: String(err) });
+  }
+
+  // 3. Mongo Cleanup (if configured)
+  if (process.env.MONGO_URI) {
+    try {
+      const { execSync } = await import('child_process');
+      execSync(`mongosh "${process.env.MONGO_URI}" --eval "db.sessions.deleteMany({ sessionId: '${sessionId}' })"`, { stdio: 'ignore' });
+    } catch (err) {
+      // Non-critical
+    }
+  }
+
+  logger.warn(`[Workspace] Purged session ${sessionId} for ${telegramId} (Files + DB)`);
 }
 
 /**
@@ -428,12 +475,7 @@ export function findSessionOwner(sessionId: string): string | null {
 
 const PLATFORM_CONFIG_PATH = path.join(WORKSPACE_ROOT, '_platform', 'config.json');
 
-interface PlatformConfig {
-  globalMenuUrl?: string;
-  globalMenuUrls?: string[];
-  releaseChannelUsername?: string;
-  releasePostsEnabled?: boolean;
-}
+// Using PlatformConfig from types/index.js
 
 export function loadPlatformConfig(): PlatformConfig {
   if (!fs.existsSync(PLATFORM_CONFIG_PATH)) return {};

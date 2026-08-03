@@ -5,7 +5,7 @@
 
 import { MENU_CATALOG } from '../whatsapp/menu-registry.js';
 import { H, header, escape } from '../utils/formatter.js';
-import { asciiBox } from '../utils/ascii-art.js';
+import { whatsappMenu, asciiBox, bold, italic } from '../utils/ascii-art.js';
 
 export function generateTelegramHelp(isOwner: boolean): string {
   const sections: Record<string, string[]> = {};
@@ -42,26 +42,50 @@ export function generateTelegramCategoryHelp(category: string): string {
   return text;
 }
 
-export function generateWhatsAppHelp(prefix: string, isGroup: boolean): string {
-  const sections: Record<string, string[]> = {};
+export function generateWhatsAppHelp(prefix: string, isGroup: boolean, commandName?: string): string {
+  if (commandName) {
+    const entry = MENU_CATALOG[commandName.toLowerCase()];
+    if (entry && !entry.hidden) {
+      const rows: [string, string][] = [
+        ['Syntax', `\`\`\`${prefix}${entry.syntax}\`\`\``],
+        ['Description', entry.desc],
+      ];
+      if (entry.usage) rows.push(['Usage', entry.usage]);
+      if (entry.permissions) rows.push(['Permissions', entry.permissions]);
+      if (entry.inputs && entry.inputs.length > 0) rows.push(['Supports', entry.inputs.join(', ')]);
+      if (entry.args) rows.push(['Arguments', entry.args]);
+      if (entry.output) rows.push(['Output', entry.output]);
+      if (entry.examples && entry.examples.length > 0) {
+        rows.push(['Examples', entry.examples.map(ex => `${prefix}${ex}`).join('\n')]);
+      }
+
+      return asciiBox({
+        title: `COMMAND: ${commandName.toUpperCase()}`,
+        emoji: '⚔',
+        moduleIdentity: entry.section,
+        rows,
+        footer: 'Type .menu for full command list.'
+      });
+    }
+  }
+
+  const sections: { heading: string; items: { cmd: string; desc: string }[] }[] = [];
+  const sectionMap: Record<string, { heading: string; items: { cmd: string; desc: string }[] }> = {};
 
   for (const [cmd, entry] of Object.entries(MENU_CATALOG)) {
     if (entry.hidden) continue;
     if (isGroup && entry.target === 'main') continue;
     if (!isGroup && entry.target === 'group') continue;
 
-    if (!sections[entry.section]) sections[entry.section] = [];
-    sections[entry.section].push(`${prefix}${entry.syntax} - ${entry.desc}`);
+    if (!sectionMap[entry.section]) {
+      sectionMap[entry.section] = { heading: entry.section, items: [] };
+      sections.push(sectionMap[entry.section]);
+    }
+    sectionMap[entry.section].items.push({
+      cmd: `${prefix}${entry.syntax}`,
+      desc: entry.desc
+    });
   }
 
-  let text = '🚀 *OMEGA COMMAND MENU*\n\n';
-  
-  for (const [section, lines] of Object.entries(sections)) {
-    text += `*${section}*\n`;
-    text += lines.map(l => `• ${l}`).join('\n');
-    text += '\n\n';
-  }
-
-  text += '_Use .idea [msg] to send feedback._';
-  return text;
+  return whatsappMenu('OMEGA • CORE', sections);
 }

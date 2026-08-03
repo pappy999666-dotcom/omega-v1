@@ -377,12 +377,15 @@ export async function initSocket(
       logRecovery(sessionId, lastDisconnect?.error, action);
 
       if (action.action === 'purge') {
-        // Immediately purge corrupted/banned sessions
-        registry.delete(sessionId);
-        purgeSession(telegramId, sessionId);
+        // ── DEAD/PURGED LIFECYCLE ──
+        // Immediately purge corrupted/banned sessions from Memory + Registry + Disk + DB
+        await closeSocket(sessionId);
+        markPurged(sessionId);
+        await purgeSession(telegramId, sessionId);
+        
         await alertCallback?.(
           telegramId,
-          `⚠️ Session <code>${sessionId}</code> was automatically purged.\n` +
+          `⚠️ Session <code>${sessionId}</code> was permanently PURGED.\n` +
           `Reason: <b>${action.reason}</b>`
         );
         return;

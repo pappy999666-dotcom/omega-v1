@@ -405,7 +405,7 @@ export function adminMenuUrlEditKeyboard(buttonId: string, enabled: boolean): In
     inline_keyboard: [
       [
         enabled
-          ? btn('❌ Disable', `admin:menuurl:toggle:${buttonId}`, 'warning')
+          ? btn('❌ Disable', `admin:menuurl:toggle:${buttonId}`, 'danger')
           : btn('✅ Enable', `admin:menuurl:toggle:${buttonId}`, 'success'),
         btn('🗑 Delete', `admin:menuurl:delete:${buttonId}`, 'danger'),
       ],
