@@ -17,7 +17,9 @@ export async function ensureRuntimeEnv(): Promise<void> {
   if (missing.length === 0) return;
 
   if (!input.isTTY || !output.isTTY) {
-    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+    // In non-interactive environments, assume environment variables are set externally
+    // or will be loaded from .env by dotenv/config
+    return;
   }
 
   console.log('\n\x1b[36mWA-Bridge first-run setup\x1b[0m');

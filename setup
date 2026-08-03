@@ -4,20 +4,16 @@
 # OMEGA-V1 • ZERO-FAILURE CYBERNETIC BOOTLOADER
 # ============================================================
 
-# Colors
-G='\033[0;32m'
-R='\033[0;31m'
-Y='\033[0;33m'
-NC='\033[0m'
+# Colors are directly embedded in echo commands
 
-echo -e "${G}"
+echo -e "\033[0;32m"
 echo " ██████╗ ███╗   ███╗███████╗ ██████╗  █████╗ "
 echo "██╔═══██╗████╗ ████║██╔════╝██╔════╝ ██╔══██╗"
 echo "██║   ██║██╔████╔██║█████╗  ██║  ███╗███████║"
 echo "██║   ██║██║╚██╔╝██║██╔══╝  ██║   ██║██╔══██║"
 echo "╚██████╔╝██║ ╚═╝ ██║███████╗╚██████╔╝██║  ██║"
 echo " ╚═════╝ ╚═╝     ╚═╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝"
-echo -e "          ZERO-FAILURE BOOT SEQUENCE${NC}\n"
+echo -e "          ZERO-FAILURE BOOT SEQUENCE\033[0m\n"
 
 # Determine if sudo is needed
 if [ "$EUID" -ne 0 ]; then
@@ -28,13 +24,15 @@ fi
 
 # Function to locate commands even if not in PATH
 find_cmd() {
-    command -v "$1" || which "$1" 2>/dev/null || find /usr/local/bin /usr/bin /bin /usr/sbin /sbin -name "$1" -executable -print -quit 2>/dev/null
+    local cmd_path
+    cmd_path=$(command -v "$1" || which "$1" 2>/dev/null || find /usr/local/bin /usr/bin /bin /usr/sbin /sbin -name "$1" -executable -print -quit 2>/dev/null)
+    echo "$cmd_path"
 }
 
 # 1. Ensure Node.js is present
 NODE_PATH=$(find_cmd node)
 if [ -z "$NODE_PATH" ]; then
-    echo -e "${Y}⚠️  Node.js missing. Attempting emergency installation...${NC}"
+    echo -e "\033[0;33m⚠️  Node.js missing. Attempting emergency installation...\033[0m"
     if command -v apt-get &> /dev/null; then
         $SUDO apt-get update -y && $SUDO apt-get install -y curl ca-certificates gnupg
         $SUDO mkdir -p /etc/apt/keyrings
@@ -44,115 +42,174 @@ if [ -z "$NODE_PATH" ]; then
         $SUDO apt-get update -y && $SUDO apt-get install nodejs -y
         NODE_PATH=$(find_cmd node)
     else
-        echo -e "${R}❌ FATAL: Cannot install Node.js automatically. Install it manually.${NC}"
+        echo -e "\033[0;31m❌ FATAL: Cannot install Node.js automatically. Install it manually.\033[0m"
         exit 1
     fi
 fi
-echo -e "✅ Node.js: ${G}$($NODE_PATH -v)${NC} at $NODE_PATH"
+echo -e "\033[0;32m✅ Node.js: \033[0;32m$($NODE_PATH -v)\033[0m at $NODE_PATH"
 
 # 2. Ensure NPM is present
 NPM_PATH=$(find_cmd npm)
 if [ -z "$NPM_PATH" ]; then
-    echo -e "${Y}⚠️  npm missing. Attempting emergency installation...${NC}"
+    echo -e "\033[0;33m⚠️  npm missing. Attempting emergency installation...\033[0m"
     if command -v apt-get &> /dev/null; then
         $SUDO apt-get update -y && $SUDO apt-get install -y npm
         NPM_PATH=$(find_cmd npm)
     fi
     
     if [ -z "$NPM_PATH" ]; then
-        # Last resort: Try corepack if Node.js version supports it
-        if $NODE_PATH -e "process.exit(process.versions.node.split('.')[0] >= 16 ? 0 : 1)" 2>/dev/null; then
-            echo -e "${Y}Attempting to enable corepack...${NC}"
+        if $NODE_PATH -e "process.exit(process.versions.node.split(\".\")[0] >= 16 ? 0 : 1)" 2>/dev/null; then
+            echo -e "\033[0;33mAttempting to enable corepack...\033[0m"
             $SUDO corepack enable 2>/dev/null
             NPM_PATH=$(find_cmd npm)
         fi
     fi
 
     if [ -z "$NPM_PATH" ]; then
-        echo -e "${R}❌ FATAL: npm is missing and could not be installed automatically.${NC}"
-        echo -e "Please install npm manually: ${Y}sudo apt-get install npm${NC}"
+        echo -e "\033[0;31m❌ FATAL: npm is missing and could not be installed automatically.\033[0m"
         exit 1
     fi
 fi
-echo -e "✅ npm: ${G}$($NPM_PATH -v)${NC} at $NPM_PATH"
+echo -e "\033[0;32m✅ npm: \033[0;32m$($NPM_PATH -v)\033[0m at $NPM_PATH"
 
-# 3. Ensure PNPM or Fallback
+# 3. Ensure PNPM
 PNPM_PATH=$(find_cmd pnpm)
 if [ -z "$PNPM_PATH" ]; then
-    echo -e "${Y}⚠️  pnpm missing. Installing locally for setup...${NC}"
-    $NPM_PATH install -g pnpm || $NPM_PATH install pnpm --no-save
-    PNPM_PATH=$(find_cmd pnpm) || PNPM_PATH="./node_modules/.bin/pnpm"
+    echo -e "\033[0;33m⚠️  pnpm missing. Installing globally...\033[0m"
+    $SUDO $NPM_PATH install -g pnpm
+    PNPM_PATH=$(find_cmd pnpm)
+fi
+echo -e "\033[0;32m✅ pnpm: \033[0;32m$($PNPM_PATH -v)\033[0m at $PNPM_PATH"
+
+# 4. Ensure PM2
+PM2_PATH=$(find_cmd pm2)
+if [ -z "$PM2_PATH" ]; then
+    echo -e "\033[0;33m⚠️  PM2 missing. Installing globally...\033[0m"
+    if [ -w "$(npm root -g)" ]; then
+        $NPM_PATH install -g pm2
+    else
+        $SUDO $NPM_PATH install -g pm2
+    fi
+    PM2_PATH=$(find_cmd pm2)
+fi
+echo -e "\033[0;32m✅ PM2: \033[0;32m$($PM2_PATH -v 2>/dev/null || echo \'Not Found\')\033[0m at $PM2_PATH"
+
+# 5. Ensure Redis is present and running
+if ! systemctl is-active --quiet redis-server; then
+    echo -e "\n\033[0;33m⚠️ Redis server not running. Attempting installation and startup...\033[0m"
+    if command -v apt-get &> /dev/null; then
+        $SUDO apt-get update -y
+        $SUDO apt-get install -y redis-server
+        $SUDO systemctl enable redis-server
+        $SUDO systemctl start redis-server
+        if systemctl is-active --quiet redis-server; then
+            echo -e "\033[0;32m✅ Redis server installed and started.\033[0m"
+        else
+            echo -e "\033[0;31m❌ Failed to start Redis server.\033[0m"
+            # redisInstalledLocally=false # This variable is in the TS setup wizard, not here
+        fi
+    else
+        echo -e "\033[0;31m❌ FATAL: Cannot install Redis automatically. Install it manually.\033[0m"
+        # redisInstalledLocally=false
+    fi
+else
+    echo -e "\033[0;32m✅ Redis server is already running.\033[0m"
 fi
 
-# 4. Launch Wizard with Triple Fallback
-echo -e "\n🚀 ${G}Initializing Setup Wizard...${NC}\n"
+# Change to script directory dynamically
+APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$APP_DIR"
+echo -e "\033[0;32m✅ App Directory: \033[0;32m$APP_DIR\033[0m"
 
-# Change to script directory
-cd "$(dirname "$0")"
+# ── Update Handler ─────────────────────────────────────────
+if [ "$1" == "update" ]; then
+    echo -e "\n🚀 \033[0;32mStarting OMEGA-V1 Smart Update Pipeline...\033[0m\n"
+    if $PNPM_PATH --filter @workspace/wa-bridge run deploy; then
+        echo -e "\n\033[0;32m✅ Update successful!\033[0m"
+    else
+        echo -e "\n\033[0;31m❌ Update failed. Check logs for details.\033[0m"
+        exit 1
+    fi
+    exit 0
+fi
 
-SETUP_SUCCESS=false
-
-# FALLBACK 1: Try pnpm directly
-if [ -f "$PNPM_PATH" ] || command -v pnpm &> /dev/null; then
-    echo "Attempting Fallback 1 (pnpm)..."
+# Check if already configured
+if [ -f "$APP_DIR/artifacts/wa-bridge/.env" ] && [ -f "$APP_DIR/artifacts/wa-bridge/config.json" ]; then
+    echo -e "\n\033[0;32m✅ Configuration detected. Skipping Setup Wizard.\033[0m"
+    SETUP_SUCCESS=true
+else
+    echo -e "\n🚀 \033[0;32mInitializing Setup Wizard...\033[0m\n"
+    
+    # Install dependencies for setup
+    $PNPM_PATH install
+    
+    # Run setup wizard
     if $PNPM_PATH --filter @workspace/wa-bridge run setup; then
         SETUP_SUCCESS=true
-    fi
-fi
-
-# FALLBACK 2: Try npm
-if [ "$SETUP_SUCCESS" != "true" ]; then
-    echo "Attempting Fallback 2 (npm)..."
-    if npm --prefix artifacts/wa-bridge run setup; then
-        SETUP_SUCCESS=true
-    fi
-fi
-
-# FALLBACK 3: Emergency direct execution with local tsx
-if [ "$SETUP_SUCCESS" != "true" ]; then
-    echo -e "${Y}⚠️  Standard runners failed. Attempting Fallback 3 (Local tsx)...${NC}"
-    if [ -d "artifacts/wa-bridge" ]; then
-        cd artifacts/wa-bridge
-        # Install tsx locally if missing
-        if [ ! -f "node_modules/.bin/tsx" ]; then
-            echo "Installing tsx locally..."
-            npm install tsx --no-save
-        fi
-        
-        if [ -f "node_modules/.bin/tsx" ]; then
-            ./node_modules/.bin/tsx src/setup/run.ts && SETUP_SUCCESS=true
-        elif command -v npx &> /dev/null; then
-            npx tsx src/setup/run.ts && SETUP_SUCCESS=true
-        else
-            echo -e "${R}❌ FATAL: Could not run setup wizard. No tsx or npx found.${NC}"
-            exit 1
-        fi
-        cd ../..
     else
-        echo -e "${R}❌ FATAL: Could not locate wa-bridge directory.${NC}"
+        echo -e "\033[0;31m❌ Setup failed to complete.\033[0m"
         exit 1
     fi
 fi
 
 if [ "$SETUP_SUCCESS" = "true" ]; then
-    echo -e "\n${G}✅ Setup Wizard completed successfully.${NC}"
-    echo -e "🚀 ${G}Building and starting the bot...${NC}\n"
-    
-    # Ensure dependencies are installed and project is built
-    if command -v pnpm &> /dev/null; then
-        pnpm install
-        echo -e "\n${G}Building wa-bridge...${NC}"
-        pnpm --filter @workspace/wa-bridge run build
-        echo -e "\n${G}Starting bot...${NC}"
-        exec pnpm --filter @workspace/wa-bridge run start
-    else
-        npm install
-        echo -e "\n${G}Building wa-bridge...${NC}"
-        npm --prefix artifacts/wa-bridge run build
-        echo -e "\n${G}Starting bot...${NC}"
-        exec npm --prefix artifacts/wa-bridge start
+    ENV_FILE="$APP_DIR/artifacts/wa-bridge/.env"
+    # Ensure .env exists and is sourced before running env-check
+    if [ ! -f "$ENV_FILE" ]; then
+        touch "$ENV_FILE"
     fi
-else
-    echo -e "${R}❌ Setup failed to complete.${NC}"
-    exit 1
+    source "$ENV_FILE" || true # Source it, but don't fail if it's empty
+
+    # Run env-check to ensure environment variables are loaded and validated
+    # This will prompt for missing variables and write them to .env if in TTY
+    $PNPM_PATH --filter @workspace/wa-bridge run env-check
+
+    # Re-source the .env file to pick up any changes made by env-check
+    source "$ENV_FILE" || true
+
+
+    echo -e "\n🚀 \033[0;32mBuilding and starting the bot...\033[0m\n"
+    
+    # Install dependencies
+    $PNPM_PATH install
+    
+    # Build project
+    echo -e "\n\033[0;32mBuilding wa-bridge...\033[0m"
+    $PNPM_PATH --filter @workspace/wa-bridge run build
+    
+    # Verify build
+    if [ ! -f "$APP_DIR/artifacts/wa-bridge/dist/index.js" ]; then
+        echo -e "\033[0;31m❌ Build failed. dist/index.js not found.\033[0m"
+        exit 1
+    fi
+    
+    # Configure PM2
+    echo -e "\n\033[0;32mConfiguring PM2...\033[0m"
+    
+    # Stop existing if any
+    $PM2_PATH stop wa-bridge 2>/dev/null || true
+    $PM2_PATH delete wa-bridge 2>/dev/null || true
+    
+    # Start with PM2
+    cd "$APP_DIR/artifacts/wa-bridge"
+    $PM2_PATH start dist/index.js --name wa-bridge --update-env --env production
+    
+    # Save PM2 state and configure startup
+    echo -e "\n\033[0;32mConfiguring PM2 Startup...\033[0m"
+    $PM2_PATH save
+    
+    # Detect OS and setup startup script
+    STARTUP_CMD=$($PM2_PATH startup | grep "sudo env PATH")
+    if [ ! -z "$SUDO" ]; then
+        PM2_PATH="$(find_cmd pm2)"
+        STARTUP_CMD="sudo env PATH=\$PATH:\$(dirname \"$PM2_PATH\") \"$PM2_PATH\" startup"
+    fi
+    if [ ! -z "$STARTUP_CMD" ]; then
+        eval "$STARTUP_CMD"
+    fi
+    
+    echo -e "\n\033[0;32m✅ Deployment complete! Bot is running via PM2.\033[0m"
+    echo -e "Use '\033[0;33mpm2 logs wa-bridge\033[0m' to view logs."
 fi
+
+

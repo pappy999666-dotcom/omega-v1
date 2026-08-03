@@ -1,13 +1,13 @@
 import { QuestionManager } from './QuestionManager.js';
 import { Validator } from './Validator.js';
-import { Installer } from './Installer.js';
-import { DependencyChecker } from './DependencyChecker.js';
+
 import { ConfigWriter } from './ConfigWriter.js';
 import { ConnectionTester } from './ConnectionTester.js';
 import { SummaryGenerator } from './SummaryGenerator.js';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { stdin as input, stdout as output } from 'process';
 
 export async function runSetupWizard() {
     const qm = new QuestionManager();
@@ -21,74 +21,29 @@ export async function runSetupWizard() {
     console.log('      OMEGA-V1 • CYBERNETIC SETUP WIZARD');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m\n');
 
-    const setupMode = await qm.select('Choose Setup Mode', [
+    const isQuick = (!input.isTTY || !output.isTTY);
+    const setupMode = isQuick ? 'Quick Setup (Zero-Config, uses smart defaults)' : await qm.select('Choose Setup Mode', [
         'Quick Setup (Zero-Config, uses smart defaults)',
         'Advanced Setup (Custom configuration)'
     ]);
-    const isQuick = setupMode.startsWith('Quick');
 
-    // 1. Dependency Detection
-    console.log('\n\x1b[36m[1/6] Scanning System Dependencies...\x1b[0m');
-    const requiredDeps = ['node', 'npm', 'pnpm', 'git', 'ffmpeg', 'curl', 'zip', 'tar'];
-    const optionalDeps = ['redis', 'mongodb', 'imagemagick', 'python', 'bun'];
-    
-    const allDeps = [...requiredDeps, ...optionalDeps];
-    for (const dep of allDeps) {
-        const isMissing = DependencyChecker.checkMissingDependencies([dep]).length > 0;
-        if (isMissing) {
-            if (requiredDeps.includes(dep)) {
-                console.log(`\x1b[31m✖ ${dep} is missing (REQUIRED)\x1b[0m`);
-                const choice = isQuick ? `Attempt to install ${dep} automatically` : await qm.select(`How would you like to handle missing ${dep}?`, [
-                    `Attempt to install ${dep} automatically`,
-                    `I will install it manually (Exit setup)`,
-                    `Continue anyway (Not recommended)`
-                ]);
-                
-                if (choice === `Attempt to install ${dep} automatically`) {
-                    const success = Installer.installSystemDependency(dep);
-                    if (!success) {
-                        console.log(`\x1b[31mFailed to install ${dep}. Please install it manually.\x1b[0m`);
-                        if (await qm.confirm('Exit setup to fix dependencies?')) {
-                            process.exit(1);
-                        }
-                    }
-                } else if (choice === `I will install it manually (Exit setup)`) {
-                    process.exit(1);
-                }
-            } else {
-                console.log(`\x1b[33m⚠ ${dep} is missing (Optional)\x1b[0m`);
-                const choice = isQuick ? `Install ${dep} automatically (Recommended)` : await qm.select(`${dep} is recommended but not found.`, [
-                    `Install ${dep} automatically (Recommended)`,
-                    `Skip (I don't need this feature)`,
-                    `Use remote service (for Redis/Mongo)`
-                ]);
-                if (choice === `Install ${dep} automatically (Recommended)`) {
-                    const success = Installer.installSystemDependency(dep);
-                    if (success) {
-                        if (dep === 'mongodb') mongodbInstalledLocally = true;
-                        if (dep === 'redis') redisInstalledLocally = true;
-                        console.log(`\x1b[32m✔ ${dep} installed and started successfully\x1b[0m`);
-                    }
-                }
-            }
-        } else {
-            console.log(`\x1b[32m✔ ${dep} is ready\x1b[0m`);
-            if (dep === 'mongodb') mongodbInstalledLocally = true;
-            if (dep === 'redis') redisInstalledLocally = true;
-        }
-    }
+    // 1. Dependency Detection is now handled by the main setup script.
+    console.log('\n\x1b[36m[1/6] System Dependencies assumed ready by main setup script.\x1b[0m');
+    // Set these to true as the main setup script ensures they are installed
+    mongodbInstalledLocally = true;
+    redisInstalledLocally = true;
 
     // 2. Interactive Questions
     console.log('\n\x1b[36m[2/6] Identity & Access Configuration...\x1b[0m');
     
     // Telegram
-    env.TELEGRAM_BOT_TOKEN = await qm.askWithValidation(
+    env.TELEGRAM_BOT_TOKEN = isQuick && process.env.TELEGRAM_BOT_TOKEN ? process.env.TELEGRAM_BOT_TOKEN : await qm.askWithValidation(
         'Telegram Bot Token (@BotFather)',
         Validator.isTelegramToken,
         'Invalid Token format. Expected 123456789:ABCDefghIJKLmnopQRSTuvwxYZ'
     );
 
-    env.TELEGRAM_OWNER_ID = await qm.askWithValidation(
+    env.TELEGRAM_OWNER_ID = isQuick && process.env.TELEGRAM_OWNER_ID ? process.env.TELEGRAM_OWNER_ID : await qm.askWithValidation(
         'Owner Telegram ID (numeric)',
         Validator.isNumeric,
         'Owner ID must be numeric. Use @userinfobot to find it.'

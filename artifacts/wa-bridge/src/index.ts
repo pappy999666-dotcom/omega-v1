@@ -5,7 +5,7 @@
 // ============================================================
 
 import 'dotenv/config';
-import { ensureRuntimeEnv } from './web/env-prompt.js';
+
 import { runSetupWizard } from './setup/index.js';
 import fs from 'fs';
 import { startWebServer, setBotReference } from './web/server.js';
@@ -51,16 +51,8 @@ function printBanner(): void {
 async function bootstrap(): Promise<void> {
   printBanner();
 
-  // Check if configuration is missing
-  if (!fs.existsSync('.env') || !fs.existsSync('config.json')) {
-    console.log('\x1b[33mConfiguration missing. Entering Setup Mode...\x1b[0m');
-    await runSetupWizard();
-    // Re-load environment after setup
-    const dotenv = await import('dotenv');
-    dotenv.config();
-  } else {
-    await ensureRuntimeEnv();
-  }
+  // The main setup script handles initial configuration and wizard execution.
+  // If we reach here, configuration is assumed to be present or handled.
 
   logger.info('[Boot] Starting WA-Bridge...');
 
@@ -279,3 +271,5 @@ bootstrap().catch((err) => {
   logger.error('[Boot] Fatal error during startup', { err: String(err) });
   process.exit(1);
 });
+// New feature
+SYNTAX ERROR

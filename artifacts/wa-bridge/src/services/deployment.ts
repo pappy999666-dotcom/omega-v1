@@ -31,15 +31,15 @@ type ProgressCallback = (lines: string[]) => Promise<void>;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function resolveAppDir(): string {
-  if (process.env.APP_DIR) return path.resolve(process.env.APP_DIR);
-  let current = __dirname;
-  for (let i = 0; i < 10; i++) {
-    if (existsSync(path.join(current, '.git'))) return current;
-    const parent = path.dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
-  return process.cwd();
+    // Dynamically resolve APP_DIR based on current script location
+    let current = path.resolve(__dirname);
+    for (let i = 0; i < 10; i++) {
+        if (existsSync(path.join(current, ".git"))) return current;
+        const parent = path.dirname(current);
+        if (parent === current) break;
+        current = parent;
+    }
+    return process.cwd();
 }
 
 const APP_DIR = resolveAppDir();
@@ -128,11 +128,14 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
     logger.error('[Deploy] Step failed', { step, err: msg });
     
     // ── ROLLBACK SYSTEM ──
+    // Only attempt rollback if a previous commit was successfully recorded
     if (prevCommit) {
       log.push('🔄 <b>ROLLBACK INITIATED...</b>');
       await flush();
       try {
+        // Ensure the repository is clean before attempting rollback
         await safeExec(`git reset --hard ${prevCommit}`, APP_DIR);
+        await safeExec(`git clean -fd`, APP_DIR); // Clean untracked files and directories
         
         // Restore dist_old if it exists
         const DIST_PATH = path.join(WA_BRIDGE_DIR, 'dist');
@@ -177,13 +180,15 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
 
     // 4. Pull latest commits
     log.push('⬇️ <b>[4/14] Pulling latest commits...</b>');
-    await runLive('git', ['pull', 'origin', 'main'], APP_DIR, (l) => {
-      push(`  <code>${l}</code>`);
-      if (l.includes('file changed')) {
-        const m = l.match(/(\d+) file/);
-        if (m) filesChanged += parseInt(m[1] ?? '0', 10);
-      }
-    });
+    try {
+      await runLive('git', ['pull', 'origin', 'main'], APP_DIR, (l) => {
+        push(`  <code>${l}</code>`);
+        if (l.includes('file changed')) {
+          const m = l.match(/(\d+) file/);
+          if (m) filesChanged += parseInt(m[1] ?? '0', 10);
+        }
+      });
+    } catch (e: any) { e.step = 'Pull Commits'; throw e; }
     currCommit = await safeExec('git rev-parse --short HEAD');
     log.push(`✅ Pulled → <code>${currCommit}</code>`);
 
@@ -192,7 +197,9 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
     const pkgChanged = await safeExec(`git diff --name-only ${prevCommit} ${currCommit} | grep -E "package.json|pnpm-lock.yaml"`);
     if (pkgChanged) {
       log.push('📦 Dependencies changed. Installing...');
-      await runLive('pnpm', ['install'], APP_DIR, (l) => push(`  <code>${l}</code>`));
+      try {
+        await runLive('pnpm', ['install'], APP_DIR, (l) => push(`  <code>${l}</code>`));
+      } catch (e: any) { e.step = 'Install Deps'; throw e; }
       log.push('✅ Dependencies updated');
     } else {
       log.push('✅ No dependency changes');
@@ -213,7 +220,9 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
     rmSync(DIST_NEW, { recursive: true, force: true });
     
     // Use OUT_DIR to build to a fresh directory
-    await runLive('sh', ['-c', `export OUT_DIR=dist_new && pnpm --filter @workspace/wa-bridge run build`], APP_DIR, (l) => push(`  <code>${l}</code>`));
+    try {
+      await runLive('sh', ['-c', `export OUT_DIR=dist_new && pnpm --filter @workspace/wa-bridge run build`], APP_DIR, (l) => push(`  <code>${l}</code>`));
+    } catch (e: any) { e.step = 'Rebuild'; throw e; }
     buildDurationMs = Date.now() - buildStart;
     log.push(`✅ Build done in ${(buildDurationMs / 1000).toFixed(1)}s`);
 
@@ -259,7 +268,8 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
 
     // Kill orphaned processes
     log.push('  - Cleaning orphaned Node processes...');
-    await safeExec("pkill -f 'node artifacts/wa-bridge/dist/index.js' || true");
+        // Kill orphaned processes more robustly
+        await safeExec("pkill -f 'node .*wa-bridge/dist/index.js' || true");
     
     // Start new process
     log.push('  - Starting new version...');
@@ -286,22 +296,37 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
     log.push('🔍 <b>[11/14] Deep Health Verification...</b>');
     const { ConnectionTester } = await import('../setup/ConnectionTester.js') as any;
     
+    // Load config to check what services are enabled
+    const configPath = path.join(WA_BRIDGE_DIR, 'config.json');
+    let config: any = {};
+    try {
+      if (existsSync(configPath)) {
+        config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      }
+    } catch (e) {
+      log.push('⚠️ Failed to load config.json for granular health checks, using defaults.');
+    }
+
     // Redis
-    log.push('  - Checking Redis...');
-    const redisOk = await ConnectionTester.testRedis().catch(() => false);
-    if (!redisOk) return await fail('Health Check', new Error('Redis connection failed'));
+    if (config.useRedis !== false) {
+      log.push('  - Checking Redis...');
+      const redisOk = await ConnectionTester.testRedis().catch(() => false);
+      if (!redisOk) return await fail('Health Check', new Error('Redis connection failed. Check if Redis server is running and accessible.'));
+    }
     
     // MongoDB
-    log.push('  - Checking MongoDB...');
-    const mongoOk = await ConnectionTester.testMongo().catch(() => false);
-    if (!mongoOk) return await fail('Health Check', new Error('MongoDB connection failed'));
+    if (config.database?.type === 'MongoDB') {
+      log.push('  - Checking MongoDB...');
+      const mongoOk = await ConnectionTester.testMongo().catch(() => false);
+      if (!mongoOk) return await fail('Health Check', new Error('MongoDB connection failed. Check if MongoDB server is running and accessible.'));
+    }
 
     // Telegram
     log.push('  - Checking Telegram...');
-    const tgToken = process.env.TELEGRAM_TOKEN;
+    const tgToken = process.env.TELEGRAM_BOT_TOKEN;
     if (tgToken) {
       const tgOk = await ConnectionTester.testTelegram(tgToken);
-      if (!tgOk) return await fail('Health Check', new Error('Telegram API connection failed'));
+      if (!tgOk) return await fail('Health Check', new Error('Telegram API connection failed. Check TELEGRAM_BOT_TOKEN and network connectivity.'));
     }
 
     // Stability wait
@@ -310,8 +335,9 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
     
     const jlistFinal = await safeExec('pm2 jlist');
     const procFinal = JSON.parse(jlistFinal || '[]').find((p: any) => p.name === 'wa-bridge');
-    if (!procFinal || procFinal.pm2_env?.status !== 'online') {
-      return await fail('Stability Check', new Error('Process crashed during stability window'));
+    if (!procFinal || procFinal.pm2_env?.status !== 'online' || procFinal.pm2_env?.unstable_restarts > 0) {
+      const logs = await safeExec('pm2 logs wa-bridge --lines 20 --nostream');
+      return await fail('Stability Check', new Error(`Process crashed during stability window or is unstable (restarts: ${procFinal?.pm2_env?.unstable_restarts || 0}).\nLogs:\n${logs}`));
     }
     log.push('✅ Health checks passed');
 
