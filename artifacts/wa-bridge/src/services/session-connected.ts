@@ -70,8 +70,14 @@ async function fetchWAProfile(
       profilePictureUrl(jid: string, type: string): Promise<string | null>;
     }).profilePictureUrl(jid, 'image').catch(() => null);
     if (ppUrl) {
-      const res = await fetch(ppUrl);
-      if (res.ok) photoBuffer = Buffer.from(await res.arrayBuffer());
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      try {
+        const res = await fetch(ppUrl, { signal: controller.signal });
+        if (res.ok) photoBuffer = Buffer.from(await res.arrayBuffer());
+      } finally {
+        clearTimeout(timeout);
+      }
     }
   } catch { /* ignore */ }
   return { name, photoBuffer };

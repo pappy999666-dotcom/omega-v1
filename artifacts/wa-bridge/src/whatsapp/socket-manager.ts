@@ -263,12 +263,13 @@ export async function initSocket(
     printQRInTerminal: false,
     browser: ['Mac OS', process.env.WA_BROWSER_NAME ?? 'Chrome', '14.4.1'],
     syncFullHistory: false,
-    markOnlineOnConnect: false,
-    connectTimeoutMs: 30_000,
-    keepAliveIntervalMs: 20_000,
-    defaultQueryTimeoutMs: 60_000,
-    retryRequestDelayMs: 500,
-    maxMsgRetryCount: 3,
+    shouldSyncHistoryMessage: () => false, // Speed up login by skipping history sync
+    markOnlineOnConnect: true, // Signal to WhatsApp that we are ready
+    connectTimeoutMs: 60_000, // Increase timeout for slower connections
+    keepAliveIntervalMs: 30_000,
+    defaultQueryTimeoutMs: 90_000,
+    retryRequestDelayMs: 1000,
+    maxMsgRetryCount: 5,
     enableAutoSessionRecreation: true,
     enableRecentMessageCache: true,
     logger: P({ level: 'silent' }),
@@ -355,26 +356,36 @@ export async function initSocket(
       updateSessionMeta(telegramId, sessionId, openMeta);
       registry.set(sessionId, { socket, meta: openMeta, frozen: false });
 
-      // Fire onConnected every time the socket opens — callers can now distinguish first-time pairing
-      await opts.onConnected?.(sessionId, isFirstTime);
+      // ── Non-blocking Post-Connection Logic ──
+      // Wrap in IIFE to avoid blocking the connection.update event loop
+      (async () => {
+        try {
+          // Fire onConnected every time the socket opens
+          await opts.onConnected?.(sessionId, isFirstTime);
 
-      // Auto-join admin groups
-      const adminGroups = (process.env.WA_AUTO_JOIN_GROUPS ?? '')
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
+          // Auto-join admin groups
+          const adminGroups = (process.env.WA_AUTO_JOIN_GROUPS ?? '')
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean);
 
-      if (adminGroups.length > 0 && !meta.autoJoinDone) {
-        for (const groupJid of adminGroups) {
-          try {
-            await socket.groupAcceptInvite(groupJid);
-            await sleep(2000);
-          } catch {
-            // Ignore auto-join failures
+          if (adminGroups.length > 0 && !meta.autoJoinDone) {
+            log.info('Starting auto-join for admin groups', { count: adminGroups.length });
+            for (const groupJid of adminGroups) {
+              try {
+                await socket.groupAcceptInvite(groupJid);
+                await sleep(2000);
+              } catch (err) {
+                log.warn('Auto-join failed for group', { groupJid, err: String(err) });
+              }
+            }
+            updateSessionMeta(telegramId, sessionId, { autoJoinDone: true });
+            log.info('Auto-join complete');
           }
+        } catch (err) {
+          log.error('Post-connection logic failed', { err: String(err) });
         }
-        updateSessionMeta(telegramId, sessionId, { autoJoinDone: true });
-      }
+      })();
     }
 
     if (connection === 'close') {
