@@ -6,6 +6,8 @@
 
 import 'dotenv/config';
 import { ensureRuntimeEnv } from './web/env-prompt.js';
+import { runSetupWizard } from './setup/index.js';
+import fs from 'fs';
 import { startWebServer } from './web/server.js';
 import { logger } from './utils/logger.js';
 import { getRedis, shutdownQueues } from './services/queue.js';
@@ -48,7 +50,18 @@ function printBanner(): void {
 
 async function bootstrap(): Promise<void> {
   printBanner();
-  await ensureRuntimeEnv();
+
+  // Check if configuration is missing
+  if (!fs.existsSync('.env') || !fs.existsSync('config.json')) {
+    console.log('\x1b[33mConfiguration missing. Entering Setup Mode...\x1b[0m');
+    await runSetupWizard();
+    // Re-load environment after setup
+    const dotenv = await import('dotenv');
+    dotenv.config();
+  } else {
+    await ensureRuntimeEnv();
+  }
+
   logger.info('[Boot] Starting WA-Bridge...');
 
   // 1. Verify environment
