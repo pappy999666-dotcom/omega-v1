@@ -232,6 +232,7 @@ Mission  : Building the next generation of WhatsApp automation.
 <div align="center">
 
 ═══════════════════════════════════════════════
+
             ⸸ 𝕻 𝕬 𝕻 𝕻 𝖄 ×͜×
         SYSTEM STATUS : ONLINE
 ═══════════════════════════════════════════════
