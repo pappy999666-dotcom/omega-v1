@@ -16,6 +16,7 @@
 
 import type { BridgeWASocket as WASocket, WebMessageInfo } from '../baileys-types.js';
 import { resolveTarget, resolveTargetNumber } from '../utils/resolve-target.js';
+import { PreviewManager } from '../../preview-engine/index.js';
 
 /**
  * Extract everything after the first word (command name) from the raw message text,
@@ -263,9 +264,11 @@ export async function cmdPromote(
   const promErr = await participantUpdate(socket, groupJid, target.jid, 'promote');
   if (promErr !== null) return errorCard('Promote', `Could not promote @${target.number}.\n\nReason: ${promErr}`);
 
-  await socket.sendMessage(groupJid, {
-    text: `✅ @${target.number} has been promoted to admin in *${meta.subject}*.`,
-    mentions: [target.jid],
+  await PreviewManager.send(socket as any, groupJid, `✅ @${target.number} has been promoted to admin in *${meta.subject}*.`, {
+    extra: { mentions: [target.jid] },
+    forceMentions: true,
+    sessionId,
+    telegramId,
   });
   return successCard('Promote', `@${target.number} is now an admin.`);
 }
@@ -298,9 +301,11 @@ export async function cmdDemote(
   const demErr = await participantUpdate(socket, groupJid, target.jid, 'demote');
   if (demErr !== null) return errorCard('Demote', `Could not demote @${target.number}.\n\nReason: ${demErr}`);
 
-  await socket.sendMessage(groupJid, {
-    text: `⬇️ @${target.number} has been demoted from admin in *${meta.subject}*.`,
-    mentions: [target.jid],
+  await PreviewManager.send(socket as any, groupJid, `⬇️ @${target.number} has been demoted from admin in *${meta.subject}*.`, {
+    extra: { mentions: [target.jid] },
+    forceMentions: true,
+    sessionId,
+    telegramId,
   });
   return successCard('Demote', `@${target.number} is no longer an admin.`);
 }
@@ -347,9 +352,11 @@ export async function cmdDnKick(
   const gcName = meta.subject;
 
   // Step 1: Demote
-  await socket.sendMessage(groupJid, {
-    text: `🔄 Demoting @${target.number} before removal…`,
-    mentions: [target.jid],
+  await PreviewManager.send(socket as any, groupJid, `🔄 Demoting @${target.number} before removal…`, {
+    extra: { mentions: [target.jid] },
+    forceMentions: true,
+    sessionId,
+    telegramId,
   });
 
   const dnDemErr = await participantUpdate(socket, groupJid, target.jid, 'demote');
@@ -366,9 +373,11 @@ export async function cmdDnKick(
     return errorCard('DnKick', `@${target.number} was demoted but the removal failed. You may need to kick them manually.\n\nReason: ${dnKickErr}`);
   }
 
-  await socket.sendMessage(groupJid, {
-    text: `✅ @${target.number} has been demoted and removed from *${gcName}*.`,
-    mentions: [target.jid],
+  await PreviewManager.send(socket as any, groupJid, `✅ @${target.number} has been demoted and removed from *${gcName}*.`, {
+    extra: { mentions: [target.jid] },
+    forceMentions: true,
+    sessionId,
+    telegramId,
   });
   return successCard('DnKick', `@${target.number} was demoted then kicked.`, [['Number', target.number]]);
 }
@@ -424,16 +433,20 @@ export async function cmdWarn(
     if (meta?.botIsAdmin) {
       await participantUpdate(socket, groupJid, target.jid, 'remove'); // best-effort
     }
-    await socket.sendMessage(groupJid, {
-      text: `${rendered}\n\n${italic(`Warning ${count}/${threshold} — kicked.`)}`,
-      mentions: [target.jid],
+    await PreviewManager.send(socket as any, groupJid, `${rendered}\n\n${italic(`Warning ${count}/${threshold} — kicked.`)}`, {
+      extra: { mentions: [target.jid] },
+      forceMentions: true,
+      sessionId,
+      telegramId,
     });
     return successCard('Warn → Kicked', `@${target.number} reached ${threshold} warnings and was removed.`);
   }
 
-  await socket.sendMessage(groupJid, {
-    text: `${rendered}\n\n${italic(`Warning ${count}/${threshold}. ${threshold - count} more will result in a kick.`)}`,
-    mentions: [target.jid],
+  await PreviewManager.send(socket as any, groupJid, `${rendered}\n\n${italic(`Warning ${count}/${threshold}. ${threshold - count} more will result in a kick.`)}`, {
+    extra: { mentions: [target.jid] },
+    forceMentions: true,
+    sessionId,
+    telegramId,
   });
   return successCard('Warned', `@${target.number} warned. (${count}/${threshold})`);
 }
@@ -879,6 +892,8 @@ export function cmdSetModerationMsg(
 
 export async function cmdMute(
   socket: WASocket,
+  telegramId: string,
+  sessionId: string,
   groupJid: string,
   prefix: string
 ): Promise<string> {
@@ -896,8 +911,9 @@ export async function cmdMute(
       groupSettingUpdate(jid: string, setting: string): Promise<unknown>;
     }).groupSettingUpdate(groupJid, 'announcement');
 
-    await socket.sendMessage(groupJid, {
-      text: `🔇 Group has been *muted*. Only admins can send messages.\n_Use ${prefix}unmute to allow all members to send._`,
+    await PreviewManager.send(socket as any, groupJid, `🔇 Group has been *muted*. Only admins can send messages.\n_Use ${prefix}unmute to allow all members to send._`, {
+      sessionId,
+      telegramId,
     });
     return successCard('Group Muted', 'Only admins can now send messages in this group.', [['Group', meta.subject]]);
   } catch (err) {
@@ -908,6 +924,8 @@ export async function cmdMute(
 
 export async function cmdUnmute(
   socket: WASocket,
+  telegramId: string,
+  sessionId: string,
   groupJid: string,
   prefix: string
 ): Promise<string> {
@@ -925,8 +943,9 @@ export async function cmdUnmute(
       groupSettingUpdate(jid: string, setting: string): Promise<unknown>;
     }).groupSettingUpdate(groupJid, 'not_announcement');
 
-    await socket.sendMessage(groupJid, {
-      text: `🔊 Group has been *unmuted*. Everyone can now send messages.\n_Use ${prefix}mute to restrict to admins only._`,
+    await PreviewManager.send(socket as any, groupJid, `🔊 Group has been *unmuted*. Everyone can now send messages.\n_Use ${prefix}mute to restrict to admins only._`, {
+      sessionId,
+      telegramId,
     });
     return successCard('Group Unmuted', 'All members can now send messages in this group.', [['Group', meta.subject]]);
   } catch (err) {
@@ -983,9 +1002,11 @@ export async function cmdBlock(
     sock.updateBlockStatus(`${target.number}@s.whatsapp.net`, 'block').catch(() => {})
   );
 
-  await socket.sendMessage(groupJid, {
-    text: `🚫 @${target.number} has been kicked and blocked from *${meta.subject}*.`,
-    mentions: [targetJid],
+  await PreviewManager.send(socket as any, groupJid, `🚫 @${target.number} has been kicked and blocked from *${meta.subject}*.`, {
+    extra: { mentions: [targetJid] },
+    forceMentions: true,
+    sessionId,
+    telegramId,
   }).catch(() => {});
 
   return successCard('Blocked', `@${target.number} was kicked and blocked.`, [['Number', target.number]]);

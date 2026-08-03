@@ -395,18 +395,11 @@ async function processMessageWithConfig(
       }
     }
 
-    const sentWithButtons = await sendWithUrlButtons(
-      socket,
-      groupJid,
-      { text: visibleText, ...(mentions.length > 0 ? { mentions } : {}) },
-      buttons,
-      { quoted: msg }
-    );
-    if (sentWithButtons) return;
-
     await PreviewManager.send(socket as any, groupJid, visibleText, {
       quoted: msg,
       extra: mentions.length > 0 ? { mentions } : undefined,
+      sessionId,
+      telegramId,
     });
   };
 
@@ -466,13 +459,18 @@ async function processMessageWithConfig(
   const sendMenuResponse = async (title: string, body: string): Promise<void> => {
     const meta = loadSessionMeta(telegramId, sessionId);
     const media = meta?.menuMedia;
-    const buttons = parseUrlButtons(getGlobalMenuUrl());
     if (media?.filePath && fs.existsSync(media.filePath)) {
       const content = media.type === 'video'
         ? { video: fs.readFileSync(media.filePath), caption: body, mimetype: media.mimeType }
         : { image: fs.readFileSync(media.filePath), caption: body, mimetype: media.mimeType };
-      if (await sendWithUrlButtons(socket, groupJid, content, buttons, { quoted: msg })) return;
-      await socket.sendMessage(groupJid, content, { quoted: msg });
+      
+      // Pass through PreviewManager to ensure global pipeline (buttons, mentions) is applied
+      await PreviewManager.send(socket as any, groupJid, body, {
+        quoted: msg,
+        extra: content,
+        sessionId,
+        telegramId,
+      });
       return;
     }
     await reply(body);
@@ -533,13 +531,23 @@ async function processMessageWithConfig(
   const isOwnerSender = Boolean(msg.key.fromMe);
   // For unresolved LIDs, check sudo via phoneNumber override
   const sudoCheckJid = senderPhoneOverride ? `${senderPhoneOverride}@s.whatsapp.net` : senderJid;
-  if (!replyOverride && !isAuthorizedCommandSender(isOwnerSender, sudoCheckJid, config.sudoNumbers)) {
-    logger.warn('[EventHandler] Silently ignored unauthorized WhatsApp command', {
-      sessionId,
-      command,
-      sender: normalizeWhatsAppNumber(senderJid),
-    });
-    return;
+  const isAuthorized = replyOverride || isAuthorizedCommandSender(isOwnerSender, sudoCheckJid, config.sudoNumbers);
+
+  if (!isAuthorized) {
+    const isPublicCommand = ['menu', 'help', 'gmenu', 'pair'].includes(command);
+    if (config.publicMode && isPublicCommand) {
+      // Allow public commands
+    } else {
+      if (config.publicMode && config.permissionDeniedResponse) {
+        await reply(errorCard('PERMISSION DENIED', config.permissionDeniedResponse));
+      }
+      logger.warn('[EventHandler] Silently ignored unauthorized WhatsApp command', {
+        sessionId,
+        command,
+        sender: normalizeWhatsAppNumber(senderJid),
+      });
+      return;
+    }
   }
 
   logger.info(`[EventHandler] Command: ${command}`, {
@@ -620,6 +628,70 @@ async function processMessageWithConfig(
       }
       updateSessionConfig(telegramId, sessionId, { prefix: newPrefix === 'null' ? '' : newPrefix, nullPrefix: newPrefix === 'null' });
       await reply(successCard('PREFIX UPDATED', `Commands now respond to: ${bold(newPrefix)}`, [['New prefix', newPrefix]]));
+      break;
+    }
+
+    // ── Public Mode ──
+    case 'public': {
+      const sub = args[0]?.toLowerCase();
+      if (sub === 'on' || sub === 'off') {
+        const enabled = sub === 'on';
+        updateSessionConfig(telegramId, sessionId, { publicMode: enabled });
+        await reply(successCard('PUBLIC MODE', `Public mode is now ${bold(sub.toUpperCase())}.`, [
+          ['Status', enabled ? '✅ Enabled' : '❌ Disabled'],
+          ['Allowed', 'menu, gmenu, pair'],
+        ]));
+      } else {
+        await reply(asciiBox({
+          title: 'PUBLIC MODE',
+          emoji: '🌍',
+          rows: [
+            ['Current', config.publicMode ? '✅ ON' : '❌ OFF'],
+            ['Usage', `${config.prefix}public <on|off>`],
+            ['Info', 'Allows public users to use menu, gmenu, and pair.'],
+          ],
+        }));
+      }
+      break;
+    }
+
+    case 'publicresponse': {
+      const response = args.join(' ').trim();
+      if (!response) {
+        await reply(asciiBox({
+          title: 'PUBLIC RESPONSE',
+          emoji: '🚫',
+          rows: [
+            ['Current', config.permissionDeniedResponse || 'None'],
+            ['Usage', `${config.prefix}publicresponse <text>`],
+          ],
+        }));
+        break;
+      }
+      updateSessionConfig(telegramId, sessionId, { permissionDeniedResponse: response });
+      await reply(successCard('RESPONSE UPDATED', 'Public permission denied response updated.', [['New response', response]]));
+      break;
+    }
+
+    // ── Tag Reply Toggle ──
+    case 'tagreply': {
+      const sub = args[0]?.toLowerCase();
+      if (sub === 'on' || sub === 'off') {
+        const enabled = sub === 'on';
+        updateSessionConfig(telegramId, sessionId, { tagReply: enabled });
+        await reply(successCard('TAG REPLY', `Tagging in replies is now ${bold(sub.toUpperCase())}.`, [
+          ['Status', enabled ? '✅ Enabled' : '❌ Disabled'],
+        ]));
+      } else {
+        await reply(asciiBox({
+          title: 'TAG REPLY',
+          emoji: '🏷️',
+          rows: [
+            ['Current', config.tagReply ? '✅ ON' : '❌ OFF'],
+            ['Usage', `${config.prefix}tagreply <on|off>`],
+          ],
+        }));
+      }
       break;
     }
 
@@ -1576,13 +1648,13 @@ async function processMessageWithConfig(
     // ── Mute / Unmute ──
     case 'mute': {
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
-      await reply(await cmdMute(socket, groupJid, config.prefix));
+      await reply(await cmdMute(socket, telegramId, sessionId, groupJid, config.prefix));
       break;
     }
 
     case 'unmute': {
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
-      await reply(await cmdUnmute(socket, groupJid, config.prefix));
+      await reply(await cmdUnmute(socket, telegramId, sessionId, groupJid, config.prefix));
       break;
     }
 
@@ -2041,7 +2113,15 @@ async function processMessageWithConfig(
                 `🔑 ${bold('Pairing code for')} +${normalizedPhone}\n\n` +
                 `*${code}*\n\n` +
                 `_Open WhatsApp → Linked Devices → Link with phone number → Enter code above._`,
-            });
+              nativeFlow: {
+                buttons: [
+                  {
+                    text: 'Copy Code',
+                    copy: code,
+                  },
+                ],
+              },
+            } as any);
           } catch { /* ignore */ }
         },
         onPairingError: async (error) => {

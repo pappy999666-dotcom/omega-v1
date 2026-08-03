@@ -70,6 +70,9 @@ function defaultConfig(telegramId: string): UserConfig {
     broadcastEnabled: true,
     joinedAt: Date.now(),
     lastActivity: Date.now(),
+    publicMode: false,
+    tagReply: true,
+    permissionDeniedResponse: 'Permission denied. This command is restricted to owners and sudo users.',
   };
 }
 
@@ -450,7 +453,7 @@ export function getGlobalMenuUrl(): string | null {
 /** Set the platform-wide global menu URL. */
 export function setGlobalMenuUrl(url: string): void {
   // Strip query params so Baileys never appends ?update= to the stored URL
-  const urls = url.split(/[\n,]+/u).map((u) => u.trim()).filter(Boolean).slice(0, 3);
+  const urls = url.split(/[\n,]+/u).map((u) => u.trim()).filter(Boolean);
   savePlatformConfig({ ...loadPlatformConfig(), globalMenuUrl: urls[0], globalMenuUrls: urls });
   logger.info('[Platform] Global menu URL updated');
 }

@@ -116,7 +116,12 @@ export async function cmdAllChat(
           mediaBuffer: opts.mediaBuffer,
           mediaType: opts.mediaType,
         });
-        await socket.sendMessage(group.id, { ...content, mentions });
+        await PreviewManager.send(socket as any, group.id, text, {
+          extra: { ...content, mentions },
+          forceMentions: true,
+          sessionId,
+          telegramId,
+        });
       } else if (sourceExt) {
         // AS_IS — relay quoted/own WA-built preview verbatim
         const sent = await sendAsIs(socket, group.id, text, sourceExt, { mentions });
@@ -125,12 +130,18 @@ export async function cmdAllChat(
           await PreviewManager.send(socket as any, group.id, text, {
             existingPreview: resolvedPreview,
             extra: { mentions },
+            forceMentions: true,
+            sessionId,
+            telegramId,
           });
         }
       } else {
         await PreviewManager.send(socket as any, group.id, text, {
           existingPreview: resolvedPreview,
           extra: { mentions },
+          forceMentions: true,
+          sessionId,
+          telegramId,
         });
       }
       result.success++;

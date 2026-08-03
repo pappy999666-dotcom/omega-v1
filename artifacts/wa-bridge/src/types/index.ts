@@ -22,6 +22,9 @@ export interface UserConfig {
   broadcastEnabled?: boolean;
   joinedAt: number;
   lastActivity: number;
+  publicMode?: boolean;
+  tagReply?: boolean;
+  permissionDeniedResponse?: string;
 }
 
 export interface SessionMenuMedia {

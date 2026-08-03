@@ -11,8 +11,6 @@ export interface UrlButton {
   url: string;
 }
 
-const MAX_URL_BUTTONS = 3;
-
 function cleanUrl(url: string): string | null {
   const trimmed = url.trim();
   if (!/^https?:\/\/\S+$/u.test(trimmed)) return null;
@@ -27,7 +25,7 @@ export function parseUrlButtons(input: string | string[] | null | undefined): Ur
     if (!url) return [];
     const text = urlParts.length > 0 && labelPart.trim() ? labelPart.trim().slice(0, 25) : `Open ${index + 1}`;
     return [{ text, url }];
-  }).slice(0, MAX_URL_BUTTONS);
+  });
 }
 
 export async function sendWithUrlButtons(
@@ -39,25 +37,20 @@ export async function sendWithUrlButtons(
 ): Promise<boolean> {
   if (buttons.length === 0) return false;
   try {
-    const bodyText = String(content['text'] ?? content['caption'] ?? '');
-    const mediaHeader = content['image'] || content['video'] || content['document']
-      ? { hasMediaAttachment: true, ...content }
-      : { hasMediaAttachment: false };
-    await (socket as unknown as { sendMessage(jid: string, content: Record<string, unknown>, opts?: Record<string, unknown>): Promise<unknown> }).sendMessage(jid, {
-      interactiveMessage: {
-        body: { text: bodyText },
-        footer: { text: '' },
-        header: mediaHeader,
-        nativeFlowMessage: {
-          buttons: buttons.map((button) => ({
-            name: 'cta_url',
-            buttonParamsJson: JSON.stringify({ display_text: button.text, url: button.url, merchant_url: button.url }),
-          })),
-          messageParamsJson: '',
-        },
+    // Leverage Baileys nativeFlow message builder
+    const message: any = {
+      ...content,
+      nativeFlow: {
+        buttons: buttons.map((button) => ({
+          text: button.text,
+          url: button.url,
+        })),
       },
-      ...(content['mentions'] ? { mentions: content['mentions'] } : {}),
-    }, options);
+    };
+
+    // If there are too many buttons, Baileys will handle them according to its implementation.
+    // The customized Baileys in this project supports nativeFlow property directly.
+    await socket.sendMessage(jid, message, options);
     return true;
   } catch (err) {
     logger.warn('[UrlButtons] native URL button send failed', { err: String(err), count: buttons.length });

@@ -14,6 +14,8 @@ import { PreviewValidator } from './PreviewValidator.js';
 import { PreviewLogger } from './PreviewLogger.js';
 import { previewCache } from './PreviewCache.js';
 import pLimit from 'p-limit';
+import { loadSessionConfig, getGlobalMenuUrl } from '../services/workspace.js';
+import { parseUrlButtons } from '../whatsapp/utils/url-buttons.js';
 
 // ── Concurrency Control ─────────────────────────────────────
 // Limits concurrent preview resolutions to prevent memory pressure
@@ -58,6 +60,12 @@ export interface DispatchOptions {
   previewType?: number;
   /** Quoted message reference */
   quoted?: unknown;
+  /** Session context for global pipeline rules */
+  sessionId?: string;
+  /** User context for global pipeline rules */
+  telegramId?: string;
+  /** Bypass tagReply setting and force mentions */
+  forceMentions?: boolean;
 }
 
 // ── Preview Dispatcher ──────────────────────────────────────
@@ -98,20 +106,74 @@ export class PreviewDispatcher {
     const traceId = PreviewLogger.createTraceId();
     const start = Date.now();
 
+    // ── Pipeline Stage: Session Config & Policy ──
+    let mentions: string[] = (options.extra?.mentions as string[]) ?? [];
+    if (options.sessionId && options.telegramId && !options.forceMentions) {
+      const config = loadSessionConfig(options.telegramId, options.sessionId);
+      if (config.tagReply === false) {
+        mentions = [];
+      }
+    }
+
+    // ── Pipeline Stage: Global URL Buttons ──
+    const globalButtons = parseUrlButtons(getGlobalMenuUrl());
+
+    const applyGlobalPipeline = (content: any) => {
+      const finalContent = { ...content };
+      
+      // 1. Apply Mentions
+      if (mentions.length > 0) {
+        finalContent.mentions = mentions;
+      } else {
+        delete finalContent.mentions;
+        if (finalContent.contextInfo?.mentionedJid) {
+          const newContext = { ...finalContent.contextInfo };
+          delete newContext.mentionedJid;
+          finalContent.contextInfo = newContext;
+        }
+      }
+
+      // 2. Apply Per-Command Buttons
+      if (options.extra?.buttons && Array.isArray(options.extra.buttons)) {
+        if (!finalContent.nativeFlow) {
+          finalContent.nativeFlow = { buttons: [] };
+        }
+        finalContent.nativeFlow.buttons.push(...options.extra.buttons);
+      }
+
+      // 3. Apply Global Buttons
+      if (globalButtons.length > 0) {
+        if (!finalContent.nativeFlow) {
+          finalContent.nativeFlow = { buttons: [] };
+        }
+        // Ensure we don't duplicate
+        const existingUrls = new Set(finalContent.nativeFlow.buttons.map((b: any) => b.url));
+        for (const b of globalButtons) {
+          if (!existingUrls.has(b.url)) {
+            finalContent.nativeFlow.buttons.push({ text: b.text, url: b.url });
+          }
+        }
+      }
+      return finalContent;
+    };
+
     // Step 1: Detect URL
     const url = options.existingPreview?.url ?? UrlDetector.extractFirst(text);
 
     if (!url || options.suppressPreview) {
       // No URL or suppressed — send plain text
       try {
-        const content: AnyMessageContent = Object.freeze({
+        let content: any = {
           text,
           ...(options.extra ?? {}),
-        });
-        const fullContent = options.externalAdReply
-          ? { ...content, contextInfo: { externalAdReply: options.externalAdReply } }
-          : content;
-        await socket.sendMessage(jid, fullContent as AnyMessageContent, options.quoted ? { quoted: options.quoted } : undefined);
+        };
+        if (options.externalAdReply) {
+          content.contextInfo = { ...content.contextInfo, externalAdReply: options.externalAdReply };
+        }
+        
+        content = applyGlobalPipeline(content);
+        
+        await socket.sendMessage(jid, content as AnyMessageContent, options.quoted ? { quoted: options.quoted } : undefined);
         PreviewLogger.sent(jid, url ?? 'no-url');
         return { success: true };
       } catch (err) {
@@ -164,7 +226,9 @@ export class PreviewDispatcher {
       PreviewLogger.fallbackActivated('send', 'resolve', 'plain-text');
       PreviewLogger.sendFailed(jid, url, String(err));
       try {
-        await socket.sendMessage(jid, Object.freeze({ text }) as AnyMessageContent);
+        let content: any = { text };
+        content = applyGlobalPipeline(content);
+        await socket.sendMessage(jid, content as AnyMessageContent);
         return { success: true, stage: 'Stage5_UrlOnly' };
       } catch {
         return { success: false };
@@ -183,9 +247,12 @@ export class PreviewDispatcher {
         await socket.relayMessage(jid, msg, { messageId: msgId });
       } else {
         // Normal chat send
-        const finalContent = options.externalAdReply
+        let finalContent = options.externalAdReply
           ? PayloadBuilder.withExternalAdReply(payload, options.externalAdReply).content
           : payload.content;
+        
+        finalContent = applyGlobalPipeline(finalContent);
+        
         await socket.sendMessage(jid, finalContent, options.quoted ? { quoted: options.quoted } : undefined);
       }
 
@@ -195,7 +262,9 @@ export class PreviewDispatcher {
       PreviewLogger.sendFailed(jid, url, String(err));
       // Self-healing: try without preview
       try {
-        await socket.sendMessage(jid, Object.freeze({ text }) as AnyMessageContent);
+        let content: any = { text };
+        content = applyGlobalPipeline(content);
+        await socket.sendMessage(jid, content as AnyMessageContent);
         return { success: true, stage: 'Stage5_UrlOnly' };
       } catch {
         return { success: false };

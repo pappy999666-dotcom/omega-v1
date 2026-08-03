@@ -81,11 +81,13 @@ export async function cmdTag(
       await PreviewManager.send(socket as any, groupJid, text, {
         existingPreview: opts.existingPreview,
         extra: { mentions: participants },
+        forceMentions: true,
       });
     } else {
       await PreviewManager.send(socket as any, groupJid, text, {
         existingPreview: opts.existingPreview,
         extra: { mentions: participants },
+        forceMentions: true,
       });
     }
     logger.info(`[Tag] Hidetag sent to ${groupJid} — ${participants.length} pinged`);
@@ -146,12 +148,14 @@ export async function cmdMTag(
           await PreviewManager.send(socket as any, groupJid, fullText, {
             existingPreview: opts.existingPreview,
             extra: { mentions: chunk },
+            forceMentions: true,
           });
         }
       } else {
         await PreviewManager.send(socket as any, groupJid, fullText, {
           existingPreview: opts.existingPreview,
           extra: { mentions: chunk },
+          forceMentions: true,
         });
       }
 
