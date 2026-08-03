@@ -209,8 +209,12 @@ export async function handleNewSession(
           }
         );
       },
-      onConnected: async (sid) => {
+      onConnected: async (sid, isFirstTime) => {
         const socket = getSocket(sid);
+        // Only notify if it's first-time pairing OR if we want to show the session menu
+        // Reconnects (silent) are handled by the socket manager alerts if needed.
+        if (!isFirstTime && !ctx.callbackQuery) return;
+
         // Delegate to centralized connected notification service
         await notifySessionConnected({
           telegramChatId: ctx.chat!.id,
@@ -305,8 +309,10 @@ export async function handlePairingCode(
           { parse_mode: 'HTML', reply_markup: sessionPairKeyboard(sessionId) }
         ).catch(() => {});
       },
-      onConnected: async () => {
+      onConnected: async (sid, isFirstTime) => {
         const socket = getSocket(sessionId);
+        if (!isFirstTime && !ctx.callbackQuery) return;
+
         // Delegate to centralized connected notification service
         await notifySessionConnected({
           telegramChatId: ctx.chat!.id,
@@ -412,7 +418,7 @@ export async function handleReinitSession(
 
   try {
     await reinitSocket(meta, {
-      onConnected: async () => {
+      onConnected: async (sid, isFirstTime) => {
         const socket = getSocket(sessionId);
         // Delegate to centralized connected notification service
         await notifySessionConnected({
@@ -427,7 +433,7 @@ export async function handleReinitSession(
           phone: meta.phone,
           label: meta.label,
           method: 'Reinit',
-          replyMarkup: sessionMenuKeyboard(sessionId) as unknown as Record<string, unknown>,
+          replyMarkup: sessionMenuKeyboard(sessionId, 'open') as unknown as Record<string, unknown>,
           progressMsgId: msg.message_id,
           ownerTelegramId: ctx.telegramId,
         });

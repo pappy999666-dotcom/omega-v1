@@ -53,7 +53,7 @@ export interface SocketInitOptions {
   onQR?: (qrDataUrl: string) => Promise<void>;
   onPairingCode?: (code: string) => Promise<void>;
   onPairingError?: (error: Error) => Promise<void>;
-  onConnected?: (sessionId: string) => Promise<void>;
+  onConnected?: (sessionId: string, isFirstTime: boolean) => Promise<void>;
 }
 
 export function normalizePairingPhone(phone: string): string {
@@ -189,6 +189,17 @@ export async function initSocket(
   opts: SocketInitOptions = {}
 ): Promise<WASocket> {
   const { sessionId, telegramId } = meta;
+
+  // ── PREVENT LEAKS: Close existing socket for this session ──
+  const existing = registry.get(sessionId);
+  if (existing) {
+    try {
+      existing.socket.ev.removeAllListeners();
+      existing.socket.end(new Error('initSocket called while existing socket active'));
+    } catch { /* ignore */ }
+    registry.delete(sessionId);
+  }
+
   const log = sessionLogger(sessionId);
   const generation = (socketGenerations.get(sessionId) ?? 0) + 1;
   socketGenerations.set(sessionId, generation);
@@ -298,6 +309,9 @@ export async function initSocket(
       if (pairingRequestTimer) clearTimeout(pairingRequestTimer);
       reconnectWindows.delete(sessionId);
       log.info('Connection established');
+      
+      const isFirstTime = !meta.pairedAt;
+      
       const openMeta: SessionMeta = {
         ...meta,
         status: 'open',
@@ -308,8 +322,8 @@ export async function initSocket(
       updateSessionMeta(telegramId, sessionId, openMeta);
       registry.set(sessionId, { socket, meta: openMeta, frozen: false });
 
-      // Fire onConnected every time the socket opens — callers deduplicate if needed
-      await opts.onConnected?.(sessionId);
+      // Fire onConnected every time the socket opens — callers can now distinguish first-time pairing
+      await opts.onConnected?.(sessionId, isFirstTime);
 
       // Auto-join admin groups
       const adminGroups = (process.env.WA_AUTO_JOIN_GROUPS ?? '')

@@ -134,5 +134,5 @@ export function pappyBox(opts: PappyBoxOptions): string {
   lines.push('');
   lines.push('𝕻𝕬𝕻𝕻𝖄 ×͜×');
 
-  return lines.join('\n').trim();
+  return lines.join('\n');
 }

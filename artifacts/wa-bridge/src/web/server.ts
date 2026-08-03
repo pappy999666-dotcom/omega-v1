@@ -19,8 +19,15 @@ import { statusDesignEngine, type StatusTheme } from '../services/StatusDesignEn
 import { PreviewManager } from '../preview-engine/index.js';
 import type { SessionMeta } from '../types/index.js';
 import { logger } from '../utils/logger.js';
+import { notifySessionConnected } from '../services/session-connected.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+let botRef: any = null;
+
+export function setBotReference(bot: any): void {
+  botRef = bot;
+}
 const publicDir = path.resolve(__dirname, '../public');
 const logs = new Map<string, string[]>();
 const pairing = new Map<string, { qr?: string; code?: string; error?: string; isPairing?: boolean; method?: 'qr' | 'code' }>();
@@ -154,7 +161,22 @@ export function createWebApp(): express.Express {
         onQR: async (qr) => { if (pairMethod === 'qr') pairing.set(sessionId, { isPairing: true, method: pairMethod, qr }); emit(userId, 'QR code ready'); },
         onPairingCode: async (code) => { if (pairMethod === 'code') pairing.set(sessionId, { isPairing: true, method: pairMethod, code }); emit(userId, `Pairing code ready: ${code}`); },
         onPairingError: async (error) => { pairing.set(sessionId, { isPairing: false, method: pairMethod, error: error.message }); emit(userId, `Pairing warning: ${error.message}`); },
-        onConnected: async () => { pairing.set(sessionId, { isPairing: false, method: pairMethod }); emit(userId, `${label} connected`); },
+        onConnected: async (sid, isFirstTime) => {
+          pairing.set(sessionId, { isPairing: false, method: pairMethod });
+          emit(userId, `${label} connected`);
+          if (isFirstTime && botRef) {
+            await notifySessionConnected({
+              telegramChatId: parseInt(userId, 10),
+              telegram: botRef.telegram,
+              socket: getSocket(sid) ?? undefined,
+              sessionId: sid,
+              phone: meta.phone,
+              label: meta.label,
+              method: `Web ${pairMethod.toUpperCase()}`,
+              ownerTelegramId: userId,
+            });
+          }
+        },
       }).catch((err) => { pairing.set(sessionId, { isPairing: false, method: pairMethod, error: String(err) }); emit(userId, `Socket error: ${String(err)}`); });
       res.json({ sessionId });
     } catch (err) { res.status(400).json({ error: err instanceof Error ? err.message : String(err) }); }
@@ -340,7 +362,21 @@ export function createWebApp(): express.Express {
     emit(userId, `Re-initializing ${sessionId}…`);
     const { reinitSocket } = await import('../whatsapp/socket-manager.js');
     reinitSocket(meta, {
-      onConnected: async () => emit(userId, `${meta.label || meta.phone} reconnected`),
+      onConnected: async (sid) => {
+        emit(userId, `${meta.label || meta.phone} reconnected`);
+        if (botRef) {
+          await notifySessionConnected({
+            telegramChatId: parseInt(userId, 10),
+            telegram: botRef.telegram,
+            socket: getSocket(sid) ?? undefined,
+            sessionId: sid,
+            phone: meta.phone,
+            label: meta.label,
+            method: 'Web Reinit',
+            ownerTelegramId: userId,
+          });
+        }
+      },
     }).catch(err => emit(userId, `Reinit error: ${String(err)}`));
     res.json({ ok: true });
   });

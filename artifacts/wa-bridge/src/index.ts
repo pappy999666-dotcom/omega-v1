@@ -8,7 +8,7 @@ import 'dotenv/config';
 import { ensureRuntimeEnv } from './web/env-prompt.js';
 import { runSetupWizard } from './setup/index.js';
 import fs from 'fs';
-import { startWebServer } from './web/server.js';
+import { startWebServer, setBotReference } from './web/server.js';
 import { logger } from './utils/logger.js';
 import { getRedis, shutdownQueues } from './services/queue.js';
 import { startOutreachWorker } from './services/workers/outreach-worker.js';
@@ -118,6 +118,7 @@ async function bootstrap(): Promise<void> {
   // 3. Start Telegram bot
   logger.info('[Boot] Initializing Telegram bot...');
   const bot = createBot();
+  setBotReference(bot);
 
   // 4. Wire alert callback (socket → Telegram)
   setAlertCallback(createAlertSender(bot));

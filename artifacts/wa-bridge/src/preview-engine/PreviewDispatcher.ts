@@ -14,8 +14,7 @@ import { PreviewValidator } from './PreviewValidator.js';
 import { PreviewLogger } from './PreviewLogger.js';
 import { previewCache } from './PreviewCache.js';
 import pLimit from 'p-limit';
-import { loadSessionConfig, getGlobalMenuUrl } from '../services/workspace.js';
-import { parseUrlButtons } from '../whatsapp/utils/url-buttons.js';
+import { loadSessionConfig, getGlobalMenuButtons } from '../services/workspace.js';
 
 // ── Concurrency Control ─────────────────────────────────────
 // Limits concurrent preview resolutions to prevent memory pressure
@@ -138,11 +137,35 @@ export class PreviewDispatcher {
     }
 
     // ── Pipeline Stage: Global URL Buttons ──
-    const globalButtons = parseUrlButtons(getGlobalMenuUrl());
+    const globalButtons = getGlobalMenuButtons().filter(b => b.enabled);
 
     const applyGlobalPipeline = (content: any) => {
       const finalContent = { ...content };
       
+      // 0. Strip URLs from text/caption if they are being converted to buttons
+      // This prevents the URL from appearing twice (once in text, once as button).
+      const stripUrls = (text: string) => {
+        if (typeof text !== 'string') return text;
+        let result = text;
+        for (const b of globalButtons) {
+          if (result.includes(b.url)) {
+            // Remove the URL but preserve ALL other characters (Unicode, ASCII, newlines).
+            // No trim() or whitespace collapse here.
+            result = result.replace(b.url, '');
+          }
+        }
+        return result;
+      };
+
+      if (finalContent.text) finalContent.text = stripUrls(finalContent.text);
+      if (finalContent.caption) finalContent.caption = stripUrls(finalContent.caption);
+      
+      // Also handle group status nested text
+      if (finalContent.groupStatusMessageV2?.message?.extendedTextMessage) {
+        finalContent.groupStatusMessageV2.message.extendedTextMessage.text = 
+          stripUrls(finalContent.groupStatusMessageV2.message.extendedTextMessage.text);
+      }
+
       // 1. Apply Mentions
       if (mentions.length > 0) {
         finalContent.mentions = mentions;

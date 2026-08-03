@@ -31,8 +31,19 @@ export interface UserConfig {
   releasePostsEnabled?: boolean;
 }
 
+export interface MenuButton {
+  id: string;
+  name: string;
+  url: string;
+  enabled: boolean;
+  order: number;
+}
+
 export interface PlatformConfig {
+  globalMenuButtons?: MenuButton[];
+  /** @deprecated use globalMenuButtons */
   globalMenuUrl?: string;
+  /** @deprecated use globalMenuButtons */
   globalMenuUrls?: string[];
   releaseChannelUsername?: string;
   releasePostsEnabled?: boolean;

@@ -672,3 +672,96 @@ export async function handleRestartBot(ctx: Context & { telegramId: string }): P
     }, 800);
   });
 }
+
+// ── Global Menu URL Manager ──────────────────────────────
+
+import { getGlobalMenuButtons, saveGlobalMenuButtons } from '../../services/workspace.js';
+import { adminMenuUrlManagerKeyboard, adminMenuUrlEditKeyboard } from '../ui/keyboards.js';
+
+export async function handleAdminMenuUrlManager(ctx: Context): Promise<void> {
+  const buttons = getGlobalMenuButtons();
+  const text = [
+    header('Global Menu URL Manager', '🔗'),
+    '',
+    H.blockquote('Configure buttons that appear automatically on all bot responses.'),
+    '',
+    buttons.length === 0 ? H.italic('No buttons configured.') : `<b>${buttons.length} buttons configured:</b>`,
+  ].join('\n');
+
+  const keyboard = adminMenuUrlManagerKeyboard(buttons);
+  if (ctx.callbackQuery) {
+    await ctx.editMessageText(text, {
+      parse_mode: 'HTML',
+      reply_markup: keyboard,
+    }).catch(() => {});
+  } else {
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+  }
+}
+
+export async function handleAdminMenuUrlEdit(ctx: Context, buttonId: string): Promise<void> {
+  const buttons = getGlobalMenuButtons();
+  const button = buttons.find((b) => b.id === buttonId);
+  if (!button) {
+    await ctx.answerCbQuery('Button not found').catch(() => {});
+    return handleAdminMenuUrlManager(ctx);
+  }
+
+  const text = [
+    header('Edit Menu Button', '✏️'),
+    '',
+    kv('Name:', button.name),
+    kv('URL:', H.code(button.url)),
+    kv('Status:', button.enabled ? '✅ Enabled' : '❌ Disabled'),
+    kv('Order:', String(button.order)),
+  ].join('\n');
+
+  await ctx.editMessageText(text, {
+    parse_mode: 'HTML',
+    reply_markup: adminMenuUrlEditKeyboard(buttonId, button.enabled),
+  }).catch(() => {});
+}
+
+export async function handleAdminMenuUrlToggle(ctx: Context, buttonId: string): Promise<void> {
+  const buttons = getGlobalMenuButtons();
+  const button = buttons.find((b) => b.id === buttonId);
+  if (button) {
+    button.enabled = !button.enabled;
+    saveGlobalMenuButtons(buttons);
+    await ctx.answerCbQuery(button.enabled ? 'Button enabled' : 'Button disabled').catch(() => {});
+  }
+  await handleAdminMenuUrlEdit(ctx, buttonId);
+}
+
+export async function handleAdminMenuUrlDelete(ctx: Context, buttonId: string): Promise<void> {
+  let buttons = getGlobalMenuButtons();
+  buttons = buttons.filter((b) => b.id !== buttonId);
+  // Re-index orders
+  buttons.forEach((b, i) => { b.order = i; });
+  saveGlobalMenuButtons(buttons);
+  await ctx.answerCbQuery('Button deleted').catch(() => {});
+  await handleAdminMenuUrlManager(ctx);
+}
+
+export async function handleAdminMenuUrlMove(ctx: Context, buttonId: string, direction: 'up' | 'down'): Promise<void> {
+  const buttons = getGlobalMenuButtons();
+  const index = buttons.findIndex((b) => b.id === buttonId);
+  if (index === -1) return;
+
+  if (direction === 'up' && index > 0) {
+    const prev = buttons[index - 1]!;
+    const curr = buttons[index]!;
+    const tempOrder = prev.order;
+    prev.order = curr.order;
+    curr.order = tempOrder;
+  } else if (direction === 'down' && index < buttons.length - 1) {
+    const next = buttons[index + 1]!;
+    const curr = buttons[index]!;
+    const tempOrder = next.order;
+    next.order = curr.order;
+    curr.order = tempOrder;
+  }
+
+  saveGlobalMenuButtons(buttons);
+  await handleAdminMenuUrlManager(ctx);
+}

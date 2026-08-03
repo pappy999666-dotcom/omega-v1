@@ -379,3 +379,38 @@ export function sleepKeyboard(sleeping: boolean): InlineKeyboardMarkup {
 export function supportKeyboard(): InlineKeyboardMarkup {
   return { inline_keyboard: [[btn('Start Support Message', 'support:start', 'success')], [btn('Back', 'menu:main', 'primary')]] };
 }
+
+// ── Global Menu URL Manager ──────────────────────────────
+
+import type { MenuButton } from '../../types/index.js';
+
+export function adminMenuUrlManagerKeyboard(buttons: MenuButton[]): InlineKeyboardMarkup {
+  const rows: IKB[][] = buttons.map((b) => {
+    const statusIcon = b.enabled ? '✅' : '❌';
+    return [
+      btn(`${statusIcon} ${b.name}`, `admin:menuurl:edit:${b.id}`, 'primary'),
+      btn('⬆️', `admin:menuurl:up:${b.id}`, 'primary'),
+      btn('⬇️', `admin:menuurl:down:${b.id}`, 'primary'),
+    ];
+  });
+
+  rows.push([btn('➕ Add Button', 'admin:menuurl:add', 'success')]);
+  rows.push([btn('🔙 Back', 'admin:panel', 'primary')]);
+
+  return { inline_keyboard: rows };
+}
+
+export function adminMenuUrlEditKeyboard(buttonId: string, enabled: boolean): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [
+        enabled
+          ? btn('❌ Disable', `admin:menuurl:toggle:${buttonId}`, 'warning')
+          : btn('✅ Enable', `admin:menuurl:toggle:${buttonId}`, 'success'),
+        btn('🗑 Delete', `admin:menuurl:delete:${buttonId}`, 'danger'),
+      ],
+      [btn('✏️ Rename', `admin:menuurl:rename:${buttonId}`, 'primary'), btn('🔗 Change URL', `admin:menuurl:changeurl:${buttonId}`, 'primary')],
+      [btn('🔙 Back', 'admin:menuurl:manage', 'primary')],
+    ],
+  };
+}

@@ -9,7 +9,7 @@ import type { BridgeWASocket as WASocket, BaileysEventMap, IMessage, WebMessageI
 import { resolvePreviewRoute } from './preview-router.js';
 import { parseCommand, parseStickerCommand, hashSticker } from './command-parser.js';
 import { resolveTarget, resolveTargetNumbers } from './utils/resolve-target.js';
-import { loadSessionConfig, loadSessionMeta, updateSessionMeta, saveSessionMeta, getGlobalMenuUrl } from '../services/workspace.js';
+import { loadSessionConfig, loadSessionMeta, updateSessionMeta, saveSessionMeta } from '../services/workspace.js';
 import { stopSpamLoop, isSpamLoopActive, cmdToChat, cmdToChatX, cmdSStatus, cmdGroupStatus } from './commands/status.js';
 import { cmdAllStatus, cmdAllGStatus, stopAllStatus, isAllStatusRunning } from './commands/all-status.js';
 import { cmdAllChat, stopOutreach, isOutreachRunning } from './commands/mass-outreach.js';
@@ -393,17 +393,10 @@ async function processMessageWithConfig(
   // Central URL button attachment for all normal bot responses.
   const baseWhatsAppReply = async (replyText: string): Promise<void> => {
     const mentions = await getGroupParticipants();
-    let visibleText = replyText;
-    const buttons = parseUrlButtons(getGlobalMenuUrl());
-    for (const button of buttons) {
-      if (visibleText.includes(button.url)) {
-        // Remove the URL if it's already being attached as a button, 
-        // but preserve ALL other formatting (no trim, no newline collapse).
-        visibleText = visibleText.replace(button.url, '');
-      }
-    }
-
-    await PreviewManager.send(socket as any, groupJid, visibleText, {
+    
+    // Formatting and Global Buttons are now handled by the Preview Pipeline.
+    // We just pass the raw replyText.
+    await PreviewManager.send(socket as any, groupJid, replyText, {
       quoted: msg,
       extra: mentions.length > 0 ? { mentions } : undefined,
       sessionId,

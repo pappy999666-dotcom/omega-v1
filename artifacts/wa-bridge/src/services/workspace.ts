@@ -456,18 +456,45 @@ export function updatePlatformConfig(patch: Partial<PlatformConfig>): PlatformCo
   return updated;
 }
 
+export function getGlobalMenuButtons(): MenuButton[] {
+  const config = loadPlatformConfig();
+  return (config.globalMenuButtons ?? []).sort((a, b) => a.order - b.order);
+}
+
+export function saveGlobalMenuButtons(buttons: MenuButton[]): void {
+  const config = loadPlatformConfig();
+  config.globalMenuButtons = buttons;
+  // Sync legacy fields for backward compatibility with components not yet migrated
+  const activeUrls = buttons.filter(b => b.enabled).map(b => `${b.name}|${b.url}`);
+  config.globalMenuUrl = activeUrls[0];
+  config.globalMenuUrls = activeUrls;
+  savePlatformConfig(config);
+}
+
 /** Get the platform-wide global menu URL, or null if unset. */
 export function getGlobalMenuUrl(): string | null {
-  const config = loadPlatformConfig();
-  return config.globalMenuUrls?.join('\n') ?? config.globalMenuUrl ?? null;
+  const buttons = getGlobalMenuButtons().filter(b => b.enabled);
+  if (buttons.length === 0) return null;
+  return buttons.map(b => `${b.name}|${b.url}`).join('\n');
 }
 
 /** Set the platform-wide global menu URL. */
 export function setGlobalMenuUrl(url: string): void {
-  // Strip query params so Baileys never appends ?update= to the stored URL
-  const urls = url.split(/[\n,]+/u).map((u) => u.trim()).filter(Boolean);
-  savePlatformConfig({ ...loadPlatformConfig(), globalMenuUrl: urls[0], globalMenuUrls: urls });
-  logger.info('[Platform] Global menu URL updated');
+  const raw = url.split(/[\n,]+/u).filter(Boolean);
+  const buttons: MenuButton[] = raw.map((entry, i) => {
+    const parts = entry.split('|');
+    const name = parts.length > 1 ? parts[0]!.trim() : 'Link';
+    const link = (parts.length > 1 ? parts.slice(1).join('|') : entry).trim();
+    return {
+      id: Math.random().toString(36).slice(2, 9),
+      name,
+      url: link,
+      enabled: true,
+      order: i,
+    };
+  });
+  saveGlobalMenuButtons(buttons);
+  logger.info('[Platform] Global menu buttons updated');
 }
 
 /** Remove the platform-wide global menu URL. */
@@ -475,6 +502,7 @@ export function clearGlobalMenuUrl(): void {
   const config = loadPlatformConfig();
   delete config.globalMenuUrl;
   delete config.globalMenuUrls;
+  delete config.globalMenuButtons;
   savePlatformConfig(config);
   logger.info('[Platform] Global menu URL cleared');
 }

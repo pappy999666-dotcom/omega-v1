@@ -67,6 +67,11 @@ import {
   handleReleaseToggle,
   handleSetReleaseUsername,
   processReleaseUsername,
+  handleAdminMenuUrlManager,
+  handleAdminMenuUrlEdit,
+  handleAdminMenuUrlToggle,
+  handleAdminMenuUrlDelete,
+  handleAdminMenuUrlMove,
 } from './handlers/admin.js';
 import {
   handleIdeaSubmit,
@@ -98,6 +103,8 @@ import {
   btn,
   copyBtn,
   groupBridgeActiveKeyboard,
+  adminMenuUrlManagerKeyboard,
+  adminMenuUrlEditKeyboard,
 } from './ui/keyboards.js';
 import { mainMenu, header, H, escape, card, noticeCard, safe } from '../utils/formatter.js';
 import { getSocket, getUserSockets, isFrozen } from '../whatsapp/socket-manager.js';
@@ -115,6 +122,8 @@ import {
   setGlobalMenuUrl,
   clearGlobalMenuUrl,
   loadPlatformSessions,
+  getGlobalMenuButtons,
+  saveGlobalMenuButtons,
 } from '../services/workspace.js';
 import { normalizePairingPhone } from '../whatsapp/socket-manager.js';
 import { resolveGroupJid } from '../whatsapp/commands/lifecycle.js';
@@ -166,6 +175,9 @@ interface BotContext extends Context {
     awaitingForceJoin?: boolean;
     awaitingBroadcast?: boolean;
     awaitingGlobalMenuUrl?: boolean;
+    awaitingMenuButtonName?: boolean;
+    awaitingMenuButtonUrl?: boolean;
+    editingMenuButtonId?: string;
     awaitingApproveAmountSessionId?: string;
     awaitingApproveAmountGcJid?: string;
     awaitingApproveCountrySessionId?: string;
@@ -1322,35 +1334,75 @@ export function createBot(): Telegraf<BotContext> {
     return;
   }
 
+  if (ctx.session?.awaitingMenuButtonName) {
+    ctx.session.awaitingMenuButtonName = false;
+    const name = text.trim().slice(0, 40);
+    const editingId = ctx.session.editingMenuButtonId;
+    
+    if (editingId) {
+      const buttons = getGlobalMenuButtons();
+      const button = buttons.find(b => b.id === editingId);
+      if (button) {
+        button.name = name;
+        saveGlobalMenuButtons(buttons);
+        await ctx.reply(`✅ Button renamed to <b>${escape(name)}</b>.`, { parse_mode: 'HTML' });
+        await handleAdminMenuUrlEdit(ctx as BotContext, editingId);
+      }
+      delete ctx.session.editingMenuButtonId;
+    } else {
+      ctx.session.awaitingMenuButtonUrl = true;
+      (ctx.session as any).tempButtonName = name;
+      await ctx.reply(`Name: <b>${escape(name)}</b>\n\nNow send the HTTP/HTTPS URL for this button.`, { parse_mode: 'HTML' });
+    }
+    return;
+  }
+
+  if (ctx.session?.awaitingMenuButtonUrl) {
+    ctx.session.awaitingMenuButtonUrl = false;
+    const url = text.trim();
+    if (!/^https?:\/\//i.test(url)) {
+      await ctx.reply(noticeCard('Invalid URL', 'Please send a valid HTTP or HTTPS URL.', 'error'), { parse_mode: 'HTML' });
+      return;
+    }
+
+    const editingId = ctx.session.editingMenuButtonId;
+    const buttons = getGlobalMenuButtons();
+
+    if (editingId) {
+      const button = buttons.find(b => b.id === editingId);
+      if (button) {
+        button.url = url;
+        saveGlobalMenuButtons(buttons);
+        await ctx.reply(`✅ URL updated for <b>${escape(button.name)}</b>.`, { parse_mode: 'HTML' });
+        await handleAdminMenuUrlEdit(ctx as BotContext, editingId);
+      }
+      delete ctx.session.editingMenuButtonId;
+    } else {
+      const name = (ctx.session as any).tempButtonName || 'Link';
+      const newButton: MenuButton = {
+        id: Math.random().toString(36).slice(2, 9),
+        name,
+        url,
+        enabled: true,
+        order: buttons.length,
+      };
+      buttons.push(newButton);
+      saveGlobalMenuButtons(buttons);
+      delete (ctx.session as any).tempButtonName;
+      await ctx.reply(`✅ Button <b>${escape(name)}</b> added successfully.`, { parse_mode: 'HTML' });
+      await handleAdminMenuUrlManager(ctx as BotContext);
+    }
+    return;
+  }
+
   if (ctx.session?.awaitingGlobalMenuUrl) {
     ctx.session.awaitingGlobalMenuUrl = false;
     if (!ctx.isOwner) return;
-    const raw = text.trim();
-    if (raw.toLowerCase() === 'clear' || raw.toLowerCase() === 'none') {
-      clearGlobalMenuUrl();
-      await ctx.reply(
-        card('Global Menu URL Cleared', '\U0001f517', [], 'The global menu URL has been removed.'),
-        { parse_mode: 'HTML', reply_markup: adminPanelKeyboard(false, false) }
-      );
-    } else {
-      const lines = raw.split(/[\n,]+/u).filter(Boolean);
-      const entries = lines.map((entry) => entry.includes('|') ? entry.split('|').slice(1).join('|').trim() : entry.trim());
-      const allUrls = entries.length > 0 && entries.every((entry) => /^https?:\/\//i.test(entry));
-      const isJid = raw.includes('@g.us') || raw.includes('@newsletter') || raw.includes('@s.whatsapp.net');
-      
-      if (!allUrls && !isJid) {
-        await ctx.reply(
-          noticeCard('Invalid Input', 'Send one or more URL buttons as Label|https://... lines, or "clear" to remove.', 'error'),
-          { parse_mode: 'HTML' }
-        );
-        return;
-      }
-      setGlobalMenuUrl(raw);
-      await ctx.reply(
-        card('Global Menu URL Saved', '\U0001f517', [['Value', raw]], 'Will appear as native URL button(s) on supported WhatsApp bot responses.'),
-        { parse_mode: 'HTML', reply_markup: adminPanelKeyboard(false, false) }
-      );
-    }
+    setGlobalMenuUrl(text);
+    await ctx.reply(
+      card('Global Menu Buttons Updated', '🔗', [['Input', text]], 'Legacy input converted to structured buttons.'),
+      { parse_mode: 'HTML', reply_markup: adminPanelKeyboard(false, false) }
+    );
     return;
   }
 
@@ -3017,32 +3069,59 @@ async function routeCallback(
     if (sub === 'logs') { await handleLogStream(ctx); return; }
     if (sub === 'menuurl') {
       if (!ctx.isOwner) return;
-      const currentUrl = getGlobalMenuUrl();
-      if (params[1] === 'clear') {
-        clearGlobalMenuUrl();
+      const action = params[1];
+      if (!action || action === 'manage') {
+        await handleAdminMenuUrlManager(ctx as BotContext);
+        return;
+      }
+      if (action === 'add') {
+        ctx.session.awaitingMenuButtonName = true;
         await ctx.editMessageText(
-          card('Global Menu URL Cleared', '🔗', [], 'WhatsApp responses will no longer include a menu URL.'),
-          { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') }
+          card('Add Menu Button', '➕', [], 'Send the name for the new button (e.g., Community, Website).'),
+          { parse_mode: 'HTML', reply_markup: backKeyboard('admin:menuurl:manage') }
         );
         return;
       }
-      ctx.session.awaitingGlobalMenuUrl = true;
-      await ctx.editMessageText(
-        card(
-          'Global Menu URL',
-          '🔗',
-          [['Current URL', currentUrl ?? 'Not set']],
-          currentUrl
-            ? 'Send a new URL to replace it, or send "clear" to remove it.'
-            : 'Send an HTTP/HTTPS URL. It will be appended to every WhatsApp response with a link preview.'
-        ),
-        {
-          parse_mode: 'HTML',
-          reply_markup: currentUrl
-            ? { inline_keyboard: [[btn('🗑 Clear URL', 'admin:menuurl:clear', 'danger')], [btn('🔙 Back', 'admin:panel', 'primary')]] }
-            : { inline_keyboard: [[btn('🔙 Back', 'admin:panel', 'primary')]] },
-        }
-      );
+      if (action === 'edit') {
+        await handleAdminMenuUrlEdit(ctx as BotContext, params[2]!);
+        return;
+      }
+      if (action === 'toggle') {
+        await handleAdminMenuUrlToggle(ctx as BotContext, params[2]!);
+        return;
+      }
+      if (action === 'delete') {
+        await handleAdminMenuUrlDelete(ctx as BotContext, params[2]!);
+        return;
+      }
+      if (action === 'up' || action === 'down') {
+        await handleAdminMenuUrlMove(ctx as BotContext, params[2]!, action);
+        return;
+      }
+      if (action === 'rename') {
+        ctx.session.editingMenuButtonId = params[2];
+        ctx.session.awaitingMenuButtonName = true;
+        await ctx.editMessageText(
+          card('Rename Button', '✏️', [], 'Send the new name for this button.'),
+          { parse_mode: 'HTML', reply_markup: backKeyboard(`admin:menuurl:edit:${params[2]}`) }
+        );
+        return;
+      }
+      if (action === 'changeurl') {
+        ctx.session.editingMenuButtonId = params[2];
+        ctx.session.awaitingMenuButtonUrl = true;
+        await ctx.editMessageText(
+          card('Change URL', '🔗', [], 'Send the new HTTP/HTTPS URL for this button.'),
+          { parse_mode: 'HTML', reply_markup: backKeyboard(`admin:menuurl:edit:${params[2]}`) }
+        );
+        return;
+      }
+      if (action === 'clear') {
+        clearGlobalMenuUrl();
+        await ctx.answerCbQuery('All buttons cleared').catch(() => {});
+        await handleAdminMenuUrlManager(ctx as BotContext);
+        return;
+      }
       return;
     }
     return;

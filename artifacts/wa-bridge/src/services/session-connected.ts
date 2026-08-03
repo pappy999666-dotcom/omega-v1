@@ -199,9 +199,24 @@ async function sendWhatsAppSelfDM(opts: ConnectedNotification, name: string): Pr
 
 // ── Main Entry Point ──────────────────────────────────────
 
+// In-memory cache for recent notifications to prevent race condition duplicates
+const recentNotifications = new Set<string>();
+
 export async function notifySessionConnected(opts: ConnectedNotification): Promise<void> {
+  const { sessionId, method } = opts;
+  const isReinit = method === 'Reinit';
+  
+  // 1. Deduplication
+  const cacheKey = `${sessionId}:${isReinit ? 'reinit' : 'connect'}`;
+  if (recentNotifications.has(cacheKey)) {
+    logger.info('[ConnectedNotify] Skipping duplicate notification', { sessionId, method });
+    return;
+  }
+  recentNotifications.add(cacheKey);
+  setTimeout(() => recentNotifications.delete(cacheKey), 30_000); // 30s cooldown
+
   try {
-    // 1. Fetch profile
+    // 2. Fetch profile
     let name = opts.label || opts.phone;
     let photoBuffer: Buffer | null = null;
 
@@ -214,13 +229,17 @@ export async function notifySessionConnected(opts: ConnectedNotification): Promi
       }
     }
 
-    // 2. Send Telegram notification (if applicable)
+    // 3. Send Telegram notification (if applicable)
     if (opts.telegram && opts.telegramChatId) {
       await sendTelegramNotification(opts, { name, photoBuffer });
     }
 
-    // 3. Send WhatsApp self-DM (if applicable)
+    // 4. Send WhatsApp self-DM (if applicable)
+    // Only send DM for first-time pairing or if explicitly requested (Reinit)
+    // Reconnects (silent) should not send DMs.
     await sendWhatsAppSelfDM(opts, name);
+    
+    logger.info('[ConnectedNotify] Success notification sent', { sessionId, method });
   } catch (err) {
     logger.error('[ConnectedNotify] Failed to send connected notification', {
       err: err instanceof Error ? err.message : String(err),
