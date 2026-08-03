@@ -297,12 +297,23 @@ export function updateSessionMeta(
 export async function purgeSession(telegramId: string, sessionId: string): Promise<void> {
   const dir = sessionDir(telegramId, sessionId);
   
-  // 1. Session Files
+  // 1. Cancel Active Jobs & Unregister
+  try {
+    const { cancelSessionJobs } = await import('./queue.js');
+    await cancelSessionJobs(sessionId);
+    
+    const { unregisterSessionOwner } = await import('../whatsapp/event-handlers.js');
+    unregisterSessionOwner(sessionId);
+  } catch (err) {
+    logger.warn(`[Workspace] Cleanup failed for ${sessionId}`, { err: String(err) });
+  }
+
+  // 2. Session Files
   if (fs.existsSync(dir)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 
-  // 2. Redis Cleanup (Queues, Cache, Circuit Breakers)
+  // 3. Redis Cleanup (Queues, Cache, Circuit Breakers)
   try {
     const { getRedis } = await import('./queue.js');
     const redis = getRedis();

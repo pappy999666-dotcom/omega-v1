@@ -89,8 +89,24 @@ import { sessionDir } from '../services/workspace.js';
 // Map from sessionId → telegramId (populated at init)
 const sessionOwnerMap = new Map<string, string>();
 
-// Persistent cache for menu URL externalAdReply — fetched once, reused forever
-const menuAdReplyCache = new Map<string, { title: string; body: string; thumbnailUrl?: string }>();
+// Persistent cache for menu URL externalAdReply — fetched once, reused for 24h
+const menuAdReplyCache = new Map<string, { title: string; body: string; thumbnailUrl?: string; expires: number }>();
+
+function getMenuAdReply(key: string) {
+  const cached = menuAdReplyCache.get(key);
+  if (cached && Date.now() < cached.expires) return cached;
+  menuAdReplyCache.delete(key);
+  return null;
+}
+
+function setMenuAdReply(key: string, data: { title: string; body: string; thumbnailUrl?: string }) {
+  // Cap cache size to 500 entries to prevent memory exhaustion
+  if (menuAdReplyCache.size > 500) {
+    const oldestKey = menuAdReplyCache.keys().next().value;
+    if (oldestKey) menuAdReplyCache.delete(oldestKey);
+  }
+  menuAdReplyCache.set(key, { ...data, expires: Date.now() + 24 * 60 * 60 * 1000 });
+}
 
 
 
@@ -937,6 +953,10 @@ async function processMessageWithConfig(
       break;
     }
     case 'delmenumedia': {
+      const meta = loadSessionMeta(telegramId, sessionId);
+      if (meta?.menuMedia?.filePath && fs.existsSync(meta.menuMedia.filePath)) {
+        try { fs.unlinkSync(meta.menuMedia.filePath); } catch {}
+      }
       updateSessionMeta(telegramId, sessionId, { menuMedia: null });
       await reply(successCard('MENU MEDIA REMOVED', 'Menus restored to the default text-only layout.'));
       break;

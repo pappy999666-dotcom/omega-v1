@@ -49,8 +49,10 @@ function runLive(cmd: string, args: string[], cwd: string, onLine: (line: string
   return new Promise((resolve, reject) => {
     const proc = spawn(cmd, args, { cwd, env: process.env, shell: false });
     let buf = '';
+    let fullLog = '';
     const flush = (chunk: string) => {
       buf += chunk;
+      fullLog += chunk;
       const lines = buf.split('\n');
       buf = lines.pop() ?? '';
       for (const l of lines) {
@@ -63,7 +65,12 @@ function runLive(cmd: string, args: string[], cwd: string, onLine: (line: string
     proc.on('close', (code) => {
       if (buf.trim()) onLine(buf.trim());
       if (code === 0) resolve();
-      else reject(new Error(`Exit code ${code}`));
+      else {
+        const err = new Error(`Command failed: ${cmd} ${args.join(' ')}\nExit Code: ${code}\nOutput: ${fullLog.slice(-500)}`);
+        (err as any).exitCode = code;
+        (err as any).stdout = fullLog;
+        reject(err);
+      }
     });
     proc.on('error', reject);
   });
@@ -73,11 +80,18 @@ function exec(cmd: string, cwd = APP_DIR): Promise<string> {
   return new Promise((resolve, reject) => {
     const proc = spawn('sh', ['-c', cmd], { cwd, env: process.env });
     let out = '';
+    let errOut = '';
     proc.stdout.on('data', (d: Buffer) => { out += d.toString(); });
-    proc.stderr.on('data', (d: Buffer) => { out += d.toString(); });
+    proc.stderr.on('data', (d: Buffer) => { errOut += d.toString(); });
     proc.on('close', (code) => {
       if (code === 0) resolve(out.trim());
-      else reject(new Error(out.trim() || `Exit ${code}`));
+      else {
+        const error = new Error(`Command: ${cmd}\nExit Code: ${code}\nReason: ${errOut.trim() || out.trim() || 'Unknown'}`);
+        (error as any).exitCode = code;
+        (error as any).stdout = out;
+        (error as any).stderr = errOut;
+        reject(error);
+      }
     });
     proc.on('error', reject);
   });
@@ -199,37 +213,103 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
     log.push('✅ Build verified');
 
     // 10. Restart PM2
-    log.push('🔄 <b>[10/14] Restarting PM2...</b>');
-    await safeExec('pm2 start wa-bridge --update-env', APP_DIR);
-    log.push('✅ PM2 restarted');
+    log.push('🔄 <b>[10/14] Overhauling PM2 process...</b>');
+    
+    // Detect existing process
+    const jlistBefore = await safeExec('pm2 jlist');
+    const procsBefore = JSON.parse(jlistBefore || '[]');
+    const oldProc = procsBefore.find((p: any) => p.name === 'wa-bridge');
+    const oldPid = oldProc?.pid;
 
-    // Wait for startup
-    await new Promise(r => setTimeout(r, 10000));
+    if (oldProc) {
+      log.push(`  - Stopping existing process (PID: ${oldPid})...`);
+      await safeExec('pm2 stop wa-bridge');
+      
+      // Wait for stop confirmation
+      let stopped = false;
+      for (let i = 0; i < 5; i++) {
+        const check = JSON.parse(await safeExec('pm2 jlist') || '[]');
+        const p = check.find((x: any) => x.name === 'wa-bridge');
+        if (!p || p.pm2_env?.status === 'stopped') {
+          stopped = true;
+          break;
+        }
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      if (!stopped) log.push('  ⚠️ PM2 stop timed out, forcing...');
+    }
 
-    // 11. Verify Telegram
-    log.push('🤖 <b>[11/14] Verifying Telegram...</b>');
+    // Kill orphaned processes
+    log.push('  - Cleaning orphaned Node processes...');
+    await safeExec("pkill -f 'node artifacts/wa-bridge/dist/index.js' || true");
+    
+    // Start new process
+    log.push('  - Starting new version...');
+    await exec('pm2 start artifacts/wa-bridge/dist/index.js --name wa-bridge --update-env', APP_DIR);
+    
+    // Wait for "online"
+    let isOnline = false;
+    for (let i = 0; i < 15; i++) {
+      const check = JSON.parse(await safeExec('pm2 jlist') || '[]');
+      const p = check.find((x: any) => x.name === 'wa-bridge');
+      if (p && p.pm2_env?.status === 'online' && p.pid !== oldPid) {
+        isOnline = true;
+        break;
+      }
+      await new Promise(r => setTimeout(r, 1000));
+    }
+
+    if (!isOnline) {
+      return await fail('PM2 Start', new Error('Process failed to reach ONLINE status within 15s'));
+    }
+    log.push('✅ PM2 process online');
+
+    // 11. Deep Health Verification
+    log.push('🔍 <b>[11/14] Deep Health Verification...</b>');
+    const { ConnectionTester } = await import('../setup/ConnectionTester.js') as any;
+    
+    // Redis
+    log.push('  - Checking Redis...');
+    const redisOk = await ConnectionTester.testRedis().catch(() => false);
+    if (!redisOk) return await fail('Health Check', new Error('Redis connection failed'));
+    
+    // MongoDB
+    log.push('  - Checking MongoDB...');
+    const mongoOk = await ConnectionTester.testMongo().catch(() => false);
+    if (!mongoOk) return await fail('Health Check', new Error('MongoDB connection failed'));
+
+    // Telegram
+    log.push('  - Checking Telegram...');
     const tgToken = process.env.TELEGRAM_TOKEN;
     if (tgToken) {
-      const { ConnectionTester } = await import('../setup/ConnectionTester.js') as any;
       const tgOk = await ConnectionTester.testTelegram(tgToken);
-      if (!tgOk) return await fail('Verify Telegram', new Error('Telegram API connection failed'));
+      if (!tgOk) return await fail('Health Check', new Error('Telegram API connection failed'));
     }
-    log.push('✅ Telegram online');
 
-    // 12. Verify WhatsApp
-    log.push('📱 <b>[12/14] Verifying WhatsApp...</b>');
-    const jlist = await safeExec('pm2 jlist');
-    const procs = JSON.parse(jlist);
-    const proc = procs.find((p: any) => p.name === 'wa-bridge');
-    if (!proc || proc.pm2_env?.status !== 'online') {
-      return await fail('Verify WhatsApp', new Error('WhatsApp process is not online'));
+    // Stability wait
+    log.push('  - Verifying stability (10s)...');
+    await new Promise(r => setTimeout(r, 10000));
+    
+    const jlistFinal = await safeExec('pm2 jlist');
+    const procFinal = JSON.parse(jlistFinal || '[]').find((p: any) => p.name === 'wa-bridge');
+    if (!procFinal || procFinal.pm2_env?.status !== 'online') {
+      return await fail('Stability Check', new Error('Process crashed during stability window'));
     }
-    log.push('✅ WhatsApp online');
+    log.push('✅ Health checks passed');
 
-    // 13. Verify Sessions
-    log.push('📂 <b>[13/14] Verifying Sessions...</b>');
+    // 12. Verify Sessions
+    log.push('📂 <b>[12/14] Verifying Sessions...</b>');
     const sessionsExist = existsSync(path.join(APP_DIR, 'artifacts/workspaces'));
     log.push(sessionsExist ? '✅ Session registry intact' : '⚠️ Session registry empty');
+
+    // 13. Release Notes
+    log.push('📝 <b>[13/14] Generating release notes...</b>');
+    try {
+      const notes = await generateReleaseNotes(prevCommit, currCommit);
+      log.push(`✅ Notes generated: ${notes.length} items`);
+    } catch {
+      log.push('⚠️ Failed to generate release notes');
+    }
 
     // 14. Return summary
     const totalDurationMs = Date.now() - startedAt;
@@ -244,6 +324,10 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
     return { success: true, prevCommit, currCommit, filesChanged, buildDurationMs, totalDurationMs };
 
   } catch (err) {
-    return await fail('Unexpected Error', err);
+    // If it's already a DeployResult (from fail call), return it
+    if (err && typeof err === 'object' && 'success' in err) return err as any;
+    
+    const step = (err as any).step || 'Unexpected Error';
+    return await fail(step, err);
   }
 }

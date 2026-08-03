@@ -160,21 +160,54 @@ export async function fetchProfilePicture(sessionId: string, jid: string): Promi
   }
 }
 
-export function freezeSession(sessionId: string): void {
+export async function freezeSession(sessionId: string): Promise<void> {
   const h = registry.get(sessionId);
   if (h) {
     h.frozen = true;
     updateSessionMeta(h.meta.telegramId, sessionId, { status: 'frozen' });
-    logger.info(`[SocketManager] Frozen: ${sessionId}`);
+    // When freezing, we should also close the active connection to save resources
+    await closeSocket(sessionId);
+    logger.info(`[SocketManager] Frozen: ${sessionId} (Connection closed)`);
   }
 }
 
-export function unfreezeSession(sessionId: string): void {
+export async function unfreezeSession(sessionId: string): Promise<void> {
   const h = registry.get(sessionId);
   if (h) {
     h.frozen = false;
     updateSessionMeta(h.meta.telegramId, sessionId, { status: 'open' });
     logger.info(`[SocketManager] Unfrozen: ${sessionId}`);
+    // Auto-reconnect on unfreeze
+    await initSocket(h.meta, {});
+  } else {
+    // If not in registry, check disk
+    const { findSessionOwner, loadSessionMeta } = await import('../services/workspace.js');
+    const ownerId = findSessionOwner(sessionId);
+    if (ownerId) {
+      const meta = loadSessionMeta(ownerId, sessionId);
+      if (meta) {
+        meta.status = 'open';
+        saveSessionMeta(meta);
+        await initSocket(meta, {});
+      }
+    }
+  }
+}
+
+/**
+ * Resume a session: ensures it's not frozen and starts the socket.
+ */
+export async function resumeSession(sessionId: string): Promise<void> {
+  const h = registry.get(sessionId);
+  if (h && h.frozen) {
+    await unfreezeSession(sessionId);
+  } else if (!h) {
+    const { findSessionOwner, loadSessionMeta } = await import('../services/workspace.js');
+    const ownerId = findSessionOwner(sessionId);
+    if (ownerId) {
+      const meta = loadSessionMeta(ownerId, sessionId);
+      if (meta) await initSocket(meta, {});
+    }
   }
 }
 
@@ -498,17 +531,34 @@ export async function reinitSocket(
  */
 export async function closeSocket(sessionId: string): Promise<void> {
   const h = registry.get(sessionId);
+  
+  // Cleanup timers first
+  const timer = reconnectTimers.get(sessionId);
+  if (timer) clearTimeout(timer);
+  reconnectTimers.delete(sessionId);
+  
+  socketGenerations.set(sessionId, (socketGenerations.get(sessionId) ?? 0) + 1);
+  reconnectWindows.delete(sessionId);
+
   if (h) {
-    const timer = reconnectTimers.get(sessionId);
-    if (timer) clearTimeout(timer);
-    reconnectTimers.delete(sessionId);
-    socketGenerations.set(sessionId, (socketGenerations.get(sessionId) ?? 0) + 1);
-    reconnectWindows.delete(sessionId);
     try {
+      // 1. Stop any active status runs
+      const { stopAllStatus } = await import('./commands/all-status.js');
+      stopAllStatus(sessionId);
+      
+      // 2. Remove listeners to prevent memory leaks
       h.socket.ev.removeAllListeners();
-      h.socket.end(new Error('manual close'));
-    } catch {
-      // Socket is already closed.
+      
+      // 3. Gracefully end the socket
+      h.socket.end(undefined);
+      
+      // 4. If it doesn't close in 2s, force destroy
+      setTimeout(() => {
+        try { (h.socket as any).ws?.terminate(); } catch {}
+      }, 2000).unref();
+      
+    } catch (err) {
+      logger.debug(`[SocketManager] Error closing socket ${sessionId}`, { err: String(err) });
     }
     registry.delete(sessionId);
   }

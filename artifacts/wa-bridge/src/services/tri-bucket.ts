@@ -211,7 +211,7 @@ export async function validateAllLinks(
     const entry = main[i]!;
 
     // Circuit breaker check
-    if (isCircuitOpen(telegramId, currentSessionId, 'validator')) {
+    if (await isCircuitOpen(telegramId, currentSessionId, 'validator')) {
       // Try session failover before giving up
       if (getAlternativeSocket) {
         const alt = getAlternativeSocket(currentSessionId);
@@ -280,7 +280,7 @@ export async function validateAllLinks(
         }]);
         result.activated++;
         consecutiveRateErrors = 0;
-        recordSuccess(telegramId, currentSessionId, 'validator');
+        await recordSuccess(telegramId, currentSessionId, 'validator');
       } else if (vr.transient) {
         result.errors++;
         logger.warn(`[Validator] Transient failure preserved in Main: ${entry.link} — ${vr.reason}`);
@@ -301,7 +301,7 @@ export async function validateAllLinks(
       if (/rate|429|spam|flood|restrict|too.many/iu.test(msg)) {
         consecutiveRateErrors++;
         result.retries++;
-        const tripped = recordFailure(telegramId, currentSessionId, 'validator');
+        const tripped = await recordFailure(telegramId, currentSessionId, 'validator');
 
         if (consecutiveRateErrors >= 5 || tripped) {
           // Try session failover

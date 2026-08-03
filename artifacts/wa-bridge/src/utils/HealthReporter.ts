@@ -10,10 +10,15 @@ export interface HealthCheckResult {
 
 export class HealthReporter {
     static display(results: HealthCheckResult[]) {
+        const mem = process.memoryUsage();
+        const uptime = process.uptime();
+        
         console.log('\n\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('            SYSTEM HEALTH REPORT');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m');
         
+        console.log(`\x1b[90mUptime: ${Math.floor(uptime / 60)}m ${Math.floor(uptime % 60)}s | RSS: ${Math.round(mem.rss / 1024 / 1024)}MB | Heap: ${Math.round(mem.heapUsed / 1024 / 1024)}MB\x1b[0m\n`);
+
         let hasError = false;
         for (const res of results) {
             let icon = '';
@@ -37,6 +42,11 @@ export class HealthReporter {
             
             const msg = res.message ? ` - ${res.message}` : '';
             console.log(`${color}${icon} ${res.component.padEnd(20)}${msg}\x1b[0m`);
+            
+            // Log to file for observability
+            if (res.status !== 'ok') {
+                logger.log(res.status === 'error' ? 'error' : 'warn', `[Health] ${res.component}: ${res.message || 'Check failed'}`);
+            }
         }
         
         console.log('\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m\n');

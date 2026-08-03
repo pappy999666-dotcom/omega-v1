@@ -100,7 +100,7 @@ export async function cmdAllChat(
     const group = groups[i]!;
 
     if (!activeRuns.get(sessionId)) break;
-    if (isCircuitOpen(telegramId, sessionId, 'allchat')) {
+    if (await isCircuitOpen(telegramId, sessionId, 'allchat')) {
       result.rateLimited++;
       result.details.push(`🚦 Circuit open — backing off before ${group.subject}`);
       await opts.onProgress?.(`🚦 allchat backoff before ${i + 1}/${groups.length}; queue preserved.`);
@@ -145,7 +145,7 @@ export async function cmdAllChat(
         });
       }
       result.success++;
-      recordSuccess(telegramId, sessionId, 'allchat');
+      await recordSuccess(telegramId, sessionId, 'allchat');
 
       if (i % 10 === 0 && opts.onProgress) {
         await opts.onProgress(
@@ -158,7 +158,7 @@ export async function cmdAllChat(
       const msg = String(err);
       if (msg.includes('rate') || msg.includes('429')) {
         result.rateLimited++;
-        recordFailure(telegramId, sessionId, 'allchat');
+        await recordFailure(telegramId, sessionId, 'allchat');
         await exponentialBackoff(result.rateLimited, 5000, 120_000);
       } else {
         result.failed++;

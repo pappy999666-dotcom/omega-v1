@@ -147,7 +147,7 @@ export async function cmdJoinAll(
     }
 
     // Circuit breaker
-    if (isCircuitOpen(telegramId, sessionId, 'lifecycle')) {
+    if (await isCircuitOpen(telegramId, sessionId, 'lifecycle')) {
       result.rateLimited += links.length - i;
       await opts.onProgress?.(
         `🚦 Circuit open — pausing joins. ${links.length - i} links skipped.`
@@ -161,7 +161,7 @@ export async function cmdJoinAll(
       if (res.success) {
         result.success++;
         await maybeAutoPromote(socket, telegramId, sessionId, res.jid);
-        recordSuccess(telegramId, sessionId, 'lifecycle');
+        await recordSuccess(telegramId, sessionId, 'lifecycle');
         result.details.push(`✅ Joined: ${res.title ?? res.jid}`);
       } else {
         if (
@@ -193,7 +193,7 @@ export async function cmdJoinAll(
 
       if (msg.includes('rate') || msg.includes('Rate-over-limit') || msg.includes('429')) {
         result.rateLimited++;
-        const tripped = recordFailure(telegramId, sessionId, 'lifecycle');
+        const tripped = await recordFailure(telegramId, sessionId, 'lifecycle');
 
         if (tripped) {
           await opts.onProgress?.(`🚦 Rate limit — pausing joinall`);
@@ -275,12 +275,12 @@ export async function cmdLeaveAll(
       await socket.groupLeave(group.id);
       result.success++;
       result.details.push(`✅ Left: ${group.subject}`);
-      recordSuccess(telegramId, sessionId, 'lifecycle');
+      await recordSuccess(telegramId, sessionId, 'lifecycle');
     } catch (err) {
       const msg = String(err);
       if (msg.includes('rate') || msg.includes('429')) {
         result.rateLimited++;
-        const tripped = recordFailure(telegramId, sessionId, 'lifecycle');
+        const tripped = await recordFailure(telegramId, sessionId, 'lifecycle');
         if (tripped) break;
         await exponentialBackoff(result.rateLimited, 5000, 60_000);
       } else {

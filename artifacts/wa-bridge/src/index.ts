@@ -149,6 +149,10 @@ async function bootstrap(): Promise<void> {
   setLifecycleBotRef(botRef);
 
   if (redisAvailable) {
+    const { resumeStalledJobs, cleanupOrphanedJobs } = await import('./services/queue.js');
+    await resumeStalledJobs();
+    await cleanupOrphanedJobs();
+    
     startOutreachWorker();
     startValidatorWorker();
     startLifecycleWorker();

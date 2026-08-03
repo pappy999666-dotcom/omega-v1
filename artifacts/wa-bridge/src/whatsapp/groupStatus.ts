@@ -161,7 +161,17 @@ export async function sendGroupStatus(
     // ── PATH B: RICH — build HQ preview ──────────────────────
     let preview: { url: string; title: string; description: string; smallThumb: Buffer | null; hq: Record<string, unknown> | null } | null = null;
 
-    if (options.existingPreview?.thumbnail) {
+    // Optimization: If the caller already provided a pre-uploaded HQ preview, reuse it directly.
+    // This is critical for allstatus performance to avoid re-uploading the same thumb 1000+ times.
+    if (options.existingPreview?.hq) {
+      preview = {
+        url,
+        title: options.existingPreview.title || '',
+        description: options.existingPreview.description || '',
+        smallThumb: options.existingPreview.thumbnail ? Buffer.from(options.existingPreview.thumbnail) : null,
+        hq: options.existingPreview.hq as Record<string, unknown>,
+      };
+    } else if (options.existingPreview?.thumbnail) {
       const buf = Buffer.from(options.existingPreview.thumbnail);
       try {
         const { prepareWAMessageMedia } = await getBaileys();
@@ -171,6 +181,12 @@ export async function sendGroupStatus(
         );
         const hq = prepared?.imageMessage ? { ...prepared.imageMessage } : null;
         if (hq?.jpegThumbnail) hq.jpegThumbnail = Buffer.from(hq.jpegThumbnail as Uint8Array);
+        
+        // Save the HQ result back to existingPreview so the NEXT group in the loop can reuse it
+        if (hq && options.existingPreview) {
+          (options.existingPreview as any).hq = hq;
+        }
+
         preview = {
           url,
           title: options.existingPreview.title || '',

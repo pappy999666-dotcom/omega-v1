@@ -120,19 +120,57 @@ export const omniQueue = () => getQueue(QUEUE_NAMES.OMNI);
 export async function enqueueJob(
   queueName: string,
   payload: JobPayload,
-  opts?: { priority?: number; delay?: number }
+  opts?: { priority?: number; delay?: number; jobId?: string }
 ): Promise<string> {
   const queue = getQueue(queueName);
+  
+  // Idempotency: use provided jobId or generate one from payload if unique enough
+  const jobId = opts?.jobId;
+  
   const job = await queue.add(payload.type, payload, {
+    jobId,
     priority: opts?.priority ?? 0,
     delay: opts?.delay ?? 0,
+    // Add default timeout to prevent stuck jobs
+    timeout: 60_000, 
   });
+  
   logger.info(`[Queue] Enqueued ${payload.type} → ${queueName}`, {
     jobId: job.id,
     telegramId: payload.telegramId,
     sessionId: payload.sessionId,
   });
   return job.id!;
+}
+
+/**
+ * Cancel all jobs for a specific session across all queues.
+ */
+export async function cancelSessionJobs(sessionId: string): Promise<void> {
+  logger.info(`[Queue] Cancelling all jobs for session: ${sessionId}`);
+  for (const name of Object.values(QUEUE_NAMES)) {
+    const q = getQueue(name);
+    const jobs = await q.getJobs(['waiting', 'delayed', 'active', 'paused']);
+    for (const job of jobs) {
+      if (job.data?.sessionId === sessionId) {
+        await job.remove().catch(() => {});
+        logger.info(`[Queue] Removed job ${job.id} from ${name}`);
+      }
+    }
+  }
+}
+
+/**
+ * Detect and remove orphaned/stalled jobs.
+ */
+export async function cleanupOrphanedJobs(): Promise<void> {
+  for (const name of Object.values(QUEUE_NAMES)) {
+    const q = getQueue(name);
+    // Remove completed jobs older than 1 hour
+    await q.clean(3600000, 1000, 'completed');
+    // Remove failed jobs older than 24 hours
+    await q.clean(86400000, 1000, 'failed');
+  }
 }
 
 // ── Queue Events (for progress updates) ──────────────────

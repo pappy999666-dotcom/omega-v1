@@ -504,14 +504,17 @@ export async function handleUpdateBot(ctx: Context & { telegramId: string }): Pr
         { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') }
       ).catch(() => {});
     } else {
+      const isRollback = result.prevCommit && result.error?.includes('ROLLBACK');
       const failMsg = [
         `${header('Deployment Failed', '\u274c')}`,
         '',
         kv('Step:', H.bold(result.failedStep ?? 'Unknown')),
         '',
-        `<blockquote expandable>${H.pre((result.error ?? 'No details').slice(0, 800), 'log')}</blockquote>`,
+        `<blockquote expandable>${H.pre((result.error ?? 'No details').slice(0, 1000), 'log')}</blockquote>`,
         '',
-        H.italic('Previous version still running.'),
+        isRollback 
+          ? H.italic('❌ Critical: Deployment failed and rollback failed.') 
+          : H.italic(result.prevCommit ? '🔄 Rolled back to previous version.' : '⚠️ Fresh install failed. No version running.'),
       ].join('\n');
       await ctx.telegram.editMessageText(
         parseInt(ctx.telegramId, 10), msgId, undefined, failMsg,

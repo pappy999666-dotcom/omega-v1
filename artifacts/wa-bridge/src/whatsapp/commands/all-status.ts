@@ -107,7 +107,7 @@ export async function cmdAllStatus(
       break;
     }
 
-    if (isCircuitOpen(telegramId, sessionId, 'allstatus')) {
+    if (await isCircuitOpen(telegramId, sessionId, 'allstatus')) {
       result.rateLimited++;
       result.details.push(`🚦 Circuit open — backing off before ${group.subject}`);
       await opts.onProgress?.(`🚦 allstatus backoff before ${i + 1}/${groups.length}; queue preserved.`);
@@ -167,7 +167,7 @@ export async function cmdAllStatus(
         consecutiveFailures++;
         if (/rate|429|spam/i.test(lastError)) {
           result.rateLimited++;
-          recordFailure(telegramId, sessionId, 'allstatus');
+          await recordFailure(telegramId, sessionId, 'allstatus');
           await opts.onProgress?.(`🚦 allstatus retry ${attempt}/5 for ${group.subject}`);
           await exponentialBackoff(attempt, 5000, 120_000);
         } else if (/not-authorized|forbidden|not in group|bad request|404/i.test(lastError)) {
@@ -183,7 +183,7 @@ export async function cmdAllStatus(
     if (posted) {
       result.success++;
       consecutiveFailures = 0;
-      recordSuccess(telegramId, sessionId, 'allstatus');
+      await recordSuccess(telegramId, sessionId, 'allstatus');
     } else if (!result.details.at(-1)?.includes(group.subject)) {
       result.failed++;
       result.details.push(`❌ ${group.subject}: ${lastError.slice(0, 50)}`);
@@ -278,7 +278,7 @@ export async function cmdAllGStatus(
         lastError = String(err);
         if (/rate|429|spam/i.test(lastError)) {
           result.rateLimited++;
-          recordFailure(telegramId, sessionId, 'allstatus');
+          await recordFailure(telegramId, sessionId, 'allstatus');
           await exponentialBackoff(attempt, 5000, 60_000);
         } else if (/not-authorized|forbidden|not in group|404/i.test(lastError)) {
           result.skipped++;
@@ -291,7 +291,7 @@ export async function cmdAllGStatus(
 
     if (posted) {
       result.success++;
-      recordSuccess(telegramId, sessionId, 'allstatus');
+      await recordSuccess(telegramId, sessionId, 'allstatus');
     } else if (!result.details.at(-1)?.includes(group.subject)) {
       result.failed++;
       result.details.push(`❌ ${group.subject}: ${lastError.slice(0, 50)}`);
