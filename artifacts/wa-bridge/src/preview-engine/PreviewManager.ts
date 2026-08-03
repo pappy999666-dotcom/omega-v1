@@ -319,7 +319,7 @@ export class PreviewManager {
     jid: string,
     text: string,
     options: DispatchOptions = {}
-  ): Promise<{ success: boolean; stage?: PreviewStage }> {
+  ): Promise<{ success: boolean; stage?: PreviewStage; key?: any }> {
     return PreviewDispatcher.send(socket, jid, text, options);
   }
 

@@ -125,7 +125,7 @@ export class PreviewDispatcher {
     jid: string,
     text: string,
     options: DispatchOptions = {}
-  ): Promise<{ success: boolean; stage?: PreviewStage }> {
+  ): Promise<{ success: boolean; stage?: PreviewStage; key?: any }> {
     const traceId = PreviewLogger.createTraceId();
     const start = Date.now();
 
@@ -253,12 +253,12 @@ export class PreviewDispatcher {
         };
         if (options.extra) content = { ...content, ...options.extra };
         content = applyGlobalPipeline(content);
-        await socket.sendMessage(jid, content as AnyMessageContent, {
+        const result = await socket.sendMessage(jid, content as AnyMessageContent, {
           quoted: options.quoted,
           edit: options.edit,
           ...(options.statusOptions ?? {}),
         } as any);
-        return { success: true };
+        return { success: true, key: (result as any)?.key };
       } catch (err) {
         PreviewLogger.sendFailed(jid, 'poll', String(err));
         return { success: false };
@@ -284,12 +284,12 @@ export class PreviewDispatcher {
         }
 
         content = applyGlobalPipeline(content);
-        await socket.sendMessage(jid, content as AnyMessageContent, {
+        const result = await socket.sendMessage(jid, content as AnyMessageContent, {
           quoted: options.quoted,
           edit: options.edit,
           ...(options.statusOptions ?? {}),
         } as any);
-        return { success: true };
+        return { success: true, key: (result as any)?.key };
       } catch (err) {
         PreviewLogger.sendFailed(jid, 'media', String(err));
         return { success: false };
@@ -312,13 +312,13 @@ export class PreviewDispatcher {
         
         content = applyGlobalPipeline(content);
         
-        await socket.sendMessage(jid, content as AnyMessageContent, {
+        const result = await socket.sendMessage(jid, content as AnyMessageContent, {
           quoted: options.quoted,
           edit: options.edit,
           ...(options.statusOptions ?? {}),
         } as any);
         PreviewLogger.sent(jid, url ?? 'no-url');
-        return { success: true };
+        return { success: true, key: (result as any)?.key };
       } catch (err) {
         PreviewLogger.sendFailed(jid, url ?? 'no-url', String(err));
         return { success: false };
@@ -382,12 +382,14 @@ export class PreviewDispatcher {
     try {
       PreviewLogger.sending(jid, url, payload.previewStage);
 
+      let key: any;
       if (options.isGroupStatus) {
         // Group status uses relayMessage
         const genId = await PreviewDispatcher.getGenerateMessageIDV2();
         const msgId = genId(socket.user?.id ?? '');
         const msg = payload.content as unknown as Record<string, unknown>;
         await socket.relayMessage(jid, msg, { messageId: msgId });
+        key = { remoteJid: jid, fromMe: true, id: msgId };
       } else {
         // Normal chat send
         let finalContent = options.externalAdReply
@@ -396,15 +398,16 @@ export class PreviewDispatcher {
         
         finalContent = applyGlobalPipeline(finalContent);
         
-        await socket.sendMessage(jid, finalContent, {
+        const result = await socket.sendMessage(jid, finalContent, {
           quoted: options.quoted,
           edit: options.edit,
           ...(options.statusOptions ?? {}),
         } as any);
+        key = (result as any)?.key;
       }
 
       PreviewLogger.sent(jid, url);
-      return { success: true, stage: payload.previewStage };
+      return { success: true, stage: payload.previewStage, key };
     } catch (err) {
       PreviewLogger.sendFailed(jid, url, String(err));
       // Self-healing: try without preview

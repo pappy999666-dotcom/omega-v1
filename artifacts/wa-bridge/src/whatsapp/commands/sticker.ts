@@ -52,6 +52,12 @@ export async function cmdSticker(
       sessionId,
       telegramId,
     });
+    
+    // Notify success to avoid silent UX
+    await PreviewManager.send(socket as any, groupJid, successCard('STICKER CREATED', 'Your sticker has been generated and sent.', [], 'STICKER ENGINE'), {
+      sessionId,
+      telegramId,
+    });
   } catch (err) {
     logger.error('[Sticker] Failed to create sticker', { err: String(err) });
     await PreviewManager.send(socket as any, groupJid, errorCard('STICKER FAILED', 'Could not convert media to sticker.', String(err)), {

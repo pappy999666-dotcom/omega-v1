@@ -32,26 +32,27 @@ async function withRetry<T>(
   fn: () => Promise<T>,
   label: string,
   maxAttempts: number = 3
-): Promise<T | null> {
+): Promise<T | undefined> {
   for (let i = 0; i < maxAttempts; i++) {
     try {
-      return await fn();
+      const result = await fn();
+      if (result) return result;
     } catch (err) {
       const transient = isTransient(err);
       PreviewLogger.retryAttempt(label, i + 1, maxAttempts);
       if (!transient || i === maxAttempts - 1) {
         PreviewLogger.retryExhausted(label, transient ? 'NetworkFailure' : 'MetadataFailure');
-        return null;
+        return undefined;
       }
       await new Promise((r) => setTimeout(r, RETRY_DELAYS[i] ?? 3500));
     }
   }
-  return null;
+  return undefined;
 }
 
 // ── Stage 1: link-preview-js ────────────────────────────────
 
-async function fetchStage1(url: string): Promise<LinkMeta | null> {
+async function fetchStage1(url: string): Promise<LinkMeta | undefined> {
   PreviewLogger.fetchingMetadata(url, 'Stage3_LinkPreviewJs');
   const result = await withRetry(async () => {
     const data = await getLinkPreview(url, {
@@ -93,7 +94,7 @@ async function fetchStage1(url: string): Promise<LinkMeta | null> {
 
 // ── Stage 2: Cheerio HTML Parse ─────────────────────────────
 
-async function fetchStage2(url: string): Promise<LinkMeta | null> {
+async function fetchStage2(url: string): Promise<LinkMeta | undefined> {
   PreviewLogger.fetchingMetadata(url, 'Stage4_HtmlParse');
   const result = await withRetry(async () => {
     const ctrl = new AbortController();

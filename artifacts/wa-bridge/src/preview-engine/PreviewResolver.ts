@@ -101,7 +101,7 @@ export class PreviewResolver {
 
     // Resolve thumbnail (non-blocking)
     let thumbnail: Uint8Array | undefined;
-    if (meta.imageUrl) {
+    if (meta?.imageUrl) {
       thumbnail = await ThumbnailResolver.download(meta.imageUrl).catch(() => {
         PreviewLogger.thumbnailFailed(meta.imageUrl!, 'ThumbnailFailure');
         return undefined;
@@ -119,8 +119,8 @@ export class PreviewResolver {
       stage,
       url,
       cacheHit: false,
-      hasTitle: Boolean(meta.title),
-      hasDescription: Boolean(meta.description),
+      hasTitle: Boolean(meta?.title),
+      hasDescription: Boolean(meta?.description),
       hasThumbnail: Boolean(thumbnail),
       hasHQThumbnail: false,
       durationMs: Date.now() - start,

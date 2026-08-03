@@ -190,6 +190,7 @@ export function loadSessionConfig(telegramId: string, sessionId: string): UserCo
     prefix: '.',
     nullPrefix: false,
     publicMode: true,
+    tagReply: true,
   };
 
   if (!fs.existsSync(p)) {

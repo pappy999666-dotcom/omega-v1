@@ -164,7 +164,7 @@ export function createWebApp(): express.Express {
         onConnected: async (sid, isFirstTime) => {
           pairing.set(sessionId, { isPairing: false, method: pairMethod });
           emit(userId, `${label} connected`);
-          if (isFirstTime && botRef) {
+          if (botRef) {
             await notifySessionConnected({
               telegramChatId: parseInt(userId, 10),
               telegram: botRef.telegram,

@@ -72,7 +72,7 @@ export function pappyBox(opts: PappyBoxOptions): string {
   // 3. Information Panel (Rows) — compact layout
   if (opts.rows.length > 0) {
     for (const [label, value] of opts.rows) {
-      lines.push(`${border} ${symbol} ${bold(label)}  ${value}`);
+      lines.push(`${border} ${symbol} ${bold(label)}: ${value}`);
     }
   }
 

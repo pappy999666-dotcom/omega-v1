@@ -486,21 +486,24 @@ async function processMessageWithConfig(
   const sendMenuResponse = async (title: string, body: string): Promise<void> => {
     const meta = loadSessionMeta(telegramId, sessionId);
     const media = meta?.menuMedia;
+    
+    const options: any = {
+      quoted: msg,
+      sessionId,
+      telegramId,
+      enableButtons: true, // Always enable buttons for menu/help
+    };
+
     if (media?.filePath && fs.existsSync(media.filePath)) {
-      const content = media.type === 'video'
-        ? { video: fs.readFileSync(media.filePath), caption: body, mimetype: media.mimeType }
-        : { image: fs.readFileSync(media.filePath), caption: body, mimetype: media.mimeType };
-      
-      // Pass through PreviewManager to ensure global pipeline (buttons, mentions) is applied
-      await PreviewManager.send(socket as any, groupJid, body, {
-        quoted: msg,
-        extra: content,
-        sessionId,
-        telegramId,
-      });
-      return;
+      options.media = {
+        buffer: fs.readFileSync(media.filePath),
+        type: media.type,
+        mimetype: media.mimeType,
+        caption: body
+      };
     }
-    await reply(body);
+
+    await PreviewManager.send(socket as any, groupJid, body, options);
   };
 
   const createProgressReply = async (initialText: string): Promise<(nextText: string) => Promise<void>> => {
@@ -577,7 +580,7 @@ async function processMessageWithConfig(
   if (!isAuthorized) {
     // PUBLIC MODE: Only specific commands are allowed to respond to public users.
     // Every other command MUST be completely silent (no reply, no reaction, no leak).
-    const publicWhitelist = ['pair', 'ping', 'menu', 'gmenu'];
+    const publicWhitelist = ['pair', 'menu', 'gmenu'];
     
     if (config.publicMode && publicWhitelist.includes(command)) {
       // Allow whitelisted public commands
@@ -678,7 +681,7 @@ async function processMessageWithConfig(
     case 'gmenu': {
       const { generateWhatsAppHelp } = await import('../services/help.js');
       const helpText = generateWhatsAppHelp(config.prefix, isGroup || command === 'gmenu');
-      await reply(helpText);
+      await sendMenuResponse(command.toUpperCase(), helpText);
       break;
     }
 

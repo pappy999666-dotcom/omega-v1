@@ -211,11 +211,8 @@ export async function handleNewSession(
       },
       onConnected: async (sid, isFirstTime) => {
         const socket = getSocket(sid);
-        // Only notify if it's first-time pairing OR if we want to show the session menu
-        // Reconnects (silent) are handled by the socket manager alerts if needed.
-        if (!isFirstTime && !ctx.callbackQuery) return;
-
-        // Delegate to centralized connected notification service
+        // Centralized connected notification service handles deduplication.
+        // We notify on every connect to ensure state is synchronized.
         await notifySessionConnected({
           telegramChatId: ctx.chat!.id,
           telegram: {
@@ -311,9 +308,7 @@ export async function handlePairingCode(
       },
       onConnected: async (sid, isFirstTime) => {
         const socket = getSocket(sessionId);
-        if (!isFirstTime && !ctx.callbackQuery) return;
-
-        // Delegate to centralized connected notification service
+        // Centralized connected notification service handles deduplication.
         await notifySessionConnected({
           telegramChatId: ctx.chat!.id,
           telegram: {

@@ -65,3 +65,32 @@
 - `setGlobalMenuUrl()` stores multiple URLs in `globalMenuUrls` array
 - `parseUrlButtons()` correctly parses `label|url` format
 - The `Open N` fallback is the bug — when no label provided, should use URL or skip
+# WA-Bridge Comprehensive Audit & Improvement Plan
+
+## 1. Connected / Pairing Notifications
+- **Status**: Notifications are inconsistent. Silent reconnects are suppressed in `telegram/handlers/session.ts`.
+- **Issue**: `.pair` command in `event-handlers.ts` bypasses the central notification service.
+- **Fix**: Centralize all connection events into `notifySessionConnected` with retry logic.
+
+## 2. Sticker & Preview Engine
+- **Status**: Throwing `Cannot convert undefined or null to object` in `PreviewResolver.ts`.
+- **Issue**: `MetadataResolver.ts` returns `null` on failure.
+- **Fix**: Ensure `MetadataResolver.ts` always returns a valid object. Add automated dependency checks for sticker processing.
+
+## 3. Response Pipeline & Capability Matrix
+- **Status**: Global buttons attach to every message in `PreviewDispatcher.ts`.
+- **Issue**: No check for command type or whitelist.
+- **Fix**: Implement a **Response Capability Matrix** in `PreviewDispatcher`. Standardize all responses through `PreviewManager.send`.
+
+## 4. Menu UX & Redesign
+- **Status**: Menus are long and lack detailed help.
+- **Issue**: `whatsappMenu` in `ascii-art.ts` needs a mobile-first overhaul. `menu-registry.ts` missing metadata.
+- **Fix**: Redesign `whatsappMenu` with pagination and detailed command help.
+
+## 5. Mention System (.tag / .mtag)
+- **Status**: `.tag` not fully invisible. `.mtag` has vertical layout.
+- **Fix**: Refactor `tag.ts` for true hidetag and beautiful visible mention layouts.
+
+## 6. Public Mode & Permissions
+- **Status**: `publicMode` defaults to `false`.
+- **Fix**: Change default to `true`. Remove `help` from public commands (keep `menu`, `gmenu`, `pair`).
