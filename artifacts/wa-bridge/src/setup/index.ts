@@ -13,13 +13,22 @@ export async function runSetupWizard() {
     const qm = new QuestionManager();
     const config: any = {};
     const env: Record<string, string> = {};
+    
+    let mongodbInstalledLocally = false;
+    let redisInstalledLocally = false;
 
     console.log('\n\x1b[32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log('      OMEGA-V1 • CYBERNETIC SETUP WIZARD');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m\n');
 
+    const setupMode = await qm.select('Choose Setup Mode', [
+        'Quick Setup (Zero-Config, uses smart defaults)',
+        'Advanced Setup (Custom configuration)'
+    ]);
+    const isQuick = setupMode.startsWith('Quick');
+
     // 1. Dependency Detection
-    console.log('\x1b[36m[1/6] Scanning System Dependencies...\x1b[0m');
+    console.log('\n\x1b[36m[1/6] Scanning System Dependencies...\x1b[0m');
     const requiredDeps = ['node', 'npm', 'pnpm', 'git', 'ffmpeg', 'curl', 'zip', 'tar'];
     const optionalDeps = ['redis', 'mongodb', 'imagemagick', 'python', 'bun'];
     
@@ -29,7 +38,7 @@ export async function runSetupWizard() {
         if (isMissing) {
             if (requiredDeps.includes(dep)) {
                 console.log(`\x1b[31m✖ ${dep} is missing (REQUIRED)\x1b[0m`);
-                const choice = await qm.select(`How would you like to handle missing ${dep}?`, [
+                const choice = isQuick ? `Attempt to install ${dep} automatically` : await qm.select(`How would you like to handle missing ${dep}?`, [
                     `Attempt to install ${dep} automatically`,
                     `I will install it manually (Exit setup)`,
                     `Continue anyway (Not recommended)`
@@ -48,7 +57,7 @@ export async function runSetupWizard() {
                 }
             } else {
                 console.log(`\x1b[33m⚠ ${dep} is missing (Optional)\x1b[0m`);
-                const choice = await qm.select(`${dep} is recommended but not found.`, [
+                const choice = isQuick ? `Install ${dep} automatically (Recommended)` : await qm.select(`${dep} is recommended but not found.`, [
                     `Install ${dep} automatically (Recommended)`,
                     `Skip (I don't need this feature)`,
                     `Use remote service (for Redis/Mongo)`
@@ -56,12 +65,16 @@ export async function runSetupWizard() {
                 if (choice === `Install ${dep} automatically (Recommended)`) {
                     const success = Installer.installSystemDependency(dep);
                     if (success) {
+                        if (dep === 'mongodb') mongodbInstalledLocally = true;
+                        if (dep === 'redis') redisInstalledLocally = true;
                         console.log(`\x1b[32m✔ ${dep} installed and started successfully\x1b[0m`);
                     }
                 }
             }
         } else {
             console.log(`\x1b[32m✔ ${dep} is ready\x1b[0m`);
+            if (dep === 'mongodb') mongodbInstalledLocally = true;
+            if (dep === 'redis') redisInstalledLocally = true;
         }
     }
 
@@ -81,26 +94,31 @@ export async function runSetupWizard() {
         'Owner ID must be numeric. Use @userinfobot to find it.'
     );
 
-    env.TELEGRAM_OWNER_USERNAME = await qm.ask('Owner Username (without @)');
-    env.TELEGRAM_ADMIN_IDS = await qm.ask('Admin IDs (comma separated, optional)', env.TELEGRAM_OWNER_ID);
-    env.TELEGRAM_LOG_CHAT_ID = await qm.ask('Log Chat ID (optional, bot must be member)');
+    env.TELEGRAM_OWNER_USERNAME = isQuick ? 'admin' : await qm.ask('Owner Username (without @)');
+    env.TELEGRAM_ADMIN_IDS = isQuick ? env.TELEGRAM_OWNER_ID : await qm.ask('Admin IDs (comma separated, optional)', env.TELEGRAM_OWNER_ID);
+    env.TELEGRAM_LOG_CHAT_ID = isQuick ? '' : await qm.ask('Log Chat ID (optional, bot must be member)');
 
     // 3. Infrastructure
     console.log('\n\x1b[36m[3/6] Database & Infrastructure...\x1b[0m');
     
     // Database
-    const dbType = await qm.select('Primary Database Type', ['MongoDB', 'SQLite', 'PostgreSQL', 'MySQL']);
+    const dbType = isQuick ? (mongodbInstalledLocally ? 'MongoDB' : 'SQLite') : await qm.select('Primary Database Type', ['MongoDB', 'SQLite', 'PostgreSQL', 'MySQL']);
     config.database = { type: dbType };
     
     if (dbType === 'MongoDB') {
-        env.MONGO_URI = await qm.askWithValidation(
-            'MongoDB URI',
-            Validator.isMongoURI,
-            'Invalid MongoDB URI format',
-            'mongodb://localhost:27017/omega'
-        );
+        if (isQuick && mongodbInstalledLocally) {
+            env.MONGO_URI = 'mongodb://localhost:27017/omega';
+            console.log(`\x1b[32m✔ MongoDB auto-configured to local instance\x1b[0m`);
+        } else {
+            env.MONGO_URI = await qm.askWithValidation(
+                'MongoDB URI',
+                Validator.isMongoURI,
+                'Invalid MongoDB URI format',
+                'mongodb://localhost:27017/omega'
+            );
+        }
     } else if (dbType === 'SQLite') {
-        config.database.path = await qm.ask('SQLite path', './database.sqlite');
+        config.database.path = isQuick ? './database.sqlite' : await qm.ask('SQLite path', './database.sqlite');
     } else {
         env.DB_HOST = await qm.ask('Host', 'localhost');
         env.DB_PORT = await qm.ask('Port', dbType === 'PostgreSQL' ? '5432' : '3306');
@@ -110,28 +128,33 @@ export async function runSetupWizard() {
     }
 
     // Redis
-    config.useRedis = await qm.confirm('Enable Redis for high-performance queues?', true);
+    config.useRedis = isQuick ? redisInstalledLocally : await qm.confirm('Enable Redis for high-performance queues?', true);
     if (config.useRedis) {
-        env.REDIS_URL = await qm.askWithValidation(
-            'Redis URL',
-            Validator.isRedisURL,
-            'Invalid Redis URL format',
-            'redis://localhost:6379'
-        );
+        if (isQuick && redisInstalledLocally) {
+            env.REDIS_URL = 'redis://localhost:6379';
+            console.log(`\x1b[32m✔ Redis auto-configured to local instance\x1b[0m`);
+        } else {
+            env.REDIS_URL = await qm.askWithValidation(
+                'Redis URL',
+                Validator.isRedisURL,
+                'Invalid Redis URL format',
+                'redis://localhost:6379'
+            );
+        }
     }
 
     // WhatsApp
     console.log('\n\x1b[36m[4/6] WhatsApp Engine...\x1b[0m');
     config.whatsapp = {
-        pairingMode: await qm.select('Default Pairing Mode', ['QR', 'Pairing Code']),
-        sessionFolder: await qm.ask('Session storage path', './sessions')
+        pairingMode: isQuick ? 'QR' : await qm.select('Default Pairing Mode', ['QR', 'Pairing Code']),
+        sessionFolder: isQuick ? './sessions' : await qm.ask('Session storage path', './sessions')
     };
 
     // 4. Web Dashboard
     console.log('\n\x1b[36m[5/6] Web Dashboard...\x1b[0m');
-    config.enableWebDashboard = await qm.confirm('Enable Web Control Panel?', true);
+    config.enableWebDashboard = isQuick ? true : await qm.confirm('Enable Web Control Panel?', true);
     if (config.enableWebDashboard) {
-        const port = await qm.askWithValidation(
+        const port = isQuick ? '3000' : await qm.askWithValidation(
             'Dashboard Port',
             async (p) => {
                 const res = await Validator.isPortAvailable(p);
@@ -143,11 +166,11 @@ export async function runSetupWizard() {
         
         config.web = {
             port: port,
-            domain: await qm.ask('Domain / IP', 'localhost'),
-            useHttps: await qm.confirm('Use HTTPS (Reverse Proxy recommended)?', false),
+            domain: isQuick ? 'localhost' : await qm.ask('Domain / IP', 'localhost'),
+            useHttps: isQuick ? false : await qm.confirm('Use HTTPS (Reverse Proxy recommended)?', false),
             auth: {
-                username: await qm.ask('Admin Username', 'admin'),
-                password: await qm.ask('Admin Password', crypto.randomBytes(4).toString('hex'))
+                username: isQuick ? 'admin' : await qm.ask('Admin Username', 'admin'),
+                password: isQuick ? crypto.randomBytes(4).toString('hex') : await qm.ask('Admin Password', crypto.randomBytes(4).toString('hex'))
             }
         };
         env.WEB_PORT = config.web.port;
@@ -160,7 +183,8 @@ export async function runSetupWizard() {
     const plugins = ['OpenAI', 'Gemini', 'Claude', 'Pinterest', 'Weather'];
     config.plugins = {};
     for (const plugin of plugins) {
-        if (await qm.confirm(`Enable ${plugin} support?`, false)) {
+        const shouldEnable = isQuick ? false : await qm.confirm(`Enable ${plugin} support?`, false);
+        if (shouldEnable) {
             const key = await qm.ask(`${plugin} API Key`);
             config.plugins[plugin.toLowerCase()] = { apiKey: key };
             env[`${plugin.toUpperCase()}_API_KEY`] = key;
@@ -177,11 +201,12 @@ export async function runSetupWizard() {
         'Owner ID': env.TELEGRAM_OWNER_ID,
         'Database': config.database.type,
         'Redis': config.useRedis ? 'Enabled' : 'Disabled',
-        'Web Dashboard': config.enableWebDashboard ? `Port ${config.web.port}` : 'Disabled'
+        'Web Dashboard': config.enableWebDashboard ? `Port ${config.web.port}` : 'Disabled',
+        'Setup Mode': isQuick ? 'Quick (Zero-Config)' : 'Advanced'
     };
     SummaryGenerator.display(summaryData);
 
-    if (await qm.confirm('\nSave configuration and proceed to startup?')) {
+    if (isQuick || await qm.confirm('\nSave configuration and proceed to startup?')) {
         console.log('\nWriting files...');
         ConfigWriter.writeEnv(env);
         ConfigWriter.writeConfigJson(config);
