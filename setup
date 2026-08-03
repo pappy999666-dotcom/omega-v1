@@ -1,2 +1,48 @@
 #!/bin/bash
-pnpm run setup
+
+# ============================================================
+# OMEGA-V1 • CYBERNETIC BOOTLOADER
+# ============================================================
+
+set -e
+
+# Neon Green Color
+G='\033[0;32m'
+NC='\033[0m' # No Color
+
+echo -e "${G}"
+echo " ██████╗ ███╗   ███╗███████╗ ██████╗  █████╗ "
+echo "██╔═══██╗████╗ ████║██╔════╝██╔════╝ ██╔══██╗"
+echo "██║   ██║██╔████╔██║█████╗  ██║  ███╗███████║"
+echo "██║   ██║██║╚██╔╝██║██╔══╝  ██║   ██║██╔══██║"
+echo "╚██████╔╝██║ ╚═╝ ██║███████╗╚██████╔╝██║  ██║"
+echo " ╚═════╝ ╚═╝     ╚═╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝"
+echo -e "          SYSTEM INITIALIZATION${NC}\n"
+
+# 1. Check for Node.js
+if ! command -v node &> /dev/null; then
+    echo -e "❌ ERROR: Node.js is not installed. Please install Node.js first."
+    exit 1
+fi
+
+# 2. Determine Package Manager
+if command -v pnpm &> /dev/null; then
+    PM="pnpm"
+    RUN_CMD="pnpm --filter @workspace/wa-bridge run setup"
+elif command -v npm &> /dev/null; then
+    PM="npm"
+    echo -e "⚠️  pnpm not found. Falling back to npm/npx..."
+    RUN_CMD="npx pnpm --filter @workspace/wa-bridge run setup"
+else
+    echo -e "❌ ERROR: Neither pnpm nor npm found. Please install a package manager."
+    exit 1
+fi
+
+# 3. Execute Setup Wizard
+echo -e "🚀 Launching Setup Wizard via ${G}${PM}${NC}...\n"
+
+# Ensure we are in the root directory
+cd "$(dirname "$0")"
+
+# Execute
+$RUN_CMD
