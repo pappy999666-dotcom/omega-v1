@@ -1,12 +1,10 @@
 #!/bin/bash
 
 # ============================================================
-# OMEGA-V1 • UNIVERSAL CYBERNETIC INSTALLER
+# OMEGA-V1 • ZERO-FAILURE CYBERNETIC BOOTLOADER
 # ============================================================
 
-set -e
-
-# Colors
+# Neon Green Color
 G='\033[0;32m'
 R='\033[0;31m'
 Y='\033[0;33m'
@@ -19,7 +17,7 @@ echo "██║   ██║██╔████╔██║█████╗  
 echo "██║   ██║██║╚██╔╝██║██╔══╝  ██║   ██║██╔══██║"
 echo "╚██████╔╝██║ ╚═╝ ██║███████╗╚██████╔╝██║  ██║"
 echo " ╚═════╝ ╚═╝     ╚═╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝"
-echo -e "          UNIVERSAL SYSTEM BOOTLOADER${NC}\n"
+echo -e "          ZERO-FAILURE BOOT SEQUENCE${NC}\n"
 
 # Determine if sudo is needed
 if [ "$EUID" -ne 0 ]; then
@@ -28,63 +26,71 @@ else
     SUDO=""
 fi
 
-# 1. Check & Install Node.js
-if ! command -v node &> /dev/null; then
-    echo -e "${Y}⚠️  Node.js not detected. Attempting automatic installation...${NC}"
-    
+# Function to locate commands even if not in PATH
+find_cmd() {
+    command -v "$1" || which "$1" 2>/dev/null || find /usr/local/bin /usr/bin /bin /usr/sbin /sbin -name "$1" -executable -print -quit 2>/dev/null
+}
+
+# 1. Ensure Node.js is present
+NODE_PATH=$(find_cmd node)
+if [ -z "$NODE_PATH" ]; then
+    echo -e "${Y}⚠️  Node.js missing. Attempting emergency installation...${NC}"
     if command -v apt-get &> /dev/null; then
-        echo -e "📦 Installing Node.js via apt..."
-        $SUDO apt-get update -y
-        $SUDO apt-get install -y curl ca-certificates gnupg
-        
-        # Robust GPG Key handling
+        $SUDO apt-get update -y && $SUDO apt-get install -y curl ca-certificates gnupg
         $SUDO mkdir -p /etc/apt/keyrings
         $SUDO rm -f /etc/apt/keyrings/nodesource.gpg
         curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | $SUDO gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
-        
-        NODE_MAJOR=20
-        echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" | $SUDO tee /etc/apt/sources.list.d/nodesource.list
-        $SUDO apt-get update -y
-        $SUDO apt-get install nodejs -y
+        echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" | $SUDO tee /etc/apt/sources.list.d/nodesource.list
+        $SUDO apt-get update -y && $SUDO apt-get install nodejs -y
+        NODE_PATH=$(find_cmd node)
     else
-        echo -e "${R}❌ Error: Package manager not supported. Please install Node.js manually.${NC}"
+        echo -e "${R}❌ FATAL: Cannot install Node.js automatically. Install it manually.${NC}"
         exit 1
     fi
 fi
-echo -e "✅ Node.js: ${G}$(node -v)${NC}"
+echo -e "✅ Node.js: ${G}$($NODE_PATH -v)${NC} at $NODE_PATH"
 
-# 2. Check & Install Git
-if ! command -v git &> /dev/null; then
-    echo -e "${Y}⚠️  Git not detected. Installing...${NC}"
-    if command -v apt-get &> /dev/null; then
-        $SUDO apt-get install -y git
+# 2. Ensure PNPM or Fallback
+PNPM_PATH=$(find_cmd pnpm)
+if [ -z "$PNPM_PATH" ]; then
+    echo -e "${Y}⚠️  pnpm missing. Installing globally...${NC}"
+    NPM_PATH=$(find_cmd npm)
+    if [ ! -z "$NPM_PATH" ]; then
+        $SUDO $NPM_PATH install -g pnpm || echo "Global install failed, will use npx fallback"
+        PNPM_PATH=$(find_cmd pnpm)
     fi
 fi
-echo -e "✅ Git: ${G}$(git --version)${NC}"
 
-# 3. Check & Install PNPM
-if ! command -v pnpm &> /dev/null; then
-    echo -e "${Y}⚠️  pnpm not detected. Installing globally...${NC}"
-    if command -v npm &> /dev/null; then
-        $SUDO npm install -g pnpm
-    else
-        echo -e "📦 Installing pnpm via standalone script..."
-        curl -fsSL https://get.pnpm.io/install.sh | sh -
-        export PNPM_HOME="$HOME/.local/share/pnpm"
-        export PATH="$PNPM_HOME:$PATH"
-    fi
-fi
-echo -e "✅ pnpm: ${G}$(pnpm -v || echo 'Installed')${NC}"
+# 3. Launch Wizard with Triple Fallback
+echo -e "\n🚀 ${G}Initializing Setup Wizard...${NC}\n"
 
-# 4. Final Environment Check
-echo -e "\n🚀 ${G}System core verified. Launching Omega Setup Wizard...${NC}\n"
-
-# Ensure we are in the root directory
+# Change to script directory
 cd "$(dirname "$0")"
 
-# Execute Wizard
-if command -v pnpm &> /dev/null; then
-    pnpm --filter @workspace/wa-bridge run setup
+# FALLBACK 1: Try pnpm directly
+if [ ! -z "$PNPM_PATH" ]; then
+    echo "Attempting Fallback 1 (pnpm)..."
+    if $PNPM_PATH --filter @workspace/wa-bridge run setup; then
+        exit 0
+    fi
+fi
+
+# FALLBACK 2: Try npx pnpm
+NPM_PATH=$(find_cmd npm)
+if [ ! -z "$NPM_PATH" ]; then
+    echo "Attempting Fallback 2 (npx pnpm)..."
+    if $NODE_PATH "$NPM_PATH" exec pnpm --filter @workspace/wa-bridge run setup; then
+        exit 0
+    fi
+fi
+
+# FALLBACK 3: Emergency direct execution
+echo -e "${Y}⚠️  Standard runners failed. Attempting Fallback 3 (Direct Execution)...${NC}"
+if [ -d "artifacts/wa-bridge" ]; then
+    cd artifacts/wa-bridge
+    # Try to use tsx if available, otherwise install it temporarily
+    $NODE_PATH "$NPM_PATH" exec tsx src/setup/run.ts
 else
-    npm exec --prefix artifacts/wa-bridge tsx src/setup/run.ts
+    echo -e "${R}❌ FATAL: Could not locate wa-bridge directory.${NC}"
+    exit 1
 fi
