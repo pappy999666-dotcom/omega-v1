@@ -66,6 +66,28 @@ export interface DispatchOptions {
   telegramId?: string;
   /** Bypass tagReply setting and force mentions */
   forceMentions?: boolean;
+  /** Media content to send */
+  media?: {
+    buffer: Buffer;
+    type: 'image' | 'video' | 'audio' | 'document' | 'sticker';
+    mimetype?: string;
+    fileName?: string;
+    caption?: string;
+    ptt?: boolean;
+    gifPlayback?: boolean;
+  };
+  /** Poll content to send */
+  poll?: {
+    name: string;
+    values: string[];
+    selectableCount?: number;
+  };
+  /** Status-specific options */
+  statusOptions?: {
+    statusJidList?: string[];
+  };
+  /** Edit an existing message */
+  edit?: any;
 }
 
 // ── Preview Dispatcher ──────────────────────────────────────
@@ -138,7 +160,22 @@ export class PreviewDispatcher {
         if (!finalContent.nativeFlow) {
           finalContent.nativeFlow = { buttons: [] };
         }
-        finalContent.nativeFlow.buttons.push(...options.extra.buttons);
+        for (const b of options.extra.buttons) {
+          if (b.name) {
+            // Already in native format (e.g., cta_copy, cta_url, etc.)
+            finalContent.nativeFlow.buttons.push(b);
+          } else {
+            // Convert simple { text, url } to cta_url
+            finalContent.nativeFlow.buttons.push({
+              name: 'cta_url',
+              buttonParamsJson: JSON.stringify({
+                display_text: b.text,
+                url: b.url,
+                merchant_url: b.url,
+              }),
+            });
+          }
+        }
       }
 
       // 3. Apply Global Buttons
@@ -146,11 +183,25 @@ export class PreviewDispatcher {
         if (!finalContent.nativeFlow) {
           finalContent.nativeFlow = { buttons: [] };
         }
-        // Ensure we don't duplicate
-        const existingUrls = new Set(finalContent.nativeFlow.buttons.map((b: any) => b.url));
+        // Ensure we don't duplicate by checking URL inside buttonParamsJson
+        const getUrl = (btn: any) => {
+          try {
+            return JSON.parse(btn.buttonParamsJson).url;
+          } catch {
+            return btn.url;
+          }
+        };
+        const existingUrls = new Set(finalContent.nativeFlow.buttons.map(getUrl));
         for (const b of globalButtons) {
           if (!existingUrls.has(b.url)) {
-            finalContent.nativeFlow.buttons.push({ text: b.text, url: b.url });
+            finalContent.nativeFlow.buttons.push({
+              name: 'cta_url',
+              buttonParamsJson: JSON.stringify({
+                display_text: b.text,
+                url: b.url,
+                merchant_url: b.url,
+              }),
+            });
           }
         }
       }
@@ -159,6 +210,61 @@ export class PreviewDispatcher {
 
     // Step 1: Detect URL
     const url = options.existingPreview?.url ?? UrlDetector.extractFirst(text);
+
+    // ── Pipeline Stage: Poll Send ───────────────────────────
+    if (options.poll) {
+      try {
+        let content: any = {
+          poll: {
+            name: options.poll.name,
+            values: options.poll.values,
+            selectableCount: options.poll.selectableCount ?? 1,
+          },
+        };
+        if (options.extra) content = { ...content, ...options.extra };
+        content = applyGlobalPipeline(content);
+        await socket.sendMessage(jid, content as AnyMessageContent, {
+          quoted: options.quoted,
+          edit: options.edit,
+          ...(options.statusOptions ?? {}),
+        } as any);
+        return { success: true };
+      } catch (err) {
+        PreviewLogger.sendFailed(jid, 'poll', String(err));
+        return { success: false };
+      }
+    }
+
+    // ── Pipeline Stage: Media Send ──────────────────────────
+    if (options.media) {
+      try {
+        let content: any;
+        const { type, buffer, mimetype, fileName, caption, ptt, gifPlayback } = options.media;
+        
+        if (type === 'image') content = { image: buffer, caption: caption ?? text };
+        else if (type === 'video') content = { video: buffer, caption: caption ?? text, gifPlayback };
+        else if (type === 'audio') content = { audio: buffer, mimetype: mimetype ?? 'audio/mp4', ptt };
+        else if (type === 'sticker') content = { sticker: buffer };
+        else if (type === 'document') content = { document: buffer, mimetype: mimetype ?? 'application/octet-stream', fileName, caption: caption ?? text };
+        else content = { text, ...(options.extra ?? {}) };
+
+        if (options.extra) content = { ...content, ...options.extra };
+        if (options.externalAdReply) {
+          content.contextInfo = { ...content.contextInfo, externalAdReply: options.externalAdReply };
+        }
+
+        content = applyGlobalPipeline(content);
+        await socket.sendMessage(jid, content as AnyMessageContent, {
+          quoted: options.quoted,
+          edit: options.edit,
+          ...(options.statusOptions ?? {}),
+        } as any);
+        return { success: true };
+      } catch (err) {
+        PreviewLogger.sendFailed(jid, 'media', String(err));
+        return { success: false };
+      }
+    }
 
     if (!url || options.suppressPreview) {
       // No URL or suppressed — send plain text
@@ -173,7 +279,11 @@ export class PreviewDispatcher {
         
         content = applyGlobalPipeline(content);
         
-        await socket.sendMessage(jid, content as AnyMessageContent, options.quoted ? { quoted: options.quoted } : undefined);
+        await socket.sendMessage(jid, content as AnyMessageContent, {
+          quoted: options.quoted,
+          edit: options.edit,
+          ...(options.statusOptions ?? {}),
+        } as any);
         PreviewLogger.sent(jid, url ?? 'no-url');
         return { success: true };
       } catch (err) {
@@ -228,7 +338,7 @@ export class PreviewDispatcher {
       try {
         let content: any = { text };
         content = applyGlobalPipeline(content);
-        await socket.sendMessage(jid, content as AnyMessageContent);
+        await socket.sendMessage(jid, content as AnyMessageContent, options.statusOptions as any);
         return { success: true, stage: 'Stage5_UrlOnly' };
       } catch {
         return { success: false };
@@ -253,7 +363,11 @@ export class PreviewDispatcher {
         
         finalContent = applyGlobalPipeline(finalContent);
         
-        await socket.sendMessage(jid, finalContent, options.quoted ? { quoted: options.quoted } : undefined);
+        await socket.sendMessage(jid, finalContent, {
+          quoted: options.quoted,
+          edit: options.edit,
+          ...(options.statusOptions ?? {}),
+        } as any);
       }
 
       PreviewLogger.sent(jid, url);
@@ -264,7 +378,7 @@ export class PreviewDispatcher {
       try {
         let content: any = { text };
         content = applyGlobalPipeline(content);
-        await socket.sendMessage(jid, content as AnyMessageContent);
+        await socket.sendMessage(jid, content as AnyMessageContent, options.statusOptions as any);
         return { success: true, stage: 'Stage5_UrlOnly' };
       } catch {
         return { success: false };

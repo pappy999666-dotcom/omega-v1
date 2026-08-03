@@ -9,6 +9,7 @@ import { logger } from '../../utils/logger.js';
 import { errorCard, warningCard } from '../../utils/ascii-art.js';
 import { renderTemplate } from '../../utils/response-engine.js';
 import { resolveTarget } from './resolve-target.js';
+import { PreviewManager } from '../../preview-engine/index.js';
 import { BOT_NOT_ADMIN_MSG, fetchGroupMeta, isAdminJid, stripDeviceSuffix } from './group-permissions.js';
 
 // findParticipant and numericId removed: resolveTarget already returns target.participant
@@ -25,6 +26,8 @@ interface ModerationPipelineOptions {
   prefix: string;
   template?: string;
   onSuccess?: (targetNumber: string) => void;
+  sessionId?: string;
+  telegramId?: string;
 }
 
 export interface ModerationPipelineSuccess {
@@ -157,7 +160,7 @@ async function removeParticipantWithRetry(
 export async function runRemoveModerationPipeline(
   options: ModerationPipelineOptions,
 ): Promise<ModerationPipelineResult> {
-  const { action, args, msg, socket, groupJid, prefix, template, onSuccess } = options;
+  const { action, args, msg, socket, groupJid, prefix, template, onSuccess, sessionId, telegramId } = options;
   const label = title(action);
 
   if (!groupJid.endsWith('@g.us')) {
@@ -254,7 +257,12 @@ export async function runRemoveModerationPipeline(
       socket,
       groupJid,
     });
-    await socket.sendMessage(groupJid, { text: rendered, mentions: [targetJid] });
+    // Centralize response through PreviewManager to ensure global URL buttons and formatting preservation
+    await PreviewManager.send(socket as any, groupJid, rendered, {
+      extra: { mentions: [targetJid] },
+      sessionId,
+      telegramId,
+    });
   } catch (announceErr) {
     // Announcement failed — the member was already removed. Log and continue.
     logger.warn('[Moderation] announcement failed after successful removal', {

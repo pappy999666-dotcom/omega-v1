@@ -20,6 +20,7 @@ import { executeAction, deleteMessage } from './actions.js';
 import type { ViolationContext } from './types.js';
 import { loadGroupEventConfig } from '../../services/group-config.js';
 import { renderTemplate } from '../../utils/response-engine.js';
+import { PreviewManager } from '../../preview-engine/index.js';
 import {
   fetchGroupMeta,
   isProtectedJid,
@@ -342,7 +343,11 @@ export async function handleParticipantUpdate(
       }
 
       const msg = mod.customMessage ?? `⚠️ @${authorNumber} performed an unauthorized promotion and has been actioned.`;
-      ops.push(socket.sendMessage(groupJid, { text: msg, mentions: [author] }));
+      ops.push(PreviewManager.send(socket as any, groupJid, msg, {
+        extra: { mentions: [author] },
+        sessionId,
+        telegramId,
+      }));
       await Promise.allSettled(ops);
     }
   }
@@ -378,7 +383,11 @@ export async function handleParticipantUpdate(
             socket,
             groupJid,
           });
-          await socket.sendMessage(groupJid, { text: rendered, mentions: [mentionJid] });
+          await PreviewManager.send(socket as any, groupJid, rendered, {
+            extra: { mentions: [mentionJid] },
+            sessionId,
+            telegramId,
+          });
         } catch (err) {
           logger.warn('[GroupEvents] Welcome send failed', { err: String(err), participantJid });
         }
@@ -443,7 +452,11 @@ export async function handleParticipantUpdate(
             socket,
             groupJid,
           });
-          await socket.sendMessage(groupJid, { text: rendered, mentions: [mentionJid] });
+          await PreviewManager.send(socket as any, groupJid, rendered, {
+            extra: { mentions: [mentionJid] },
+            sessionId,
+            telegramId,
+          });
         } catch (err) {
           logger.warn('[GroupEvents] Goodbye send failed', { err: String(err), participantJid });
         }
@@ -478,7 +491,11 @@ export async function handleParticipantUpdate(
       const msg =
         mod.customMessage ??
         `🛡️ AntiDemote: @${authorNumber} has been ${actionWord} for unauthorized demotion.${restoreNote}`;
-      ops.push(socket.sendMessage(groupJid, { text: msg, mentions: [author, ...participants] }));
+      ops.push(PreviewManager.send(socket as any, groupJid, msg, {
+        extra: { mentions: [author, ...participants] },
+        sessionId,
+        telegramId,
+      }));
 
       await Promise.allSettled(ops);
     }

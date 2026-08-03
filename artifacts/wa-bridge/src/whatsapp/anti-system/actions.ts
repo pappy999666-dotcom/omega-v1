@@ -5,6 +5,7 @@
 
 import type { BridgeWASocket as WASocket, WebMessageInfo } from '../baileys-types.js';
 import { logger } from '../../utils/logger.js';
+import { PreviewManager } from '../../preview-engine/index.js';
 import { bold, italic, successCard, warningCard } from '../../utils/ascii-art.js';
 import { incrementWarn, resetWarn, getWarnCount } from './config.js';
 import { renderResponse } from './response.js';
@@ -122,9 +123,10 @@ export async function executeAction(
     // Kick + notify concurrently
     ops.push(kickParticipant(socket, groupJid, senderJid));
     ops.push(
-      socket.sendMessage(groupJid, {
-        text: responseText,
-        mentions: [senderJid],
+      PreviewManager.send(socket as any, groupJid, responseText, {
+        extra: { mentions: [senderJid] },
+        sessionId,
+        telegramId,
       })
     );
     logger.info(`[AntiSystem] KICK — ${moduleName}`, { sessionId, groupJid, senderNumber });
@@ -138,21 +140,34 @@ export async function executeAction(
       resetWarn(sessionId, groupJid, senderNumber, moduleKey);
       ops.push(kickParticipant(socket, groupJid, senderJid));
       const kickMsg = `⚠️ @${senderNumber} has been kicked after ${warnThreshold} warnings (${moduleName}).`;
-      ops.push(socket.sendMessage(groupJid, { text: kickMsg, mentions: [senderJid] }));
+      ops.push(
+        PreviewManager.send(socket as any, groupJid, kickMsg, {
+          extra: { mentions: [senderJid] },
+          sessionId,
+          telegramId,
+        })
+      );
       logger.info(`[AntiSystem] WARN→KICK — ${moduleName}`, { sessionId, groupJid, senderNumber, count });
     } else {
       // Still within warn window
       const warnMsg = `${responseText}\n\n${italic(`Warning ${count}/${warnThreshold}. ${remaining} more will result in a kick.`)}`;
-      ops.push(socket.sendMessage(groupJid, { text: warnMsg, mentions: [senderJid] }));
+      ops.push(
+        PreviewManager.send(socket as any, groupJid, warnMsg, {
+          extra: { mentions: [senderJid] },
+          sessionId,
+          telegramId,
+        })
+      );
       logger.info(`[AntiSystem] WARN ${count}/${warnThreshold} — ${moduleName}`, { sessionId, groupJid, senderNumber });
     }
 
   } else if (action === 'delete') {
     // Delete only — still notify
     ops.push(
-      socket.sendMessage(groupJid, {
-        text: responseText,
-        mentions: [senderJid],
+      PreviewManager.send(socket as any, groupJid, responseText, {
+        extra: { mentions: [senderJid] },
+        sessionId,
+        telegramId,
       })
     );
     logger.info(`[AntiSystem] DELETE — ${moduleName}`, { sessionId, groupJid, senderNumber });

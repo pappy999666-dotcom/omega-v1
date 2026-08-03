@@ -150,6 +150,8 @@ export async function cmdKick(
     groupJid,
     prefix,
     template,
+    sessionId,
+    telegramId,
   });
   if (!result.ok) return result.reply;
   // The pipeline already sent the group announcement — return result.reply (empty string)
@@ -181,6 +183,8 @@ export async function cmdBan(
     prefix,
     template,
     onSuccess: (number) => addBannedNumber(telegramId, sessionId, groupJid, number),
+    sessionId,
+    telegramId,
   });
   if (!result.ok) return result.reply;
   // The pipeline already sent the group announcement — return result.reply (empty string)
@@ -509,6 +513,8 @@ export async function cmdPoll(
   args: string[],
   msg: WebMessageInfo,
   socket: WASocket,
+  telegramId: string,
+  sessionId: string,
   groupJid: string,
   prefix: string
 ): Promise<string> {
@@ -532,14 +538,15 @@ export async function cmdPoll(
   const options = parts.slice(1);
 
   try {
-    await (socket as unknown as {
-      sendMessage(jid: string, content: Record<string, unknown>): Promise<unknown>;
-    }).sendMessage(groupJid, {
+    await PreviewManager.send(socket as any, groupJid, '', {
       poll: {
         name: question,
         values: options,
         selectableCount: 1,
       },
+      quoted: msg,
+      sessionId,
+      telegramId,
     });
     return successCard('Poll Created', bold(question), options.map((o, i) => [`Option ${i + 1}`, o]));
   } catch (err) {

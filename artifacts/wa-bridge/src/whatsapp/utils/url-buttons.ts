@@ -14,58 +14,45 @@ export interface UrlButton {
 function cleanUrl(url: string): string | null {
   const trimmed = url.trim();
   if (!/^https?:\/\/\S+$/u.test(trimmed)) return null;
-  return trimmed.split('?')[0] ?? trimmed;
+  // Preserve full URL including query params for accuracy
+  return trimmed;
 }
 
+/**
+ * Parse URL buttons from administrator configuration.
+ * Format: "Label|https://url" or just "https://url"
+ * Multiple entries separated by newlines or commas.
+ */
 export function parseUrlButtons(input: string | string[] | null | undefined): UrlButton[] {
   const raw = Array.isArray(input) ? input : input ? input.split(/[\n,]+/u) : [];
-  return raw.flatMap((entry, index) => {
-    const [labelPart, ...urlParts] = entry.includes('|') ? entry.split('|') : ['', entry];
-    const url = cleanUrl(urlParts.join('|') || labelPart);
-    if (!url) return [];
-    // Fallback label: use provided label if non-empty, otherwise derive from URL host
+  return raw.flatMap((entry) => {
+    const trimmedEntry = entry.trim();
+    if (!trimmedEntry) return [];
+
     let text: string;
-    if (urlParts.length > 0 && labelPart.trim()) {
-      text = labelPart.trim().slice(0, 25);
+    let url: string | null;
+
+    if (trimmedEntry.includes('|')) {
+      const parts = trimmedEntry.split('|');
+      text = parts[0].trim();
+      url = cleanUrl(parts.slice(1).join('|'));
     } else {
-      // Extract host from URL for a sensible default label
+      url = cleanUrl(trimmedEntry);
+      // No "Open" fallback. If no label, use the domain or full URL.
       try {
-        const host = new URL(url).hostname.replace(/^www\./, '');
-        text = host.length <= 25 ? host : host.slice(0, 25);
+        text = url ? new URL(url).hostname.replace(/^www\./, '') : '';
       } catch {
-        text = `Open ${index + 1}`;
+        text = url || '';
       }
     }
-    return [{ text, url }];
+
+    if (!url || !text) return [];
+
+    return [{ 
+      text: text.slice(0, 40), // WhatsApp supports longer labels than 25, but let's be safe
+      url 
+    }];
   });
 }
 
-export async function sendWithUrlButtons(
-  socket: WASocket,
-  jid: string,
-  content: Record<string, unknown>,
-  buttons: UrlButton[],
-  options?: Record<string, unknown>
-): Promise<boolean> {
-  if (buttons.length === 0) return false;
-  try {
-    // Leverage Baileys nativeFlow message builder
-    const message: any = {
-      ...content,
-      nativeFlow: {
-        buttons: buttons.map((button) => ({
-          text: button.text,
-          url: button.url,
-        })),
-      },
-    };
 
-    // If there are too many buttons, Baileys will handle them according to its implementation.
-    // The customized Baileys in this project supports nativeFlow property directly.
-    await socket.sendMessage(jid, message, options);
-    return true;
-  } catch (err) {
-    logger.warn('[UrlButtons] native URL button send failed', { err: String(err), count: buttons.length });
-    return false;
-  }
-}

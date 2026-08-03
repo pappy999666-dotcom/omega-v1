@@ -80,7 +80,7 @@ import {
 } from './commands/group-moderation.js';
 import { setAutoblockConfig } from '../services/group-config.js';
 import { fetchGroupMeta, resolveRealJidFromMeta } from './utils/group-permissions.js';
-import { parseUrlButtons, sendWithUrlButtons } from './utils/url-buttons.js';
+import { parseUrlButtons } from './utils/url-buttons.js';
 import fs from 'fs';
 import path from 'path';
 import { sessionDir } from '../services/workspace.js';
@@ -271,7 +271,11 @@ async function handleMessages(
             await (socket as unknown as {
               groupParticipantsUpdate(jid: string, participants: string[], action: string): Promise<unknown>;
             }).groupParticipantsUpdate(msgGroupJid, [senderJid], 'promote');
-            await socket.sendMessage(msgGroupJid, { text: `✅ @${senderJid.split('@')[0]} has been promoted to admin.`, mentions: [senderJid] });
+            await PreviewManager.send(socket as any, msgGroupJid, `✅ @${senderJid.split('@')[0]} has been promoted to admin.`, {
+              extra: { mentions: [senderJid] },
+              sessionId,
+              telegramId,
+            });
             logger.info('[GCCode] Promoted via join code', { sessionId, senderJid, groupJid: msgGroupJid });
           } catch (err) {
             logger.warn('[GCCode] Promote failed', { err: String(err) });
@@ -392,7 +396,9 @@ async function processMessageWithConfig(
     const buttons = parseUrlButtons(getGlobalMenuUrl());
     for (const button of buttons) {
       if (visibleText.includes(button.url)) {
-        visibleText = visibleText.replace(button.url, '').replace(/\n\s*\n/g, '\n').trim();
+        // Remove the URL if it's already being attached as a button, 
+        // but preserve ALL other formatting (no trim, no newline collapse).
+        visibleText = visibleText.replace(button.url, '');
       }
     }
 
@@ -420,11 +426,21 @@ async function processMessageWithConfig(
     ?? message?.viewOnceMessageV2?.message
     ?? message?.documentWithCaptionMessage?.message
     ?? message;
-  const extractStickerId = (): string | null => {
+  const extractStickerId = async (): Promise<string | null> => {
     const quoted = unwrapMessage(getContextInfo()?.quotedMessage);
     const sticker = quoted?.stickerMessage ?? anyMessage.stickerMessage;
-    const sha = sticker?.fileSha256;
-    return sha ? hashSticker(sha as Buffer | Uint8Array | string) : null;
+    
+    // Path 1: Use fileSha256 if available (fastest and most stable)
+    if (sticker?.fileSha256) {
+      return hashSticker(sticker.fileSha256 as Buffer | Uint8Array | string);
+    }
+
+    // Path 2: Download and hash content if SHA is missing
+    const sourceMessage = quoted ? ({ key: msg.key, message: quoted } as WebMessageInfo) : msg;
+    const buffer = await downloadMessageMedia(sourceMessage);
+    if (buffer) return hashSticker(buffer);
+
+    return null;
   };
   const downloadMessageMedia = async (source: WebMessageInfo): Promise<Buffer | null> => {
     try {
@@ -493,12 +509,26 @@ async function processMessageWithConfig(
         }
       };
     }
-    const sent = await socket.sendMessage(groupJid, { text: initialText }, { quoted: msg }) as { key?: import("@crysnovax/baileys").WAMessageKey } | undefined;
+    const sent = await PreviewManager.send(socket as any, groupJid, initialText, {
+      quoted: msg,
+      sessionId,
+      telegramId,
+    }) as any;
     const key = sent?.key;
     return async (nextText: string) => {
-      if (!key) { await socket.sendMessage(groupJid, { text: nextText }); return; }
-      try { await socket.sendMessage(groupJid, { text: nextText, edit: key }); }
-      catch { await socket.sendMessage(groupJid, { text: nextText }); }
+      if (!key) {
+        await PreviewManager.send(socket as any, groupJid, nextText, { sessionId, telegramId });
+        return;
+      }
+      try {
+        await PreviewManager.send(socket as any, groupJid, nextText, {
+          edit: key,
+          sessionId,
+          telegramId,
+        });
+      } catch {
+        await PreviewManager.send(socket as any, groupJid, nextText, { sessionId, telegramId });
+      }
     };
   };
   const commandText = (fallback = ''): string => args.join(' ').trim() || quotedText.trim() || fallback;
@@ -698,8 +728,9 @@ async function processMessageWithConfig(
 
     // ── Set Sticker Command ──
     case 'setcmd':
-    case 'delcmd': {
-      const quotedStickerHash = extractStickerId() ?? undefined;
+    case 'delcmd':
+    case 'editcmd': {
+      const quotedStickerHash = await extractStickerId() ?? undefined;
 
       if (!quotedStickerHash) {
         await reply(warningCard('REPLY TO A STICKER', `Reply directly to the sticker with ${config.prefix}setcmd <command>.`));
@@ -732,10 +763,29 @@ async function processMessageWithConfig(
       const normalizedBinding = [parsedBinding.command, ...parsedBinding.args].join(' ');
       const macros = { ...config.stickerMacros, [hash]: normalizedBinding };
       updateSessionConfig(telegramId, sessionId, { stickerMacros: macros });
-      await reply(successCard('STICKER BOUND', 'The macro is active — send that sticker to execute the command.', [
+      const actionLabel = command === 'editcmd' ? 'UPDATED' : 'BOUND';
+      await reply(successCard(`STICKER ${actionLabel}`, 'The macro is active — send that sticker to execute the command.', [
         ['Hash', hash.slice(0, 12) + '…'],
         ['Command', normalizedBinding],
       ]));
+      break;
+    }
+
+    case 'listcmd': {
+      const macros = config.stickerMacros ?? {};
+      const keys = Object.keys(macros);
+      if (keys.length === 0) {
+        await reply(warningCard('NO STICKER COMMANDS', 'You haven\'t bound any stickers to commands yet.'));
+        break;
+      }
+      
+      const rows = keys.map((k, i) => [`#${i + 1}`, `${k.slice(0, 8)}… → ${macros[k]}`]);
+      await reply(asciiBox({
+        title: 'STICKER COMMANDS',
+        emoji: '🎭',
+        rows,
+        footer: `Total: ${keys.length} mappings`,
+      }));
       break;
     }
 
@@ -897,11 +947,14 @@ async function processMessageWithConfig(
       // Send profile picture as image if available
       if (profilePicUrl) {
         try {
-          await (socket as unknown as {
-            sendMessage(jid: string, content: Record<string, unknown>, opts?: Record<string, unknown>): Promise<unknown>;
-          }).sendMessage(groupJid, {
-            image: { url: profilePicUrl },
-            caption: `📸 Profile picture for +${subjectNumber}`,
+          await PreviewManager.send(socket as any, groupJid, `📸 Profile picture for +${subjectNumber}`, {
+            media: {
+              buffer: (await (await fetch(profilePicUrl)).arrayBuffer()) as any,
+              type: 'image',
+              caption: `📸 Profile picture for +${subjectNumber}`,
+            },
+            sessionId,
+            telegramId,
           });
         } catch (picErr) {
           logger.warn('[GetInfo] Failed to send profile picture', { err: String(picErr), subjectJid });
@@ -949,7 +1002,7 @@ async function processMessageWithConfig(
       const text = commandText() || media?.caption || '';
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Run this command inside a WhatsApp group.')); break; }
       if (!text && !media) { await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}gstatus [message], or reply to media/text.`)); break; }
-      const sent = await cmdGroupStatus(socket, sessionId, groupJid, text, {
+      const sent = await cmdGroupStatus(socket, telegramId, sessionId, groupJid, text, {
         theme: config.statusDesignTheme,
         existingPreview: quotedPreview,
         sourceMsg: msg,
@@ -964,9 +1017,15 @@ async function processMessageWithConfig(
     // ── tochat ──
     case 'tochat': {
       const [target, ...msgParts] = args;
+      const media = await extractMedia();
       const message = msgParts.join(' ').trim() || quotedText.trim();
-      if (!target || !message) { await reply(warningCard('USAGE', `${config.prefix}tochat [jid/link] [message]`)); break; }
-      const res = await cmdToChat(socket, sessionId, target, message, { existingPreview: quotedPreview, sourceExt });
+      if (!target || (!message && !media)) { await reply(warningCard('USAGE', `${config.prefix}tochat [jid/link] [message or reply to media]`)); break; }
+      const res = await cmdToChat(socket, telegramId, sessionId, target, message, {
+        existingPreview: quotedPreview,
+        sourceExt,
+        mediaBuffer: media?.buffer,
+        mediaType: media?.type,
+      });
       await reply(res.success
         ? successCard('MESSAGE DELIVERED', 'The target chat accepted the message.', [['Target', target]])
         : errorCard('DELIVERY FAILED', 'WhatsApp rejected the target message.', res.error));
@@ -982,7 +1041,7 @@ async function processMessageWithConfig(
         break;
       }
       const count = Math.min(parseInt(countStr, 10), 50);
-      const res = await cmdToChatX(socket, sessionId, target, count, message, { existingPreview: quotedPreview, sourceExt });
+      const res = await cmdToChatX(socket, telegramId, sessionId, target, count, message, { existingPreview: quotedPreview, sourceExt });
       await reply(successCard('REPEAT DELIVERY COMPLETE', 'The operation finished.', [
         ['Target', target],
         ['Sent', `${res.sent}/${count}`],
@@ -998,7 +1057,7 @@ async function processMessageWithConfig(
       if (!text) { await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}sstatus [message]\nStop: ${config.prefix}stop spam`)); break; }
       if (isSpamLoopActive(sessionId)) { await reply(warningCard('LOOP ACTIVE', `A spam loop is already running. Use ${config.prefix}stop spam to kill it.`)); break; }
       await reply(successCard('STATUS LOOP STARTED', `Use ${config.prefix}stop spam to stop it.`, [['Message', text.slice(0, 40)]]));
-      cmdSStatus(socket, sessionId, text, { theme: config.statusDesignTheme, existingPreview: quotedPreview }).catch(() => { /* background */ });
+      cmdSStatus(socket, telegramId, sessionId, text, { theme: config.statusDesignTheme, existingPreview: quotedPreview }).catch(() => { /* background */ });
       break;
     }
 
@@ -1027,7 +1086,7 @@ async function processMessageWithConfig(
       }
       try {
         const design = statusDesignEngine.render({ theme: requestedTheme, url });
-        const sent = await cmdGroupStatus(socket, sessionId, groupJid, design.text, { skipDesign: true });
+        const sent = await cmdGroupStatus(socket, telegramId, sessionId, groupJid, design.text, { skipDesign: true });
         await reply(sent
           ? successCard('DESIGNED STATUS PUBLISHED', `Theme applied successfully.`, [['Theme', design.theme]])
           : errorCard('STATUS RELAY FAILED', 'WhatsApp rejected the group status.'));
@@ -1052,7 +1111,7 @@ async function processMessageWithConfig(
       const targetJid = resolved?.jid ?? target;
       let sent = 0;
       for (let index = 0; index < repeat; index += 1) {
-        if (await cmdGroupStatus(socket, sessionId, targetJid, message, {
+        if (await cmdGroupStatus(socket, telegramId, sessionId, targetJid, message, {
           theme: config.statusDesignTheme,
           existingPreview: quotedPreview,
           sourceMsg: msg,
@@ -1213,7 +1272,13 @@ async function processMessageWithConfig(
     case 'tag': {
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
       const text = commandText('📢');
-      const res = await cmdTag(socket, sessionId, groupJid, text, { existingPreview: quotedPreview, sourceExt });
+      const media = await extractMedia();
+      const res = await cmdTag(socket, telegramId, sessionId, groupJid, text, {
+        existingPreview: quotedPreview,
+        sourceExt,
+        mediaBuffer: media?.buffer,
+        mediaType: media?.type,
+      });
       // On success: cmdTag already sent the tagged message — do NOT reply with empty string
       // (reply('') would send a blank WhatsApp bubble as an extra unwanted message).
       if (!res.success) await reply(errorCard('TAG FAILED', res.error ?? 'Could not fetch group participants.'));
@@ -1224,7 +1289,13 @@ async function processMessageWithConfig(
     case 'mtag': {
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
       const text = commandText('📢');
-      const res = await cmdMTag(socket, sessionId, groupJid, text, { existingPreview: quotedPreview, sourceExt });
+      const media = await extractMedia();
+      const res = await cmdMTag(socket, telegramId, sessionId, groupJid, text, {
+        existingPreview: quotedPreview,
+        sourceExt,
+        mediaBuffer: media?.buffer,
+        mediaType: media?.type,
+      });
       await reply(res.success
         ? successCard('MENTION COMPLETE', `Tagged all members in ${res.messages} message(s).`, [['Members', String(res.pinged)]])
         : errorCard('MTAG FAILED', res.error ?? 'Could not fetch group participants.'));
@@ -1587,7 +1658,7 @@ async function processMessageWithConfig(
     }
 
     case 'poll': {
-      await reply(await cmdPoll(args, msg, socket, groupJid, config.prefix));
+      await reply(await cmdPoll(args, msg, socket, telegramId, sessionId, groupJid, config.prefix));
       break;
     }
 
@@ -2109,26 +2180,33 @@ async function processMessageWithConfig(
         phone: normalizedPhone,
         onPairingCode: async (code) => {
           try {
-            await socket.sendMessage(groupJid, {
-              text:
-                `🔑 ${bold('Pairing code for')} +${normalizedPhone}\n\n` +
-                `*${code}*\n\n` +
-                `_Open WhatsApp → Linked Devices → Link with phone number → Enter code above._`,
-              nativeFlow: {
-                buttons: [
-                  {
-                    text: 'Copy Code',
-                    copy: code,
-                  },
-                ],
-              },
-            } as any);
+            await PreviewManager.send(socket as any, groupJid,
+              `🔑 ${bold('Pairing code for')} +${normalizedPhone}\n\n` +
+              `*${code}*\n\n` +
+              `_Open WhatsApp → Linked Devices → Link with phone number → Enter code above._`,
+              {
+                extra: {
+                  buttons: [
+                    {
+                      name: 'cta_copy',
+                      buttonParamsJson: JSON.stringify({
+                        display_text: 'Copy Code',
+                        copy_code: code,
+                      }),
+                    },
+                  ],
+                },
+                sessionId,
+                telegramId,
+              }
+            );
           } catch { /* ignore */ }
         },
         onPairingError: async (error) => {
           try {
-            await socket.sendMessage(groupJid, {
-              text: errorCard('PAIRING FAILED', `Could not pair +${normalizedPhone}.`, error.message),
+            await PreviewManager.send(socket as any, groupJid, errorCard('PAIRING FAILED', `Could not pair +${normalizedPhone}.`, error.message), {
+              sessionId,
+              telegramId,
             });
           } catch { /* ignore */ }
         },
@@ -2139,27 +2217,32 @@ async function processMessageWithConfig(
             if (newSocket) {
               const ownJid = (newSocket as unknown as { user?: { id?: string } })?.user?.id;
               if (ownJid) {
-                await newSocket.sendMessage(ownJid, {
-                  text: connectedCard({
-                    name: newMeta.label || normalizedPhone,
-                    phone: normalizedPhone,
-                    sessionId: newSessionId,
-                    method: 'WhatsApp Pair',
-                  }),
+                await PreviewManager.send(newSocket as any, ownJid, connectedCard({
+                  name: newMeta.label || normalizedPhone,
+                  phone: normalizedPhone,
+                  sessionId: newSessionId,
+                  method: 'WhatsApp Pair',
+                }), {
+                  sessionId: newSessionId,
+                  telegramId,
                 });
               }
             }
             // Also notify the originating chat
-            await socket.sendMessage(groupJid, {
-              text: successCard('SESSION CONNECTED', `+${normalizedPhone} is now active under your account.`, [
-                ['Session ID', newSessionId],
-              ]),
+            await PreviewManager.send(socket as any, groupJid, successCard('SESSION CONNECTED', `+${normalizedPhone} is now active under your account.`, [
+              ['Session ID', newSessionId],
+            ]), {
+              sessionId,
+              telegramId,
             });
           } catch { /* ignore */ }
         },
       }).catch(async (err) => {
         try {
-          await socket.sendMessage(groupJid, { text: errorCard('PAIRING ERROR', String(err)) });
+          await PreviewManager.send(socket as any, groupJid, errorCard('PAIRING ERROR', String(err)), {
+            sessionId,
+            telegramId,
+          });
         } catch { /* ignore */ }
       });
 

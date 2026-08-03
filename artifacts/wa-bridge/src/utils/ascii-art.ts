@@ -3,6 +3,8 @@
 // WhatsApp supports *bold*, _italic_, ~strikethrough~, ```code```
 // ============================================================
 
+import { pappyBox } from './pappy-engine.js';
+
 export interface AsciiBoxOptions {
   title: string;
   rows: [string, string][];
@@ -19,11 +21,12 @@ export const quote = (value: string): string => value.split('\n').map((line) => 
 
 /** Compact, native WhatsApp card. Kept under the legacy name for API compatibility. */
 export function asciiBox(opts: AsciiBoxOptions): string {
-  const heading = `${opts.emoji ? `${opts.emoji} ` : ''}${bold(opts.title)}`;
-  const rows = opts.rows.map(([label, value]) => `${bold(`${label}:`)} ${value}`);
-  return [heading, '', ...rows, opts.footer ? `\n${quote(opts.footer)}` : '']
-    .filter(Boolean)
-    .join('\n');
+  return pappyBox({
+    title: opts.title,
+    rows: opts.rows,
+    footer: opts.footer,
+    emoji: opts.emoji,
+  });
 }
 
 /** Lightweight spacing divider */

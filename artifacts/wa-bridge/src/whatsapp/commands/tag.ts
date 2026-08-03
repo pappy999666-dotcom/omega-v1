@@ -41,6 +41,7 @@ async function getParticipants(
  */
 export async function cmdTag(
   socket: WASocket,
+  telegramId: string,
   sessionId: string,
   groupJid: string,
   text: string,
@@ -65,14 +66,17 @@ export async function cmdTag(
     let content: AnyMessageContent;
 
     if (opts.mediaBuffer) {
-      if (opts.mediaType === 'video') {
-        content = { video: opts.mediaBuffer, caption: text, mentions: participants };
-      } else if (opts.mediaType === 'audio') {
-        content = { audio: opts.mediaBuffer, mimetype: 'audio/mp4', mentions: participants };
-      } else {
-        content = { image: opts.mediaBuffer, caption: text, mentions: participants };
-      }
-      await socket.sendMessage(groupJid, content);
+      await PreviewManager.send(socket as any, groupJid, text, {
+        media: {
+          buffer: opts.mediaBuffer,
+          type: opts.mediaType as any ?? 'image',
+          caption: text,
+        },
+        extra: { mentions: participants },
+        forceMentions: true,
+        sessionId,
+        telegramId,
+      });
     } else if (opts.sourceExt) {
       // As-is relay — WA-built preview relayed verbatim via likeThis
       const sent = await sendAsIs(socket, groupJid, text, opts.sourceExt, { mentions: participants });
@@ -82,12 +86,16 @@ export async function cmdTag(
         existingPreview: opts.existingPreview,
         extra: { mentions: participants },
         forceMentions: true,
+        sessionId,
+        telegramId,
       });
     } else {
       await PreviewManager.send(socket as any, groupJid, text, {
         existingPreview: opts.existingPreview,
         extra: { mentions: participants },
         forceMentions: true,
+        sessionId,
+        telegramId,
       });
     }
     logger.info(`[Tag] Hidetag sent to ${groupJid} — ${participants.length} pinged`);
@@ -107,6 +115,7 @@ export async function cmdTag(
  */
 export async function cmdMTag(
   socket: WASocket,
+  telegramId: string,
   sessionId: string,
   groupJid: string,
   text: string,
@@ -114,6 +123,8 @@ export async function cmdMTag(
     chunkSize?: number;
     existingPreview?: PartialLinkMeta;
     sourceExt?: NonNullable<IMessage['extendedTextMessage']>;
+    mediaBuffer?: Buffer;
+    mediaType?: string;
   } = {}
 ): Promise<{ success: boolean; pinged: number; messages: number; error?: string }> {
   if (isFrozen(sessionId)) {
@@ -138,17 +149,31 @@ export async function cmdMTag(
 
   try {
     for (const chunk of chunks) {
-      // Build visible @mention string
-      const mentionText = chunk.map((jid) => `@${jid.split('@')[0]}`).join(' ');
+      // Build visible @mention string - VERTICAL layout as per audit requirements
+      const mentionText = chunk.map((jid) => `┃ ✦ @${jid.split('@')[0]}`).join('\n');
       const fullText = `${text}\n\n${mentionText}`;
 
-      if (opts.sourceExt) {
+      if (opts.mediaBuffer) {
+        await PreviewManager.send(socket as any, groupJid, fullText, {
+          media: {
+            buffer: opts.mediaBuffer,
+            type: opts.mediaType as any ?? 'image',
+            caption: fullText,
+          },
+          extra: { mentions: chunk },
+          forceMentions: true,
+          sessionId,
+          telegramId,
+        });
+      } else if (opts.sourceExt) {
         const sent = await sendAsIs(socket, groupJid, fullText, opts.sourceExt, { mentions: chunk });
         if (!sent) {
           await PreviewManager.send(socket as any, groupJid, fullText, {
             existingPreview: opts.existingPreview,
             extra: { mentions: chunk },
             forceMentions: true,
+            sessionId,
+            telegramId,
           });
         }
       } else {
@@ -156,6 +181,8 @@ export async function cmdMTag(
           existingPreview: opts.existingPreview,
           extra: { mentions: chunk },
           forceMentions: true,
+          sessionId,
+          telegramId,
         });
       }
 

@@ -49,27 +49,30 @@ export function resolveJid(target: string): string {
  */
 export async function cmdGStatus(
   socket: WASocket,
+  telegramId: string,
   sessionId: string,
   text: string,
   opts: { mediaBuffer?: Buffer; mediaType?: string; caption?: string; theme?: string } = {}
 ): Promise<void> {
   if (isFrozen(sessionId)) {
-    await socket.sendMessage('status@broadcast', {
-      text: '❄️ Session is frozen — status posting paused',
+    await PreviewManager.send(socket as any, 'status@broadcast', '❄️ Session is frozen — status posting paused', {
+      statusOptions: { statusJidList: undefined },
+      sessionId,
+      telegramId,
     });
     return;
   }
 
   const designedText = await generateStatusCard(text, opts.theme);
-  const content: AnyMessageContent = opts.mediaBuffer
-    ? buildMediaContent(opts.mediaBuffer, opts.mediaType ?? 'image', opts.caption ?? designedText)
-    : await PreviewManager.hydratedMessageWithSocket(
-        designedText,
-        socket as never
-      );
-
-  await socket.sendMessage('status@broadcast', content, {
-    statusJidList: undefined, // Post to all contacts
+  await PreviewManager.send(socket as any, 'status@broadcast', designedText, {
+    media: opts.mediaBuffer ? {
+      buffer: opts.mediaBuffer,
+      type: opts.mediaType as any ?? 'image',
+      caption: opts.caption ?? designedText,
+    } : undefined,
+    statusOptions: { statusJidList: undefined },
+    sessionId,
+    telegramId,
   });
 
   logger.info(`[gstatus] ${sessionId} posted status`);
@@ -82,6 +85,7 @@ export async function cmdGStatus(
  */
 export async function cmdToChat(
   socket: WASocket,
+  telegramId: string,
   sessionId: string,
   target: string,
   text: string,
@@ -94,12 +98,30 @@ export async function cmdToChat(
   try {
     const jid = await resolveTargetJid(socket, target);
     if (opts.mediaBuffer) {
-      await socket.sendMessage(jid, buildMediaContent(opts.mediaBuffer, opts.mediaType ?? 'image', text));
+      await PreviewManager.send(socket as any, jid, text, {
+        media: {
+          buffer: opts.mediaBuffer,
+          type: opts.mediaType as any ?? 'image',
+          caption: text,
+        },
+        sessionId,
+        telegramId,
+      });
     } else if (opts.sourceExt) {
       const sent = await sendAsIs(socket, jid, text, opts.sourceExt);
-      if (!sent) await socket.sendMessage(jid, await PreviewManager.buildChatPreview(text, socket as never, opts.existingPreview));
+      if (!sent) {
+        await PreviewManager.send(socket as any, jid, text, {
+          existingPreview: opts.existingPreview,
+          sessionId,
+          telegramId,
+        });
+      }
     } else {
-      await socket.sendMessage(jid, await PreviewManager.buildChatPreview(text, socket as never, opts.existingPreview));
+      await PreviewManager.send(socket as any, jid, text, {
+        existingPreview: opts.existingPreview,
+        sessionId,
+        telegramId,
+      });
     }
     logger.info(`[tochat] ${sessionId} → ${jid}`);
     return { success: true };
@@ -113,6 +135,7 @@ export async function cmdToChat(
  */
 export async function cmdToChatX(
   socket: WASocket,
+  telegramId: string,
   sessionId: string,
   target: string,
   count: number,
@@ -132,10 +155,19 @@ export async function cmdToChatX(
       try {
         if (opts.sourceExt) {
           const sent = await sendAsIs(socket, jid, text, opts.sourceExt);
-          if (!sent) await socket.sendMessage(jid, await PreviewManager.buildChatPreview(text, socket as never, opts.existingPreview));
+          if (!sent) {
+            await PreviewManager.send(socket as any, jid, text, {
+              existingPreview: opts.existingPreview,
+              sessionId,
+              telegramId,
+            });
+          }
         } else {
-          const content = await PreviewManager.buildChatPreview(text, socket as never, opts.existingPreview);
-          await socket.sendMessage(jid, content);
+          await PreviewManager.send(socket as any, jid, text, {
+            existingPreview: opts.existingPreview,
+            sessionId,
+            telegramId,
+          });
         }
         sent++;
       } catch {
@@ -157,6 +189,7 @@ export async function cmdToChatX(
  */
 export async function cmdSStatus(
   socket: WASocket,
+  telegramId: string,
   sessionId: string,
   text: string,
   opts: { theme?: string; existingPreview?: PartialLinkMeta } = {}
@@ -173,13 +206,11 @@ export async function cmdSStatus(
     while (activeSpamLoops.has(sessionId) && !isFrozen(sessionId)) {
       try {
         const designedText = await generateStatusCard(text, opts.theme);
-        const content = await PreviewManager.hydratedMessageWithSocket(
-          designedText,
-          socket as never,
-          opts.existingPreview
-        );
-        await socket.sendMessage('status@broadcast', content, {
-          statusJidList: undefined,
+        await PreviewManager.send(socket as any, 'status@broadcast', designedText, {
+          existingPreview: opts.existingPreview,
+          statusOptions: { statusJidList: undefined },
+          sessionId,
+          telegramId,
         });
       } catch (err) {
         logger.warn(`[sstatus] Post error: ${err}`);
@@ -242,6 +273,7 @@ function buildMediaContent(
  */
 export async function cmdGroupStatus(
   socket: WASocket,
+  telegramId: string,
   sessionId: string,
   groupJid: string,
   text: string,
