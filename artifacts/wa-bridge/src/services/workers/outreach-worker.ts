@@ -83,7 +83,7 @@ async function processOutreach(job: Job<JobPayload>): Promise<JobResult> {
     case 'tochatx': {
       const target = data.target as string;
       const count = data.count as number ?? 1;
-      const result = await cmdToChatX(socket, sessionId, target, count, text);
+      const result = await cmdToChatX(socket, telegramId, sessionId, target, count, text);
       await onProgress(`✅ Sent ${result.sent}/${count} to ${target}`);
       return { success: result.sent, failed: result.failed, skipped: 0, rateLimited: 0, details: [], duration: 0 };
     }

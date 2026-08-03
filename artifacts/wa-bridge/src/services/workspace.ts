@@ -75,6 +75,7 @@ function defaultConfig(telegramId: string): UserConfig {
     permissionDeniedResponse: 'You are not authorized to use this command.',
     stickerPackName: 'PAPPY',
     stickerAuthor: 'OMEGA',
+    releasePostsEnabled: true,
   };
 }
 
@@ -430,9 +431,11 @@ const PLATFORM_CONFIG_PATH = path.join(WORKSPACE_ROOT, '_platform', 'config.json
 interface PlatformConfig {
   globalMenuUrl?: string;
   globalMenuUrls?: string[];
+  releaseChannelUsername?: string;
+  releasePostsEnabled?: boolean;
 }
 
-function loadPlatformConfig(): PlatformConfig {
+export function loadPlatformConfig(): PlatformConfig {
   if (!fs.existsSync(PLATFORM_CONFIG_PATH)) return {};
   try {
     return JSON.parse(fs.readFileSync(PLATFORM_CONFIG_PATH, 'utf8')) as PlatformConfig;
@@ -441,9 +444,16 @@ function loadPlatformConfig(): PlatformConfig {
   }
 }
 
-function savePlatformConfig(config: PlatformConfig): void {
+export function savePlatformConfig(config: PlatformConfig): void {
   fs.mkdirSync(path.dirname(PLATFORM_CONFIG_PATH), { recursive: true });
   fs.writeFileSync(PLATFORM_CONFIG_PATH, JSON.stringify(config, null, 2));
+}
+
+export function updatePlatformConfig(patch: Partial<PlatformConfig>): PlatformConfig {
+  const config = loadPlatformConfig();
+  const updated = { ...config, ...patch };
+  savePlatformConfig(updated);
+  return updated;
 }
 
 /** Get the platform-wide global menu URL, or null if unset. */

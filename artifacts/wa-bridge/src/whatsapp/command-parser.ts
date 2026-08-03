@@ -141,7 +141,7 @@ export const ALL_COMMANDS = [
   // Settings
   'setprefix', 'setcmd', 'delcmd', 'setmenupic', 'setmenuvideo', 'delmenumedia', 'setsudo', 'delsudo', 'sudo', 'prefix', 'public', 'publicresponse', 'tagreply',
   // Info
-  'menu', 'help', 'gmenu', 'ping', 'info', 'groups', 'jid', 'userinfo', 'getinfo',
+  'menu', 'help', 'gmenu', 'ping', 'info', 'groups', 'jid', 'userinfo', 'getinfo', 'idea',
   // Bucket
   'addlink',
   // Sticker System

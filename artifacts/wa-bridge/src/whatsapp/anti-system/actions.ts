@@ -93,7 +93,7 @@ export async function executeAction(
   msg: WebMessageInfo,
   ctx: ViolationContext
 ): Promise<void> {
-  const { groupJid, senderJid, senderNumber, moduleKey, moduleName, moduleConfig, sessionId } = ctx;
+  const { groupJid, senderJid, senderNumber, moduleKey, moduleName, moduleConfig, sessionId, telegramId } = ctx;
   const { action, warnThreshold, customMessage } = moduleConfig;
 
   // Resolve display name / group name for response

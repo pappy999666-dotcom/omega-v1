@@ -93,6 +93,10 @@ const socketGenerations = new Map<string, number>();
 const reconnectWindows = new Map<string, { startedAt: number; attempts: number }>();
 const purgedSessions = new Set<string>();
 const CUSTOM_PAIRING_CODE = 'PAPPYBOT';
+
+// PFP Cache: jid -> { url, buffer, expires }
+const pfpCache = new Map<string, { url: string; buffer: Buffer; expires: number }>();
+const PFP_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 const MAX_RECONNECTS_PER_WINDOW = 8;
 const RECONNECT_WINDOW_MS = 10 * 60_000;
 
@@ -122,6 +126,38 @@ export function getAllSockets(): Map<string, SocketHandle> {
 
 export function isFrozen(sessionId: string): boolean {
   return registry.get(sessionId)?.frozen ?? false;
+}
+
+/**
+ * Fetch profile picture for a JID with intelligent caching.
+ */
+export async function fetchProfilePicture(sessionId: string, jid: string): Promise<Buffer | null> {
+  const cached = pfpCache.get(jid);
+  if (cached && Date.now() < cached.expires) {
+    return cached.buffer;
+  }
+
+  const socket = getSocket(sessionId);
+  if (!socket) return null;
+
+  try {
+    const url = await (socket as any).profilePictureUrl(jid, 'image').catch(() => null);
+    if (!url) return null;
+
+    const res = await fetch(url);
+    if (!res.ok) return null;
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+    pfpCache.set(jid, {
+      url,
+      buffer,
+      expires: Date.now() + PFP_CACHE_TTL,
+    });
+    return buffer;
+  } catch (err) {
+    logger.warn('[SocketManager] PFP fetch failed', { jid, err: String(err) });
+    return null;
+  }
 }
 
 export function freezeSession(sessionId: string): void {

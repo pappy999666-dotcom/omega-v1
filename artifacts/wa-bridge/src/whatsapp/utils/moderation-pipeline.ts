@@ -257,11 +257,19 @@ export async function runRemoveModerationPipeline(
       socket,
       groupJid,
     });
+    // Fetch PFP for announcement
+    let pfpBuffer: Buffer | null = null;
+    try {
+      const { fetchProfilePicture } = await import('../socket-manager.js');
+      if (sessionId) pfpBuffer = await fetchProfilePicture(sessionId, targetJid);
+    } catch { /* ignore */ }
+
     // Centralize response through PreviewManager to ensure global URL buttons and formatting preservation
     await PreviewManager.send(socket as any, groupJid, rendered, {
       extra: { mentions: [targetJid] },
       sessionId,
       telegramId,
+      ...(pfpBuffer ? { media: { buffer: pfpBuffer as any, type: 'image', caption: rendered } } : {}),
     });
   } catch (announceErr) {
     // Announcement failed — the member was already removed. Log and continue.

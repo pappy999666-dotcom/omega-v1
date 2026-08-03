@@ -41,7 +41,7 @@ export async function cmdSticker(
     
     // Add metadata if provided
     if (config.packname || config.author) {
-      stickerBuffer = addStickerMetadata(stickerBuffer, config.packname || 'PAPPY', config.author || 'OMEGA');
+      stickerBuffer = addStickerMetadata(stickerBuffer as any, config.packname || 'PAPPY', config.author || 'OMEGA') as any;
     }
 
     await PreviewManager.send(socket as any, groupJid, '', {

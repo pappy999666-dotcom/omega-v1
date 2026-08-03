@@ -63,7 +63,25 @@ import {
   handleRestartBot,
   handleLogStream,
   stopLogStream,
+  handleReleaseMenu,
+  handleReleaseToggle,
+  handleSetReleaseUsername,
+  processReleaseUsername,
 } from './handlers/admin.js';
+import {
+  handleIdeaSubmit,
+  processTelegramIdea,
+  handleAdminIdeas,
+  handleAdminIdeaView,
+  handleAdminIdeaDelete,
+  handleAdminIdeaComplete,
+  handleAdminIdeaReply,
+  processAdminIdeaReply,
+} from './handlers/feedback.js';
+import {
+  generateTelegramHelp,
+  generateTelegramCategoryHelp,
+} from '../services/help.js';
 import {
   mainMenuKeyboard,
   helpKeyboard,
@@ -431,17 +449,73 @@ export function createBot(): Telegraf<BotContext> {
   });
 
   bot.command('help', async (ctx) => {
-    await ctx.reply(helpText(ctx.isOwner), {
+    await ctx.reply(generateTelegramHelp(ctx.isOwner), {
       parse_mode: 'HTML',
       reply_markup: helpKeyboard(),
     });
   });
 
+  bot.action(/^help:cat:(.+)$/, async (ctx) => {
+    const category = ctx.match[1];
+    await ctx.editMessageText(generateTelegramCategoryHelp(category), {
+      parse_mode: 'HTML',
+      reply_markup: helpCategoryKeyboard(),
+    }).catch(() => {});
+  });
+
+  bot.action('idea:submit', async (ctx) => {
+    await handleIdeaSubmit(ctx as BotContext);
+  });
+
+  bot.action(/^admin:ideas:(\d+)$/, ownerOnly() as never, async (ctx) => {
+    await handleAdminIdeas(ctx, parseInt(ctx.match[1], 10));
+  });
+
+  bot.action(/^admin:idea:([^:]+)$/, ownerOnly() as never, async (ctx) => {
+    await handleAdminIdeaView(ctx, ctx.match[1]);
+  });
+
+  bot.action(/^admin:idea:([^:]+):delete$/, ownerOnly() as never, async (ctx) => {
+    await handleAdminIdeaDelete(ctx, ctx.match[1]);
+  });
+
+  bot.action(/^admin:idea:([^:]+):complete$/, ownerOnly() as never, async (ctx) => {
+    await handleAdminIdeaComplete(ctx, ctx.match[1]);
+  });
+
+  bot.action(/^admin:idea:([^:]+):reply$/, ownerOnly() as never, async (ctx) => {
+    await handleAdminIdeaReply(ctx as BotContext, ctx.match[1]);
+  });
+
+  bot.action('admin:release:menu', ownerOnly() as never, async (ctx) => {
+    await handleReleaseMenu(ctx);
+  });
+
+  bot.action('admin:release:setuser', ownerOnly() as never, async (ctx) => {
+    await handleSetReleaseUsername(ctx as BotContext);
+  });
+
+  bot.action('admin:release:toggle:on', ownerOnly() as never, async (ctx) => {
+    await handleReleaseToggle(ctx, true);
+  });
+
+  bot.action('admin:release:toggle:off', ownerOnly() as never, async (ctx) => {
+    await handleReleaseToggle(ctx, false);
+  });
+
   // ── Text Message Handler ──────────────────────────────
+
+  bot.on('message', async (ctx, next) => {
+    await processTelegramIdea(ctx as BotContext);
+    return next();
+  });
 
   bot.on('text', async (ctx) => {
     const text = ctx.message.text;
     if (text.startsWith('/')) return;
+
+    await processReleaseUsername(ctx as BotContext);
+    await processAdminIdeaReply(ctx as BotContext);
 
     // Set WhatsApp display name
     if (ctx.session?.awaitingSetNameSessionId) {

@@ -4,7 +4,7 @@
 // ============================================================
 
 import type { Context } from 'telegraf';
-import { loadConfig, updateConfig, purgeAllSessions, loadBucket, getAllUserIds } from '../../services/workspace.js';
+import { loadConfig, updateConfig, purgeAllSessions, loadBucket, getAllUserIds, loadPlatformConfig, updatePlatformConfig } from '../../services/workspace.js';
 import { getAllSockets } from '../../whatsapp/socket-manager.js';
 import { getMasterActiveBucket, exportBucket } from '../../services/tri-bucket.js';
 import { enqueueJob, omniQueue } from '../../services/queue.js';
@@ -20,8 +20,9 @@ import {
   adminUserKeyboard,
   confirmKeyboard,
   backKeyboard,
+  btn,
 } from '../ui/keyboards.js';
-import { header, H, kv, bucketCard, noticeCard, escape } from '../../utils/formatter.js';
+import { header, H, kv, bucketCard, noticeCard, escape, card } from '../../utils/formatter.js';
 import { logger } from '../../utils/logger.js';
 import { runDeployment } from '../../services/deployment.js';
 
@@ -373,6 +374,71 @@ function humanUptime(): string {
 
 // Track active deployments to prevent concurrent runs
 const activeDeployments = new Set<string>();
+
+export async function handleReleaseMenu(ctx: any): Promise<void> {
+  const cfg = loadPlatformConfig();
+
+  const text = [
+    header('Release Notification Settings', '📢'),
+    '',
+    kv('Channel Username:', cfg.releaseChannelUsername ? H.code(cfg.releaseChannelUsername) : H.italic('Not set')),
+    kv('Auto-Post:', cfg.releasePostsEnabled ? '✅ Enabled' : '🚫 Disabled'),
+    '',
+    H.blockquote('Release notes will be automatically posted to this channel after a successful update.'),
+  ].join('\n');
+
+  await ctx.editMessageText(text, {
+    parse_mode: 'HTML',
+    reply_markup: {
+      inline_keyboard: [
+        [btn('✏️ Set Username', 'admin:release:setuser', 'primary')],
+        [cfg.releasePostsEnabled
+          ? btn('🚫 Disable Auto-Post', 'admin:release:toggle:off', 'danger')
+          : btn('✅ Enable Auto-Post', 'admin:release:toggle:on', 'success')],
+        [btn('🔙 Back', 'admin:panel', 'primary')],
+      ],
+    },
+  }).catch(() => {});
+}
+
+export async function handleReleaseToggle(ctx: any, enabled: boolean): Promise<void> {
+  updatePlatformConfig({ releasePostsEnabled: enabled });
+  await ctx.answerCbQuery(enabled ? 'Auto-post enabled' : 'Auto-post disabled').catch(() => {});
+  await handleReleaseMenu(ctx);
+}
+
+export async function handleSetReleaseUsername(ctx: any): Promise<void> {
+  ctx.session.awaitingReleaseUsername = true;
+  await ctx.editMessageText(
+    card('Set Release Channel', '📢', [], 'Send the public Telegram channel username (e.g., @PappyUpdates).'),
+    { parse_mode: 'HTML', reply_markup: backKeyboard('admin:release:menu') }
+  ).catch(() => {});
+}
+
+export async function processReleaseUsername(ctx: Context & { session: any; telegramId: string }): Promise<void> {
+  if (!ctx.session.awaitingReleaseUsername) return;
+  delete ctx.session.awaitingReleaseUsername;
+
+  const text = (ctx.message as any).text?.trim();
+  if (!text || !text.startsWith('@')) {
+    await ctx.reply(noticeCard('Invalid Username', 'Username must start with @', 'error'), { parse_mode: 'HTML', reply_markup: backKeyboard('admin:release:menu') });
+    return;
+  }
+
+  // Verify username resolution
+  try {
+    const chat = await ctx.telegram.getChat(text);
+    if (chat.type !== 'channel') {
+      await ctx.reply(noticeCard('Invalid Chat', 'The provided username must belong to a public channel.', 'error'), { parse_mode: 'HTML', reply_markup: backKeyboard('admin:release:menu') });
+      return;
+    }
+    
+    updatePlatformConfig({ releaseChannelUsername: text });
+    await ctx.reply(noticeCard('Release Channel Updated', `Release notes will be posted to ${H.code(text)}`, 'success'), { parse_mode: 'HTML', reply_markup: backKeyboard('admin:release:menu') });
+  } catch (err) {
+    await ctx.reply(noticeCard('Resolution Failed', `Could not find channel ${text}. Make sure the bot is an admin in the channel.`, 'error'), { parse_mode: 'HTML', reply_markup: backKeyboard('admin:release:menu') });
+  }
+}
 
 export async function handleUpdateBot(ctx: Context & { telegramId: string }): Promise<void> {
   if (activeDeployments.has(ctx.telegramId)) {

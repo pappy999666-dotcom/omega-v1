@@ -46,4 +46,5 @@ export function renderResponse(res: RenderableResponse): string {
   }
 }
 
-export { Theme, THEMES, getRandomTheme, pappyBox, PappyBoxOptions };
+export type { Theme, PappyBoxOptions };
+export { THEMES, getRandomTheme, pappyBox };

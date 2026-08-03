@@ -102,6 +102,7 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
   ping:         { section: '◈ SYSTEM CONFIG',    syntax: 'ping',                      desc: 'Check bot latency',                          target: 'main' },
   jid:          { section: '◈ SYSTEM CONFIG',    syntax: 'jid',                       desc: 'Show the current group JID',                 target: 'main' },
   userinfo:     { section: '◈ SYSTEM CONFIG',    syntax: 'userinfo',                  desc: 'Show user JID, number & LID',                target: 'main' },
+  idea:         { section: '◈ SYSTEM CONFIG',    syntax: 'idea [msg]',                desc: 'Send a suggestion or feedback to admin',     target: 'both' },
   getinfo:      { section: '◈ SYSTEM CONFIG',    syntax: 'getinfo',                   desc: 'Alias for userinfo',                         target: 'main', hidden: true },
   spam:         { section: '◈ SYSTEM CONFIG',    syntax: 'spam',                      desc: 'Alias for sstatus',                          target: 'main', hidden: true },
   menu:         { section: '◈ SYSTEM CONFIG',    syntax: 'menu',                      desc: 'Show general command menu',                  target: 'main', hidden: true },

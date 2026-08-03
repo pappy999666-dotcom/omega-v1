@@ -85,6 +85,7 @@ export function mainMenuKeyboard(isOwner: boolean): InlineKeyboardMarkup {
     [btn('Validator Hub', 'bucket:status', 'primary'), btn('Global Bridge', 'bridge:global', 'primary')],
     [btn('Sleep Mode', 'sleep:menu', 'primary'), btn('Settings', 'settings:menu', 'primary')],
     [btn('Support', 'support:menu', 'primary'), btn('Help', 'help:main', 'primary')],
+    [btn('💡 Send Idea', 'idea:submit', 'success')],
   ];
 
   if (isOwner) {
@@ -256,8 +257,10 @@ export function adminPanelKeyboard(paused = false, maintenance = false): InlineK
         btn('📊 Platform Stats', 'admin:stats', 'primary'),
       ],
       [btn('📋 All Sessions', 'admin:allsessions', 'primary'), btn('🔗 Menu URL', 'admin:menuurl', 'primary')],
+      [btn('📢 Release Settings', 'admin:release:menu', 'primary')],
       [btn('📅 Auto-Promote (All)', 'admin:autopromo', 'primary'), btn('🔄 Update Bot', 'admin:update', 'success')],
-      [btn('📋 Logs', 'admin:logs', 'primary'), btn('🔙 Back', 'menu:main', 'primary')],
+      [btn('💡 Idea Inbox', 'admin:ideas:0', 'primary'), btn('📋 Logs', 'admin:logs', 'primary')],
+      [btn('🔙 Back', 'menu:main', 'primary')],
     ],
   };
 }
@@ -299,6 +302,44 @@ export function adminUserKeyboard(telegramId: string, isBanned: boolean): Inline
       [btn('🔙 Back', 'admin:users:0', 'primary')],
     ],
   };
+}
+
+export function adminIdeasKeyboard(
+  ideas: { id: string; platform: string; username?: string; status: string }[],
+  page = 0,
+  pageSize = 8
+): InlineKeyboardMarkup {
+  const start = page * pageSize;
+  const slice = ideas.slice(start, start + pageSize);
+
+  const rows: IKB[][] = slice.map((i) => {
+    const statusIcon = { open: '📩', read: '📖', completed: '✅' }[i.status] ?? '⚪';
+    const label = `${statusIcon} ${i.platform === 'telegram' ? 'TG' : 'WA'}: ${i.username || 'User'}`;
+    return [btn(label, `admin:idea:${i.id}`, 'primary')];
+  });
+
+  const nav: IKB[] = [];
+  if (page > 0) nav.push(btn('◀ Prev', `admin:ideas:${page - 1}`, 'primary'));
+  if (start + pageSize < ideas.length) nav.push(btn('Next ▶', `admin:ideas:${page + 1}`, 'primary'));
+  if (nav.length > 0) rows.push(nav);
+
+  rows.push([btn('🔙 Back', 'admin:panel', 'primary')]);
+  return { inline_keyboard: rows };
+}
+
+export function adminIdeaViewKeyboard(ideaId: string, status: string): InlineKeyboardMarkup {
+  const rows: IKB[][] = [
+    [btn('📩 Reply', `admin:idea:${ideaId}:reply`, 'success')],
+  ];
+
+  if (status !== 'completed') {
+    rows.push([btn('✅ Mark Completed', `admin:idea:${ideaId}:complete`, 'primary')]);
+  }
+  
+  rows.push([btn('🗑 Delete', `admin:idea:${ideaId}:delete`, 'danger')]);
+  rows.push([btn('🔙 Back', 'admin:ideas:0', 'primary')]);
+
+  return { inline_keyboard: rows };
 }
 
 // ── Confirm Dialog ────────────────────────────────────────

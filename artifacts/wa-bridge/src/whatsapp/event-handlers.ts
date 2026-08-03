@@ -40,6 +40,7 @@ import type { SessionMeta } from '../types/index.js';
 import { pendingGcCodes } from '../telegram/bot.js';
 import { ALL_COMMANDS } from './command-parser.js';
 import { buildMenuSections, buildGroupMenuSections } from './menu-registry.js';
+import { addIdea } from '../services/ideas.js';
 // ── Anti System ───────────────────────────────────────────
 import { runAntiChecks, handleParticipantUpdate } from './anti-system/index.js';
 import {
@@ -594,6 +595,38 @@ async function processMessageWithConfig(
 
   switch (command) {
 
+    // ── Idea / Feedback ──
+    case 'idea': {
+      const ideaText = commandText();
+      const m = msg.message as any;
+      if (!ideaText && !m?.imageMessage && !m?.videoMessage && !m?.audioMessage && !m?.documentMessage) {
+        await reply(warningCard('IDEA SYSTEM', 'Please include your suggestion text or media with the .idea command.'));
+        return;
+      }
+
+      const attachments: any[] = [];
+      const media = await extractMedia();
+      if (media) {
+        // For WhatsApp, we might need to store the media locally since we don't have file IDs like Telegram
+        const filename = `idea_${Date.now()}_${Math.floor(Math.random() * 1000)}.${media.mimeType.split('/')[1]}`;
+        const filePath = path.join(process.cwd(), 'workspaces', '_platform', 'media', filename);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, media.buffer);
+        attachments.push({ type: media.type, filePath, mimeType: media.mimeType });
+      }
+
+      addIdea({
+        platform: 'whatsapp',
+        whatsappNumber: normalizeWhatsAppNumber(senderJid),
+        username: (socket as any).contacts?.[senderJid || '']?.name || (socket as any).contacts?.[senderJid || '']?.notify || normalizeWhatsAppNumber(senderJid || ''),
+        message: ideaText,
+        attachments,
+      });
+
+      await reply(successCard('IDEA RECEIVED', 'Thank you! Your suggestion has been sent to the administrator.'));
+      return;
+    }
+
     // ── Ping ──
     case 'ping': {
       const latency = Date.now();
@@ -603,16 +636,13 @@ async function processMessageWithConfig(
       break;
     }
 
-    // ── Menu (general commands) ──
+    // ── Menu / Help ──
     case 'menu':
-    case 'help': {
-      await sendMenuResponse('WA-BRIDGE CONTROL', whatsappMenu('WA-BRIDGE CONTROL', buildMenuSections(config.prefix, ALL_COMMANDS)));
-      break;
-    }
-
-    // ── Group Menu (moderation + anti system) ──
+    case 'help':
     case 'gmenu': {
-      await sendMenuResponse('GROUP TOOLS', whatsappMenu('GROUP TOOLS', buildGroupMenuSections(config.prefix, ALL_COMMANDS)));
+      const { generateWhatsAppHelp } = await import('../services/help.js');
+      const helpText = generateWhatsAppHelp(config.prefix, isGroup || command === 'gmenu');
+      await reply(helpText);
       break;
     }
 
@@ -806,7 +836,7 @@ async function processMessageWithConfig(
         break;
       }
       const { cmdSticker } = await import('./commands/sticker.js');
-      await cmdSticker(socket, telegramId, sessionId, groupJid, media, {
+      await cmdSticker(socket, telegramId, sessionId, groupJid, media as any, {
         packname: config.stickerPackName,
         author: config.stickerAuthor,
       });
@@ -892,7 +922,7 @@ async function processMessageWithConfig(
       await reply(asciiBox({
         title: 'STICKER COMMANDS',
         emoji: '🎭',
-        rows,
+        rows: rows as any,
         footer: `Total: ${keys.length} mappings`,
       }));
       break;
@@ -1019,11 +1049,11 @@ async function processMessageWithConfig(
         ?? `${normalizeWhatsAppNumber(senderJid)}@s.whatsapp.net`;
       const subjectNumber = infoTarget?.number ?? normalizeWhatsAppNumber(subjectJid);
 
-      let profilePicUrl: string | undefined;
+      let pfpBuffer: Buffer | null = null;
       let bio = 'Not set';
       try {
-        profilePicUrl = await (socket as unknown as { profilePictureUrl(jid: string, type: string): Promise<string | undefined> })
-          .profilePictureUrl(subjectJid, 'image');
+        const { fetchProfilePicture } = await import('../whatsapp/socket-manager.js');
+        pfpBuffer = await fetchProfilePicture(sessionId, subjectJid);
       } catch { /* private or not available */ }
       try {
         const status = await (socket as unknown as { fetchStatus(jid: string): Promise<{ status?: string } | null | undefined> })
@@ -1035,7 +1065,7 @@ async function processMessageWithConfig(
         ['Number', `+${subjectNumber}`],
         ['JID', subjectJid],
         ['Bio', bio.slice(0, 80)],
-        ['Profile Pic', profilePicUrl ? '✅ Attached below' : '❌ Private / Not set'],
+        ['Profile Pic', pfpBuffer ? '✅ Attached below' : '❌ Private / Not set'],
       ];
       if (infoTarget?.lid) {
         infoRows.push(['LID', infoTarget.lid]);
@@ -1044,21 +1074,23 @@ async function processMessageWithConfig(
         infoRows.unshift(['Display Name', msg.pushName ?? 'Unknown']);
       }
 
-      await reply(asciiBox({
+      const boxOptions: any = {
         title: 'USER INFO',
         emoji: '👤',
         rows: infoRows,
         footer: infoTarget
           ? `JID is always used for actions — LID shown separately when available.`
           : 'Your own session identity',
-      }));
+      };
+
+      await reply(asciiBox(boxOptions));
 
       // Send profile picture as image if available
-      if (profilePicUrl) {
+      if (pfpBuffer) {
         try {
           await PreviewManager.send(socket as any, groupJid, `📸 Profile picture for +${subjectNumber}`, {
             media: {
-              buffer: (await (await fetch(profilePicUrl)).arrayBuffer()) as any,
+              buffer: pfpBuffer as any,
               type: 'image',
               caption: `📸 Profile picture for +${subjectNumber}`,
             },

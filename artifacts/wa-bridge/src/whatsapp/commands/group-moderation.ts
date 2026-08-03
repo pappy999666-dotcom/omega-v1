@@ -268,11 +268,19 @@ export async function cmdPromote(
   const promErr = await participantUpdate(socket, groupJid, target.jid, 'promote');
   if (promErr !== null) return errorCard('Promote', `Could not promote @${target.number}.\n\nReason: ${promErr}`);
 
-  await PreviewManager.send(socket as any, groupJid, `✅ @${target.number} has been promoted to admin in *${meta.subject}*.`, {
+  let pfpBuffer: Buffer | null = null;
+  try {
+    const { fetchProfilePicture } = await import('../socket-manager.js');
+    pfpBuffer = await fetchProfilePicture(sessionId, target.jid);
+  } catch { /* ignore */ }
+
+  const caption = `✅ @${target.number} has been promoted to admin in *${meta.subject}*.`;
+  await PreviewManager.send(socket as any, groupJid, caption, {
     extra: { mentions: [target.jid] },
     forceMentions: true,
     sessionId,
     telegramId,
+    ...(pfpBuffer ? { media: { buffer: pfpBuffer as any, type: 'image', caption } } : {}),
   });
   return successCard('Promote', `@${target.number} is now an admin.`);
 }
@@ -305,11 +313,19 @@ export async function cmdDemote(
   const demErr = await participantUpdate(socket, groupJid, target.jid, 'demote');
   if (demErr !== null) return errorCard('Demote', `Could not demote @${target.number}.\n\nReason: ${demErr}`);
 
-  await PreviewManager.send(socket as any, groupJid, `⬇️ @${target.number} has been demoted from admin in *${meta.subject}*.`, {
+  let pfpBuffer: Buffer | null = null;
+  try {
+    const { fetchProfilePicture } = await import('../socket-manager.js');
+    pfpBuffer = await fetchProfilePicture(sessionId, target.jid);
+  } catch { /* ignore */ }
+
+  const caption = `⬇️ @${target.number} has been demoted from admin in *${meta.subject}*.`;
+  await PreviewManager.send(socket as any, groupJid, caption, {
     extra: { mentions: [target.jid] },
     forceMentions: true,
     sessionId,
     telegramId,
+    ...(pfpBuffer ? { media: { buffer: pfpBuffer as any, type: 'image', caption } } : {}),
   });
   return successCard('Demote', `@${target.number} is no longer an admin.`);
 }
@@ -377,11 +393,19 @@ export async function cmdDnKick(
     return errorCard('DnKick', `@${target.number} was demoted but the removal failed. You may need to kick them manually.\n\nReason: ${dnKickErr}`);
   }
 
-  await PreviewManager.send(socket as any, groupJid, `✅ @${target.number} has been demoted and removed from *${gcName}*.`, {
+  let pfpBuffer: Buffer | null = null;
+  try {
+    const { fetchProfilePicture } = await import('../socket-manager.js');
+    pfpBuffer = await fetchProfilePicture(sessionId, target.jid);
+  } catch { /* ignore */ }
+
+  const caption = `✅ @${target.number} has been demoted and removed from *${gcName}*.`;
+  await PreviewManager.send(socket as any, groupJid, caption, {
     extra: { mentions: [target.jid] },
     forceMentions: true,
     sessionId,
     telegramId,
+    ...(pfpBuffer ? { media: { buffer: pfpBuffer as any, type: 'image', caption } } : {}),
   });
   return successCard('DnKick', `@${target.number} was demoted then kicked.`, [['Number', target.number]]);
 }
@@ -437,20 +461,36 @@ export async function cmdWarn(
     if (meta?.botIsAdmin) {
       await participantUpdate(socket, groupJid, target.jid, 'remove'); // best-effort
     }
-    await PreviewManager.send(socket as any, groupJid, `${rendered}\n\n${italic(`Warning ${count}/${threshold} — kicked.`)}`, {
+    let pfpBuffer: Buffer | null = null;
+    try {
+      const { fetchProfilePicture } = await import('../socket-manager.js');
+      pfpBuffer = await fetchProfilePicture(sessionId, target.jid);
+    } catch { /* ignore */ }
+
+    const kickCaption = `${rendered}\n\n${italic(`Warning ${count}/${threshold} — kicked.`)}`;
+    await PreviewManager.send(socket as any, groupJid, kickCaption, {
       extra: { mentions: [target.jid] },
       forceMentions: true,
       sessionId,
       telegramId,
+      ...(pfpBuffer ? { media: { buffer: pfpBuffer as any, type: 'image', caption: kickCaption } } : {}),
     });
     return successCard('Warn → Kicked', `@${target.number} reached ${threshold} warnings and was removed.`);
   }
 
-  await PreviewManager.send(socket as any, groupJid, `${rendered}\n\n${italic(`Warning ${count}/${threshold}. ${threshold - count} more will result in a kick.`)}`, {
+  let pfpBuffer: Buffer | null = null;
+  try {
+    const { fetchProfilePicture } = await import('../socket-manager.js');
+    pfpBuffer = await fetchProfilePicture(sessionId, target.jid);
+  } catch { /* ignore */ }
+
+  const warnCaption = `${rendered}\n\n${italic(`Warning ${count}/${threshold}. ${threshold - count} more will result in a kick.`)}`;
+  await PreviewManager.send(socket as any, groupJid, warnCaption, {
     extra: { mentions: [target.jid] },
     forceMentions: true,
     sessionId,
     telegramId,
+    ...(pfpBuffer ? { media: { buffer: pfpBuffer as any, type: 'image', caption: warnCaption } } : {}),
   });
   return successCard('Warned', `@${target.number} warned. (${count}/${threshold})`);
 }

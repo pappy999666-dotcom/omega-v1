@@ -27,6 +27,15 @@ export interface UserConfig {
   permissionDeniedResponse?: string;
   stickerPackName?: string;
   stickerAuthor?: string;
+  releaseChannelUsername?: string;
+  releasePostsEnabled?: boolean;
+}
+
+export interface PlatformConfig {
+  globalMenuUrl?: string;
+  globalMenuUrls?: string[];
+  releaseChannelUsername?: string;
+  releasePostsEnabled?: boolean;
 }
 
 export interface SessionMenuMedia {
