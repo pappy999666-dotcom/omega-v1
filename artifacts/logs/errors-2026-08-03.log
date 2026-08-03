@@ -1,1 +1,9 @@
 {"err":"connect ECONNREFUSED 127.0.0.1:6379","level":"error","message":"[Redis] Connection error","timestamp":"2026-08-03T07:00:27.869Z"}
+{"level":"error","message":"[Health] System startup blocked by critical failures","timestamp":"2026-08-03T07:00:43.987Z"}
+{"alertUser":true,"error":"Connection Failure","level":"error","message":"[Recovery] 1_8831887192_2347034171763 → purge","purge":true,"reason":"401 Unauthorized — registered session revoked by WhatsApp","timestamp":"2026-08-03T07:00:44.715Z"}
+{"err":"connect ECONNREFUSED 127.0.0.1:6379","level":"error","message":"[Redis] Connection error","timestamp":"2026-08-03T07:01:00.396Z"}
+{"err":"connect ECONNREFUSED 127.0.0.1:6379","level":"error","message":"[Redis] Connection error","timestamp":"2026-08-03T07:01:30.415Z"}
+{"err":"connect ECONNREFUSED 127.0.0.1:6379","level":"error","message":"[Redis] Connection error","timestamp":"2026-08-03T07:02:00.433Z"}
+{"err":"connect ECONNREFUSED 127.0.0.1:6379","level":"error","message":"[Redis] Connection error","timestamp":"2026-08-03T07:02:30.450Z"}
+{"err":"connect ECONNREFUSED 127.0.0.1:6379","level":"error","message":"[Redis] Connection error","timestamp":"2026-08-03T07:03:00.470Z"}
+{"err":"connect ECONNREFUSED 127.0.0.1:6379","level":"error","message":"[Redis] Connection error","timestamp":"2026-08-03T07:03:30.490Z"}

@@ -23,37 +23,68 @@ export class Installer {
     static installSystemDependency(depName: string): boolean {
         console.log(`\x1b[33mAttempting to install system dependency: ${depName}...\x1b[0m`);
         try {
-            // Detect package manager
-            let command = '';
             let sudo = '';
-            
             try {
                 execSync('sudo -n true', { stdio: 'ignore' });
                 sudo = 'sudo ';
             } catch (e) {
-                // Check if we are already root
                 if (process.getuid && process.getuid() === 0) {
                     sudo = '';
                 } else {
-                    console.warn('\x1b[31mWarning: No sudo access. Installation might fail.\x1b[0m');
-                    sudo = 'sudo '; // Try anyway, it might prompt
+                    sudo = 'sudo '; 
                 }
             }
 
-            if (this.checkCommand('apt-get')) {
-                command = `${sudo}apt-get update -y && ${sudo}apt-get install -y ${depName}`;
-            } else if (this.checkCommand('yum')) {
-                command = `${sudo}yum install -y ${depName}`;
-            } else if (this.checkCommand('dnf')) {
-                command = `${sudo}dnf install -y ${depName}`;
-            } else if (this.checkCommand('brew')) {
-                command = `brew install ${depName}`;
-            } else {
-                throw new Error('No supported package manager found (apt, yum, dnf, brew).');
+            let command = '';
+            
+            // Specialized installation for specific engines
+            switch (depName.toLowerCase()) {
+                case 'redis':
+                    if (this.checkCommand('apt-get')) {
+                        command = `${sudo}apt-get update -y && ${sudo}apt-get install -y redis-server && ${sudo}service redis-server start`;
+                    } else if (this.checkCommand('brew')) {
+                        command = `brew install redis && brew services start redis`;
+                    }
+                    break;
+                case 'mongodb':
+                    if (this.checkCommand('apt-get')) {
+                        // Use official MongoDB repo for Ubuntu/Debian
+                        command = `curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc | ${sudo}gpg --dearmor -o /usr/share/keyrings/mongodb-server-7.0.gpg --yes && ` +
+                                 `echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu $(lsb_release -cs)/mongodb-org/7.0 multiverse" | ${sudo}tee /etc/apt/sources.list.d/mongodb-org-7.0.list && ` +
+                                 `${sudo}apt-get update -y && ${sudo}apt-get install -y mongodb-org && ${sudo}systemctl enable mongod && ${sudo}systemctl start mongod`;
+                    } else if (this.checkCommand('brew')) {
+                        command = `brew tap mongodb/brew && brew install mongodb-community && brew services start mongodb-community`;
+                    }
+                    break;
+                case 'bun':
+                    command = `curl -fsSL https://bun.sh/install | bash`;
+                    break;
+                case 'imagemagick':
+                    if (this.checkCommand('apt-get')) {
+                        command = `${sudo}apt-get update -y && ${sudo}apt-get install -y imagemagick`;
+                    } else if (this.checkCommand('brew')) {
+                        command = `brew install imagemagick`;
+                    }
+                    break;
+                default:
+                    // Generic installation
+                    if (this.checkCommand('apt-get')) {
+                        command = `${sudo}apt-get update -y && ${sudo}apt-get install -y ${depName}`;
+                    } else if (this.checkCommand('yum')) {
+                        command = `${sudo}yum install -y ${depName}`;
+                    } else if (this.checkCommand('dnf')) {
+                        command = `${sudo}dnf install -y ${depName}`;
+                    } else if (this.checkCommand('brew')) {
+                        command = `brew install ${depName}`;
+                    }
+            }
+
+            if (!command) {
+                throw new Error(`No installation strategy found for ${depName} on this system.`);
             }
 
             console.log(`Running: ${command}`);
-            execSync(command, { stdio: 'inherit' });
+            execSync(command, { stdio: 'inherit', shell: '/bin/bash' });
             return true;
         } catch (error: any) {
             console.error(`\x1b[31mFailed to install ${depName}: ${error.message}\x1b[0m`);

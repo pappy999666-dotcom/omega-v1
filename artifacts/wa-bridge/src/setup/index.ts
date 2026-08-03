@@ -49,12 +49,15 @@ export async function runSetupWizard() {
             } else {
                 console.log(`\x1b[33m⚠ ${dep} is missing (Optional)\x1b[0m`);
                 const choice = await qm.select(`${dep} is recommended but not found.`, [
-                    `Install ${dep} now`,
+                    `Install ${dep} automatically (Recommended)`,
                     `Skip (I don't need this feature)`,
                     `Use remote service (for Redis/Mongo)`
                 ]);
-                if (choice === `Install ${dep} now`) {
-                    Installer.installSystemDependency(dep);
+                if (choice === `Install ${dep} automatically (Recommended)`) {
+                    const success = Installer.installSystemDependency(dep);
+                    if (success) {
+                        console.log(`\x1b[32m✔ ${dep} installed and started successfully\x1b[0m`);
+                    }
                 }
             }
         } else {

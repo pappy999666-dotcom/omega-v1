@@ -1,3 +1,30 @@
 {"level":"info","message":"[Boot] Starting WA-Bridge...","timestamp":"2026-08-03T07:00:27.863Z"}
 {"level":"info","message":"[Boot] Connecting to Redis...","timestamp":"2026-08-03T07:00:27.864Z"}
 {"err":"connect ECONNREFUSED 127.0.0.1:6379","level":"error","message":"[Redis] Connection error","timestamp":"2026-08-03T07:00:27.869Z"}
+{"err":"Redis startup timeout","level":"warn","message":"[Boot] Redis unavailable; starting in degraded mode without BullMQ workers","timestamp":"2026-08-03T07:00:37.869Z"}
+{"level":"info","message":"[Boot] Initializing Telegram bot...","timestamp":"2026-08-03T07:00:37.870Z"}
+{"level":"info","message":"[Boot] Starting BullMQ workers...","timestamp":"2026-08-03T07:00:37.874Z"}
+{"level":"warn","message":"[Boot] Queue-backed bulk operations are disabled until the next healthy restart","timestamp":"2026-08-03T07:00:37.874Z"}
+{"level":"info","message":"[Boot] Restoring sessions from disk...","timestamp":"2026-08-03T07:00:37.875Z"}
+{"level":"info","message":"[Boot] Restored 1 session(s)","timestamp":"2026-08-03T07:00:42.040Z"}
+{"level":"info","message":"[AutoPromote] Admin slot 0 in 479min","timestamp":"2026-08-03T07:00:42.041Z"}
+{"level":"info","message":"[AutoPromote] Admin slot 1 in 509min","timestamp":"2026-08-03T07:00:42.041Z"}
+{"level":"info","message":"[AutoPromote] Admin slot 2 in 539min","timestamp":"2026-08-03T07:00:42.041Z"}
+{"level":"info","message":"[AutoPromote] Admin slot 3 in 569min","timestamp":"2026-08-03T07:00:42.041Z"}
+{"level":"info","message":"[AutoPromote] Session morning in 1319min","timestamp":"2026-08-03T07:00:42.041Z"}
+{"level":"info","message":"[AutoPromote] Session evening in 599min","timestamp":"2026-08-03T07:00:42.042Z"}
+{"level":"info","message":"[AutoPromote] Admin: 4:00-5:30 PM WAT | Sessions: 6:00 AM + 6:00 PM WAT","timestamp":"2026-08-03T07:00:42.042Z"}
+{"level":"info","message":"[Boot] Launching Telegram bot...","timestamp":"2026-08-03T07:00:42.047Z"}
+{"level":"info","message":"[Web] Dashboard listening on :3001","timestamp":"2026-08-03T07:00:42.051Z"}
+{"level":"error","message":"[Health] System startup blocked by critical failures","timestamp":"2026-08-03T07:00:43.987Z"}
+{"level":"info","message":"[Boot] WA-Bridge is live! ✓","timestamp":"2026-08-03T07:00:43.987Z"}
+{"code":401,"generation":1,"level":"warn","message":"Connection closed","registered":true,"sessionId":"1_8831887192_2347034171763","timestamp":"2026-08-03T07:00:44.714Z"}
+{"alertUser":true,"error":"Connection Failure","level":"error","message":"[Recovery] 1_8831887192_2347034171763 → purge","purge":true,"reason":"401 Unauthorized — registered session revoked by WhatsApp","timestamp":"2026-08-03T07:00:44.715Z"}
+{"level":"warn","message":"[Workspace] Purged session 1_8831887192_2347034171763 for 8831887192","timestamp":"2026-08-03T07:00:44.788Z"}
+{"err":"Error: 401: Unauthorized","level":"warn","message":"[Bot] Failed to send alert","telegramId":"8831887192","timestamp":"2026-08-03T07:00:45.130Z"}
+{"err":"connect ECONNREFUSED 127.0.0.1:6379","level":"error","message":"[Redis] Connection error","timestamp":"2026-08-03T07:01:00.395Z"}
+{"err":"connect ECONNREFUSED 127.0.0.1:6379","level":"error","message":"[Redis] Connection error","timestamp":"2026-08-03T07:01:30.415Z"}
+{"err":"connect ECONNREFUSED 127.0.0.1:6379","level":"error","message":"[Redis] Connection error","timestamp":"2026-08-03T07:02:00.433Z"}
+{"err":"connect ECONNREFUSED 127.0.0.1:6379","level":"error","message":"[Redis] Connection error","timestamp":"2026-08-03T07:02:30.450Z"}
+{"err":"connect ECONNREFUSED 127.0.0.1:6379","level":"error","message":"[Redis] Connection error","timestamp":"2026-08-03T07:03:00.470Z"}
+{"err":"connect ECONNREFUSED 127.0.0.1:6379","level":"error","message":"[Redis] Connection error","timestamp":"2026-08-03T07:03:30.490Z"}

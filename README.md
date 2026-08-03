@@ -49,6 +49,16 @@
 
 ---
 
+### 🚀 ZERO-FAILURE BOOT SEQUENCE
+
+OMEGA-V1 now features an **Automated Cybernetic Setup Wizard** designed for seamless deployment. The system handles all environmental complexities, ensuring you never fall into a terminal REPL.
+
+- **Auto-Engine Installation:** If Redis, MongoDB, or Bun are missing, the wizard will offer to install and start them for you automatically.
+- **Self-Healing Connectivity:** Post-installation, the system immediately attempts to bind and verify connections to all infrastructure components.
+- **Health Validation:** Every boot performs a deep scan of dependencies, API tokens, and database integrity.
+
+---
+
 ### 🚀 FEATURE MATRIX
 
 | Category | Feature | Support |
@@ -124,7 +134,7 @@ graph TD
 .
 ├── artifacts/
 │   ├── wa-bridge/          # Core WhatsApp Engine
-│   │   ├── src/setup/      # Modular Setup Wizard
+│   │   ├── src/setup/      # Modular Setup Wizard (Auto-Install Logic)
 │   │   ├── src/whatsapp/   # Baileys Implementation
 │   │   └── src/telegram/   # Telegraf Bot Handlers
 │   ├── api-server/         # Web Dashboard Backend
@@ -134,48 +144,8 @@ graph TD
 │   ├── api-spec/           # OpenAPI Definitions
 │   └── api-zod/            # Zod Validation Schemas
 ├── scripts/                # Deployment & Maintenance
-└── setup.sh                # Initial Environment Scaffold
+└── setup                   # Unified Cybernetic Entrypoint
 ```
-
----
-
-### 📊 PERFORMANCE METRICS
-
-| Metric | Value |
-| :--- | :--- |
-| **Startup Time** | < 2 sec |
-| **Concurrent Sessions** | Unlimited (Redis Scaled) |
-| **Group Capacity** | 1000+ Members |
-| **Memory Optimized** | ✅ |
-| **Event Driven** | ✅ |
-| **Multi Platform** | ✅ |
-
----
-
-### 🛡️ SECURITY CORE
-
-- **Permission Validation:** Role-based access control for all commands.
-- **Session Isolation:** Cryptographically secure multi-session handling.
-- **Anti Abuse:** Integrated rate-limiting and spam protection.
-- **Protected Commands:** Critical actions restricted to verified sudo users.
-- **Workspace Isolation:** Logical separation of user data and logs.
-- **Safe Execution:** Concurrent process handling with automatic circuit breakers.
-
----
-
-### 📸 SYSTEM PREVIEWS
-
-<div align="center">
-
-| Telegram Dashboard | Web Dashboard |
-| :---: | :---: |
-| ![Placeholder](https://via.placeholder.com/400x200/000000/00FF41?text=TELEGRAM+UI) | ![Placeholder](https://via.placeholder.com/400x200/000000/00FF41?text=WEB+DASHBOARD) |
-
-| WhatsApp Menu | Daily Drop |
-| :---: | :---: |
-| ![Placeholder](https://via.placeholder.com/400x200/000000/00FF41?text=WHATSAPP+MENU) | ![Placeholder](https://via.placeholder.com/400x200/000000/00FF41?text=DAILY+DROP) |
-
-</div>
 
 ---
 
@@ -187,30 +157,15 @@ git clone https://github.com/pappy999666-dotcom/omega-v1.git
 cd omega-v1
 ```
 
-#### 2. Initialize Environment
+#### 2. Execute Zero-Failure Boot
 ```bash
+chmod +x setup
 ./setup
 ```
-*This will trigger the **Modular Setup Wizard** to configure your tokens, database, and plugins.*
+*The wizard will automatically detect missing dependencies (Redis, MongoDB, etc.) and offer to install them for you.*
 
-#### 3. Start System
-```bash
-pnpm install
-pnpm build
-pnpm start
-```
-
----
-
-### ⚙️ CONFIGURATION
-
-| Key | Description | Default |
-| :--- | :--- | :--- |
-| `TELEGRAM_BOT_TOKEN` | Bot Father API Token | `REQUIRED` |
-| `TELEGRAM_OWNER_ID` | Your Telegram UID | `REQUIRED` |
-| `MONGO_URI` | MongoDB Connection String | `localhost` |
-| `REDIS_URL` | Redis Connection String | `localhost` |
-| `WEB_PORT` | Dashboard Access Port | `3000` |
+#### 3. System Online
+Once setup completes, the bot will launch automatically. No manual `npm start` required for the first run.
 
 ---
 
