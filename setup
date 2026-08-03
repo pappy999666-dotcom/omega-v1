@@ -68,29 +68,59 @@ echo -e "\n🚀 ${G}Initializing Setup Wizard...${NC}\n"
 cd "$(dirname "$0")"
 
 # FALLBACK 1: Try pnpm directly
+SETUP_SUCCESS=false
 if [ ! -z "$PNPM_PATH" ]; then
     echo "Attempting Fallback 1 (pnpm)..."
     if $PNPM_PATH --filter @workspace/wa-bridge run setup; then
-        exit 0
+        SETUP_SUCCESS=true
     fi
 fi
 
 # FALLBACK 2: Try npx pnpm
-NPM_PATH=$(find_cmd npm)
-if [ ! -z "$NPM_PATH" ]; then
-    echo "Attempting Fallback 2 (npx pnpm)..."
-    if $NODE_PATH "$NPM_PATH" exec pnpm --filter @workspace/wa-bridge run setup; then
-        exit 0
+if command -v npm &> /dev/null; then
+    echo "Attempting Fallback 2 (npm exec pnpm)..."
+    if npm exec pnpm --filter @workspace/wa-bridge run setup; then
+        SETUP_SUCCESS=true
     fi
 fi
 
 # FALLBACK 3: Emergency direct execution
-echo -e "${Y}⚠️  Standard runners failed. Attempting Fallback 3 (Direct Execution)...${NC}"
-if [ -d "artifacts/wa-bridge" ]; then
-    cd artifacts/wa-bridge
-    # Try to use tsx if available, otherwise install it temporarily
-    $NODE_PATH "$NPM_PATH" exec tsx src/setup/run.ts
+if [ "$SETUP_SUCCESS" != "true" ]; then
+    echo -e "${Y}⚠️  Standard runners failed. Attempting Fallback 3 (Direct Execution)...${NC}"
+    if [ -d "artifacts/wa-bridge" ]; then
+        cd artifacts/wa-bridge
+        if command -v npx &> /dev/null; then
+            npx tsx src/setup/run.ts && SETUP_SUCCESS=true
+        else
+            $NODE_PATH -e "console.log('tsx missing and npx not found')"
+            exit 1
+        fi
+        cd ../..
+    else
+        echo -e "${R}❌ FATAL: Could not locate wa-bridge directory.${NC}"
+        exit 1
+    fi
+fi
+
+if [ "$SETUP_SUCCESS" = "true" ]; then
+    echo -e "\n${G}✅ Setup Wizard completed successfully.${NC}"
+    echo -e "🚀 ${G}Building and starting the bot...${NC}\n"
+    
+    # Ensure dependencies are installed and project is built
+    if [ ! -z "$PNPM_PATH" ]; then
+        $PNPM_PATH install
+        echo -e "\n${G}Building wa-bridge...${NC}"
+        $PNPM_PATH --filter @workspace/wa-bridge run build
+        echo -e "\n${G}Starting bot...${NC}"
+        exec $PNPM_PATH --filter @workspace/wa-bridge run start
+    else
+        npm install
+        echo -e "\n${G}Building wa-bridge...${NC}"
+        npm --prefix artifacts/wa-bridge run build
+        echo -e "\n${G}Starting bot...${NC}"
+        exec npm --prefix artifacts/wa-bridge start
+    fi
 else
-    echo -e "${R}❌ FATAL: Could not locate wa-bridge directory.${NC}"
+    echo -e "${R}❌ Setup failed to complete.${NC}"
     exit 1
 fi

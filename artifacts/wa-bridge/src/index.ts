@@ -64,14 +64,37 @@ async function bootstrap(): Promise<void> {
 
   logger.info('[Boot] Starting WA-Bridge...');
 
-  // 1. Verify environment
-  if (!process.env.TELEGRAM_BOT_TOKEN) {
-    throw new Error('TELEGRAM_BOT_TOKEN is required. Copy .env.example to .env and fill it in.');
-  }
-  if (!process.env.TELEGRAM_OWNER_ID) {
-    throw new Error('TELEGRAM_OWNER_ID is required.');
+  // 1. Verify environment & Build
+  const healthResults: any[] = [];
+  
+  // Check required env
+  const requiredEnv = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_OWNER_ID'];
+  for (const key of requiredEnv) {
+    if (!process.env[key]) {
+      healthResults.push({ component: `Env: ${key}`, status: 'error', message: 'Missing' });
+    } else {
+      healthResults.push({ component: `Env: ${key}`, status: 'ok' });
+    }
   }
 
+  // Check directories
+  const dirs = ['logs', 'sessions', 'uploads', 'temp'];
+  for (const dir of dirs) {
+    if (!fs.existsSync(dir)) {
+      try {
+        fs.mkdirSync(dir, { recursive: true });
+        healthResults.push({ component: `Dir: ${dir}`, status: 'ok', message: 'Created' });
+      } catch (e) {
+        healthResults.push({ component: `Dir: ${dir}`, status: 'error', message: 'Failed to create' });
+      }
+    } else {
+      healthResults.push({ component: `Dir: ${dir}`, status: 'ok' });
+    }
+  }
+
+  // Import HealthReporter
+  const { HealthReporter } = await import('./utils/HealthReporter.js');
+  
   // 2. Test Redis connection without blocking core Telegram/WhatsApp controls forever.
   logger.info('[Boot] Connecting to Redis...');
   const redis = getRedis();
@@ -130,30 +153,56 @@ async function bootstrap(): Promise<void> {
     startLifecycleWorker();
     startOmniWorker();
     logger.info('[Boot] BullMQ workers started ✓');
+    healthResults.push({ component: 'Redis Workers', status: 'ok' });
   } else {
     logger.warn('[Boot] Queue-backed bulk operations are disabled until the next healthy restart');
+    healthResults.push({ component: 'Redis Workers', status: 'warn', message: 'Disabled (Redis unavailable)' });
   }
 
   // 7. Restore active sessions from disk
   logger.info('[Boot] Restoring sessions from disk...');
-  await restoreSessions();
+  try {
+    await restoreSessions();
+    healthResults.push({ component: 'Sessions', status: 'ok' });
+  } catch (e) {
+    healthResults.push({ component: 'Sessions', status: 'warn', message: 'Failed to restore' });
+  }
 
   // Start auto-promote scheduler (7 AM + 6 PM WAT daily)
   startAutoPromoteScheduler();
+  healthResults.push({ component: 'Schedulers', status: 'ok' });
 
   // 8. Launch web dashboard
-  await startWebServer();
+  try {
+    await startWebServer();
+    healthResults.push({ component: 'Web Server', status: 'ok', message: `Port ${process.env.WEB_PORT || 3000}` });
+  } catch (e) {
+    healthResults.push({ component: 'Web Server', status: 'error', message: String(e) });
+  }
 
   // 9. Launch Telegram bot
   logger.info('[Boot] Launching Telegram bot...');
-  await bot.launch({
-    allowedUpdates: [
-      'message',
-      'callback_query',
-      'inline_query',
-      'chosen_inline_result',
-    ],
-  });
+  try {
+    await bot.launch({
+      allowedUpdates: [
+        'message',
+        'callback_query',
+        'inline_query',
+        'chosen_inline_result',
+      ],
+    });
+    healthResults.push({ component: 'Telegram Bot', status: 'ok' });
+  } catch (e) {
+    healthResults.push({ component: 'Telegram Bot', status: 'error', message: 'Failed to launch' });
+  }
+
+  // Display Health Report
+  const isHealthy = HealthReporter.display(healthResults);
+
+  if (!isHealthy) {
+    console.log('\x1b[31mCritical startup failures detected. Check logs for details.\x1b[0m');
+    // We don't exit here to allow for manual inspection if needed, but in production we might.
+  }
 
   logger.info('[Boot] WA-Bridge is live! ✓');
 

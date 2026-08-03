@@ -1,0 +1,22 @@
+{
+    "database": {
+        "type": "SQLite",
+        "path": "./database.sqlite"
+    },
+    "useRedis": false,
+    "whatsapp": {
+        "pairingMode": "QR",
+        "sessionFolder": "./sessions"
+    },
+    "enableWebDashboard": true,
+    "web": {
+        "port": "3001",
+        "domain": "localhost",
+        "useHttps": false,
+        "auth": {
+            "username": "admin",
+            "password": "password"
+        }
+    },
+    "plugins": {}
+}

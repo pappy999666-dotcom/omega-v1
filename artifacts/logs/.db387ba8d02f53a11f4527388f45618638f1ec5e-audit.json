@@ -1,0 +1,15 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 14
+    },
+    "auditLog": "/home/ubuntu/omega-v1/artifacts/logs/.db387ba8d02f53a11f4527388f45618638f1ec5e-audit.json",
+    "files": [
+        {
+            "date": 1785740169063,
+            "name": "/home/ubuntu/omega-v1/artifacts/logs/wa-bridge-2026-08-03.log",
+            "hash": "06886146f1bc035919f2761d91998cc4496c59eab4ef12c44528c9f6b525ad45"
+        }
+    ],
+    "hashType": "sha256"
+}

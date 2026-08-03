@@ -1,0 +1,1 @@
+{"err":"connect ECONNREFUSED 127.0.0.1:6379","level":"error","message":"[Redis] Connection error","timestamp":"2026-08-03T07:00:27.869Z"}

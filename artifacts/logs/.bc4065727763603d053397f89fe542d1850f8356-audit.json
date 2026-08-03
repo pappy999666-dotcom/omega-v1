@@ -1,0 +1,15 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 30
+    },
+    "auditLog": "/home/ubuntu/omega-v1/artifacts/logs/.bc4065727763603d053397f89fe542d1850f8356-audit.json",
+    "files": [
+        {
+            "date": 1785740169064,
+            "name": "/home/ubuntu/omega-v1/artifacts/logs/errors-2026-08-03.log",
+            "hash": "997c05dc32b5342cb3d34fb07080a15f63de1079ca8e6bc4f75d8599457ab80f"
+        }
+    ],
+    "hashType": "sha256"
+}
