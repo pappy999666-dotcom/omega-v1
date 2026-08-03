@@ -25,6 +25,8 @@ export interface UserConfig {
   publicMode?: boolean;
   tagReply?: boolean;
   permissionDeniedResponse?: string;
+  stickerPackName?: string;
+  stickerAuthor?: string;
 }
 
 export interface SessionMenuMedia {
@@ -173,6 +175,7 @@ export interface ParsedCommand {
   prefix: string;
   command: string;
   args: string[];
+  rawRemainder: string;
   raw: string;
   fromSticker?: boolean;
   stickerHash?: string;

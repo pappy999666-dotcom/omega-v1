@@ -65,12 +65,15 @@ export async function cmdTag(
   try {
     let content: AnyMessageContent;
 
+    const mentionText = participants.map((jid) => `@${jid.split('@')[0]}`).join(' ');
+    const fullText = text ? `${text}\n\n${mentionText}` : mentionText;
+
     if (opts.mediaBuffer) {
-      await PreviewManager.send(socket as any, groupJid, text, {
+      await PreviewManager.send(socket as any, groupJid, fullText, {
         media: {
           buffer: opts.mediaBuffer,
           type: opts.mediaType as any ?? 'image',
-          caption: text,
+          caption: fullText,
         },
         extra: { mentions: participants },
         forceMentions: true,
@@ -79,10 +82,10 @@ export async function cmdTag(
       });
     } else if (opts.sourceExt) {
       // As-is relay — WA-built preview relayed verbatim via likeThis
-      const sent = await sendAsIs(socket, groupJid, text, opts.sourceExt, { mentions: participants });
+      const sent = await sendAsIs(socket, groupJid, fullText, opts.sourceExt, { mentions: participants });
       if (sent) return { success: true, pinged: participants.length };
       // fallthrough if likeThis failed
-      await PreviewManager.send(socket as any, groupJid, text, {
+      await PreviewManager.send(socket as any, groupJid, fullText, {
         existingPreview: opts.existingPreview,
         extra: { mentions: participants },
         forceMentions: true,
@@ -90,7 +93,7 @@ export async function cmdTag(
         telegramId,
       });
     } else {
-      await PreviewManager.send(socket as any, groupJid, text, {
+      await PreviewManager.send(socket as any, groupJid, fullText, {
         existingPreview: opts.existingPreview,
         extra: { mentions: participants },
         forceMentions: true,
@@ -149,9 +152,9 @@ export async function cmdMTag(
 
   try {
     for (const chunk of chunks) {
-      // Build visible @mention string - VERTICAL layout as per audit requirements
-      const mentionText = chunk.map((jid) => `┃ ✦ @${jid.split('@')[0]}`).join('\n');
-      const fullText = `${text}\n\n${mentionText}`;
+      // Clean visible @mention string
+      const mentionText = chunk.map((jid) => `@${jid.split('@')[0]}`).join(' ');
+      const fullText = text ? `${text}\n\n${mentionText}` : mentionText;
 
       if (opts.mediaBuffer) {
         await PreviewManager.send(socket as any, groupJid, fullText, {

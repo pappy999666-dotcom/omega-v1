@@ -40,10 +40,11 @@ export function parseCommand(
     // Dynamic prefix — strip leading whitespace around the prefix
     // Handles: ".menu", ". menu", " .menu" etc.
     const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const prefixRe = new RegExp(`^\\s*${escapedPrefix}\\s*`);
+    const prefixRe = new RegExp(`^\\s*${escapedPrefix}`);
 
     if (!prefixRe.test(normalized)) return null;
-    body = normalized.replace(prefixRe, '').trim();
+    // Remove prefix and any leading space to get to the command word
+    body = normalized.replace(prefixRe, '').trimStart();
   } else {
     return null;
   }
@@ -51,13 +52,17 @@ export function parseCommand(
   if (!body) return null;
 
   // Split only on the first whitespace to get the command word.
-  // Everything after is kept raw so newlines in message bodies are preserved.
+  // Everything after is kept raw so newlines and exact spacing are preserved.
   const firstWs = body.search(/\s/);
   let command = (firstWs === -1 ? body : body.slice(0, firstWs)).toLowerCase();
-  // args: split remainder on spaces only (not newlines) for single-line arg lists;
-  // for multiline bodies the raw text is accessed via msg.message directly.
-  const rawRemainder = firstWs === -1 ? '' : body.slice(firstWs + 1);
-  const args = rawRemainder ? rawRemainder.split(/ +/).filter(Boolean) : [];
+  
+  // rawRemainder: everything after the command word, including the first whitespace if any
+  const rawRemainder = firstWs === -1 ? '' : body.slice(firstWs);
+  
+  // For legacy compatibility, args array still exists but we should prefer rawRemainder
+  // We trim the first whitespace from args for backward compatibility with simple commands
+  const argsText = rawRemainder.trimStart();
+  const args = argsText ? argsText.split(/ +/).filter(Boolean) : [];
   const aliases: Record<string, string> = {
     left: 'left',
     stopspam: 'stopspam',
@@ -79,6 +84,7 @@ export function parseCommand(
     prefix,
     command,
     args,
+    rawRemainder,
     raw: text,
   };
 }
@@ -138,6 +144,8 @@ export const ALL_COMMANDS = [
   'menu', 'help', 'gmenu', 'ping', 'info', 'groups', 'jid', 'userinfo', 'getinfo',
   // Bucket
   'addlink',
+  // Sticker System
+  'sticker', 'setpackname', 'setauthor', 'listcmd',
   // Group Moderation
   'kick', 'remove', 'ban', 'unban', 'banlist',
   'promote', 'demote', 'dnkick',
@@ -151,6 +159,8 @@ export const ALL_COMMANDS = [
   'setgoodbye', 'goodbyemsg', 'goodbye',
   'kickmsg', 'warnmsg', 'banmsg', 'unbanmsg',
   'eventstatus',
+  // Session Management
+  'ls', 'curr', 'switch', 'sinfo', 'restart', 'disconnect', 'delete', 'rename', 'freeze', 'unfreeze',
   // Pairing from WhatsApp
   'pair',
   // ── Anti System ──

@@ -72,7 +72,9 @@ function defaultConfig(telegramId: string): UserConfig {
     lastActivity: Date.now(),
     publicMode: true,
     tagReply: true,
-    permissionDeniedResponse: 'Permission denied. This command is restricted to owners and sudo users.',
+    permissionDeniedResponse: 'You are not authorized to use this command.',
+    stickerPackName: 'PAPPY',
+    stickerAuthor: 'OMEGA',
   };
 }
 

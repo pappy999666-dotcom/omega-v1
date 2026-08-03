@@ -64,7 +64,17 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
   leaveall:     { section: '◈ LIFECYCLE',        syntax: 'leaveall',                  desc: 'Leave all joined groups',                    target: 'main' },
 
   // ── Pairing ───────────────────────────────────────────────
-  pair:         { section: '◈ PAIRING',          syntax: 'pair [phone]',              desc: 'Pair a new WhatsApp number from inside WA',  target: 'main' },
+  ls:           { section: '◈ SESSION MGMT',     syntax: 'ls',                        desc: 'List all WhatsApp sessions',                  target: 'main' },
+  curr:         { section: '◈ SESSION MGMT',     syntax: 'curr',                      desc: 'Show the current active session',             target: 'main' },
+  switch:       { section: '◈ SESSION MGMT',     syntax: 'switch [id]',               desc: 'Switch to a different session',               target: 'main' },
+  sinfo:        { section: '◈ SESSION MGMT',     syntax: 'sinfo [id]',                desc: 'Show detailed session information',           target: 'main' },
+  restart:      { section: '◈ SESSION MGMT',     syntax: 'restart [id]',              desc: 'Hot-reload/reconnect a session',              target: 'main' },
+  disconnect:   { section: '◈ SESSION MGMT',     syntax: 'disconnect [id]',           desc: 'Close a session without deleting data',       target: 'main' },
+  delete:       { section: '◈ SESSION MGMT',     syntax: 'delete [id]',               desc: 'Permanently remove a session and data',       target: 'main' },
+  rename:       { section: '◈ SESSION MGMT',     syntax: 'rename [id] [name]',        desc: 'Assign a custom label to a session',          target: 'main' },
+  freeze:       { section: '◈ SESSION MGMT',     syntax: 'freeze [id]',               desc: 'Pause all event processing for a session',    target: 'main' },
+  unfreeze:     { section: '◈ SESSION MGMT',     syntax: 'unfreeze [id]',             desc: 'Resume event processing for a session',       target: 'main' },
+  pair:         { section: '◈ SESSION MGMT',     syntax: 'pair [phone]',              desc: 'Link a new WhatsApp session via code',        target: 'main' },
 
   // ── Bucket ────────────────────────────────────────────────
   addlink:      { section: '◈ BUCKET',           syntax: 'addlink [link…]',           desc: 'Add invite links to the main bucket',        target: 'main' },
@@ -72,8 +82,12 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
   // ── System Config ─────────────────────────────────────────
   setprefix:    { section: '◈ SYSTEM CONFIG',    syntax: 'setprefix [p]',             desc: 'Change the command prefix',                  target: 'main' },
   prefix:       { section: '◈ SYSTEM CONFIG',    syntax: 'prefix',                    desc: 'Show the current prefix',                    target: 'main', hidden: true },
-  setcmd:       { section: '◈ SYSTEM CONFIG',    syntax: 'setcmd [cmd]',              desc: 'Bind a quoted sticker to a command',         target: 'main' },
-  delcmd:       { section: '◈ SYSTEM CONFIG',    syntax: 'delcmd',                    desc: 'Remove a sticker binding',                   target: 'main' },
+  sticker:      { section: '◈ STICKER ENGINE',   syntax: 'sticker',                   desc: 'Convert image/video to sticker',             target: 'both' },
+  setpackname:  { section: '◈ STICKER ENGINE',   syntax: 'setpackname [name]',        desc: 'Set sticker pack name',                      target: 'main' },
+  setauthor:    { section: '◈ STICKER ENGINE',   syntax: 'setauthor [name]',          desc: 'Set sticker author name',                    target: 'main' },
+  setcmd:       { section: '◈ STICKER ENGINE',   syntax: 'setcmd [cmd]',              desc: 'Bind a quoted sticker to a command',         target: 'main' },
+  delcmd:       { section: '◈ STICKER ENGINE',   syntax: 'delcmd',                    desc: 'Remove a sticker binding',                   target: 'main' },
+  listcmd:      { section: '◈ STICKER ENGINE',   syntax: 'listcmd',                   desc: 'List all sticker command bindings',          target: 'main' },
   setmenupic:   { section: '◈ SYSTEM CONFIG',    syntax: 'setmenupic',                desc: 'Set replied image as menu media',             target: 'main' },
   setmenuvideo: { section: '◈ SYSTEM CONFIG',    syntax: 'setmenuvideo',              desc: 'Set replied video as menu media',             target: 'main' },
   delmenumedia: { section: '◈ SYSTEM CONFIG',    syntax: 'delmenumedia',              desc: 'Restore default text-only menus',             target: 'main' },

@@ -10,7 +10,7 @@ export interface AsciiBoxOptions {
   rows: [string, string][];
   footer?: string;
   emoji?: string;
-  width?: number;
+  moduleIdentity?: string;
 }
 
 export const bold = (value: string): string => `*${value}*`;
@@ -26,22 +26,23 @@ export function asciiBox(opts: AsciiBoxOptions): string {
     rows: opts.rows,
     footer: opts.footer,
     emoji: opts.emoji,
+    moduleIdentity: opts.moduleIdentity,
   });
 }
 
 /** Lightweight spacing divider */
 export const divider = (): string => '';
 
-export function successCard(title: string, message: string, rows: [string, string][] = []): string {
-  return asciiBox({ title, emoji: '✅', rows, footer: message });
+export function successCard(title: string, message: string, rows: [string, string][] = [], module?: string): string {
+  return asciiBox({ title, emoji: '✅', rows, footer: message, moduleIdentity: module });
 }
 
-export function warningCard(title: string, message: string, rows: [string, string][] = []): string {
-  return asciiBox({ title, emoji: '⚠️', rows, footer: message });
+export function warningCard(title: string, message: string, rows: [string, string][] = [], module?: string): string {
+  return asciiBox({ title, emoji: '⚠️', rows, footer: message, moduleIdentity: module });
 }
 
-export function errorCard(title: string, message: string, details?: string): string {
-  return [asciiBox({ title, emoji: '❌', rows: [], footer: message }), details ? `\n${mono(details.slice(0, 200))}` : '']
+export function errorCard(title: string, message: string, details?: string, module?: string): string {
+  return [asciiBox({ title, emoji: '❌', rows: [], footer: message, moduleIdentity: module }), details ? `\n${mono(details.slice(0, 200))}` : '']
     .filter(Boolean)
     .join('\n');
 }
@@ -54,6 +55,7 @@ export function pingCard(opts: { latency: number; sessionId: string; status: str
   return asciiBox({
     title: 'PONG',
     emoji: '🏓',
+    moduleIdentity: 'CORE STATUS',
     rows: [
       ['Latency', opts.status === 'MEASURING' ? '…' : `${opts.latency}ms`],
       ['Session', opts.sessionId],
@@ -76,6 +78,7 @@ export function infoCard(opts: {
   return asciiBox({
     title: 'SESSION STATUS',
     emoji: '📱',
+    moduleIdentity: 'STATUS ENGINE',
     rows: [
       ['Status', `${statusEmoji} ${opts.status}`],
       ['Session', opts.sessionId],
@@ -95,6 +98,7 @@ export function sudoListCard(numbers: string[]): string {
     return asciiBox({
       title: 'SUDO REGISTRY',
       emoji: '🔐',
+      moduleIdentity: 'VALIDATOR',
       rows: [['Authorized', '0']],
       footer: 'No sudo operators configured.',
     });
@@ -104,6 +108,7 @@ export function sudoListCard(numbers: string[]): string {
     asciiBox({
       title: 'SUDO REGISTRY',
       emoji: '🔐',
+      moduleIdentity: 'VALIDATOR',
       rows: [['Authorized', String(numbers.length)]],
     }),
     `\n${quote(roster)}`,
@@ -116,6 +121,7 @@ export function groupsCard(groups: { name: string; count: number }[]): string {
     return asciiBox({
       title: 'JOINED GROUPS',
       emoji: '📋',
+      moduleIdentity: 'GROUP MANAGER',
       rows: [['Total', '0']],
       footer: 'No groups joined.',
     });
@@ -127,6 +133,7 @@ export function groupsCard(groups: { name: string; count: number }[]): string {
     asciiBox({
       title: 'JOINED GROUPS',
       emoji: '📋',
+      moduleIdentity: 'GROUP MANAGER',
       rows: [['Total', String(groups.length)]],
     }),
     `\n${quote(list + overflow)}`,
@@ -144,6 +151,7 @@ export function resultBox(opts: {
   return asciiBox({
     title: `${opts.op.toUpperCase()} COMPLETE`,
     emoji: '📊',
+    moduleIdentity: 'TASK ENGINE',
     rows: [
       ['Success', String(opts.success)],
       ['Failed', String(opts.failed)],
@@ -164,6 +172,7 @@ export function sessionBox(opts: {
   return asciiBox({
     title: 'SESSION INFO',
     emoji: '📱',
+    moduleIdentity: 'SESSION MANAGER',
     rows: [
       ['ID', opts.sessionId],
       ['Owner', opts.phone],
@@ -174,20 +183,18 @@ export function sessionBox(opts: {
 }
 
 export function connectedCard(opts: { name: string; phone: string; sessionId: string; method: string }): string {
-  return [
-    '```',
-    '┌────────────────────────────────────────────┐',
-    '│  ► PAPPY-BOT — SESSION ONLINE                  │',
-    '├────────────────────────────────────────────┤',
-    `│  👤 Name    : ${opts.name.slice(0, 22).padEnd(22)}  │`,
-    `│  📱 Number  : +${opts.phone.slice(0, 21).padEnd(21)}  │`,
-    `│  🔗 Method  : ${opts.method.slice(0, 22).padEnd(22)}  │`,
-    '├────────────────────────────────────────────┤',
-    '│  STATUS  : ● CONNECTED ✔                        │',
-    '│  BOT     : ACTIVE — AWAITING COMMANDS           │',
-    '└────────────────────────────────────────────┘',
-    '```',
-  ].join('\n');
+  return asciiBox({
+    title: 'SESSION ONLINE',
+    emoji: '●',
+    moduleIdentity: 'CORE STATUS',
+    rows: [
+      ['Name', opts.name],
+      ['Number', `+${opts.phone}`],
+      ['Method', opts.method],
+      ['Status', 'CONNECTED ✔'],
+    ],
+    footer: 'BOT ACTIVE — AWAITING COMMANDS',
+  });
 }
 
 // ── Premium Tips (rotating) ──────────────────────────────
@@ -220,36 +227,29 @@ export function whatsappMenu(
 ): string {
   const cleanCommand = (cmd: string): string => cmd.trim().split(/\s+/u)[0] ?? cmd.trim();
   const safeDivider = '────────────────────';
-  const lines: string[] = [
-    '⟦ ◈ *OMEGA • CORE* ◈ ⟧',
-    '_WA-BRIDGE / CONTROL INTERFACE_',
-    '',
-    'SYSTEM      ◉ ONLINE',
-    'SESSION     ◉ VERIFIED',
-    'ENGINE      ◉ READY',
+  
+  // Menu also uses the PAPPY engine for consistency
+  const rows: [string, string][] = [
+    ['SYSTEM', '◉ ONLINE'],
+    ['SESSION', '◉ VERIFIED'],
+    ['ENGINE', '◉ READY'],
   ];
 
+  let menuBody = '';
   for (const section of sections) {
-    lines.push('', safeDivider, section.heading, safeDivider);
+    menuBody += `\n${safeDivider}\n${bold(section.heading)}\n${safeDivider}\n`;
     for (const item of section.items) {
-      lines.push(`◈ *${cleanCommand(item.cmd)}*`, `  └ ${item.desc}`);
+      menuBody += `◈ *${cleanCommand(item.cmd)}*\n  └ ${item.desc}\n`;
     }
   }
 
-  // ── Rotating Premium Tip Section ──
-  lines.push(
-    '',
-    safeDivider,
-    '◈ *PREMIUM HIGHLIGHT*',
-    safeDivider,
-  );
-  lines.push(`◉ ${getPremiumTip()}`);
+  menuBody += `\n${safeDivider}\n${bold('PREMIUM HIGHLIGHT')}\n${safeDivider}\n◉ ${getPremiumTip()}\n`;
 
-  lines.push(
-    '',
-    safeDivider,
-    '⟦ Awaiting Operator Command... ⟧'
-  );
-
-  return lines.join('\n').trim();
+  return asciiBox({
+    title: 'OMEGA • CORE',
+    emoji: '◈',
+    moduleIdentity: 'CONTROL INTERFACE',
+    rows,
+    footer: menuBody + `\n${safeDivider}\n⟦ Awaiting Operator Command... ⟧`
+  });
 }

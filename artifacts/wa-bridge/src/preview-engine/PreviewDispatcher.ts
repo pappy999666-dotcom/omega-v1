@@ -186,13 +186,21 @@ export class PreviewDispatcher {
         // Ensure we don't duplicate by checking URL inside buttonParamsJson
         const getUrl = (btn: any) => {
           try {
-            return JSON.parse(btn.buttonParamsJson).url;
+            if (btn.buttonParamsJson) {
+              const params = JSON.parse(btn.buttonParamsJson);
+              return params.url || params.copy_code;
+            }
+            return btn.url;
           } catch {
             return btn.url;
           }
         };
+        
         const existingUrls = new Set(finalContent.nativeFlow.buttons.map(getUrl));
         for (const b of globalButtons) {
+          // WhatsApp nativeFlow supports up to 10 buttons total
+          if (finalContent.nativeFlow.buttons.length >= 10) break;
+          
           if (!existingUrls.has(b.url)) {
             finalContent.nativeFlow.buttons.push({
               name: 'cta_url',

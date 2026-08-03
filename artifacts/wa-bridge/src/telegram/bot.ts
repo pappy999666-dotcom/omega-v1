@@ -1259,9 +1259,11 @@ export function createBot(): Telegraf<BotContext> {
         { parse_mode: 'HTML', reply_markup: adminPanelKeyboard(false, false) }
       );
     } else {
-      const entries = raw.split(/[\n,]+/u).map((entry) => entry.includes('|') ? entry.split('|').slice(1).join('|').trim() : entry.trim()).filter(Boolean);
+      const lines = raw.split(/[\n,]+/u).filter(Boolean);
+      const entries = lines.map((entry) => entry.includes('|') ? entry.split('|').slice(1).join('|').trim() : entry.trim());
       const allUrls = entries.length > 0 && entries.every((entry) => /^https?:\/\//i.test(entry));
       const isJid = raw.includes('@g.us') || raw.includes('@newsletter') || raw.includes('@s.whatsapp.net');
+      
       if (!allUrls && !isJid) {
         await ctx.reply(
           noticeCard('Invalid Input', 'Send one or more URL buttons as Label|https://... lines, or "clear" to remove.', 'error'),

@@ -61,10 +61,8 @@ export function fuzzyMatchCommand(
  * Only normalizes the FIRST LINE so multiline message bodies are preserved.
  */
 export function normalizeCommandString(raw: string): string {
-  // Only collapse whitespace on the first line — preserve newlines in the body
-  const newlineIdx = raw.search(/\n/);
-  if (newlineIdx === -1) return raw.replace(/\s+/g, ' ').trim();
-  const firstLine = raw.slice(0, newlineIdx).replace(/\s+/g, ' ').trim();
-  const rest = raw.slice(newlineIdx); // keep \n + everything after
-  return firstLine + rest;
+  // We must preserve exact spacing for templates and welcome messages.
+  // Only trim leading/trailing whitespace from the entire message,
+  // but do NOT collapse internal spaces or newlines.
+  return raw.trim();
 }

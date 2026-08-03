@@ -531,7 +531,7 @@ async function processMessageWithConfig(
       }
     };
   };
-  const commandText = (fallback = ''): string => args.join(' ').trim() || quotedText.trim() || fallback;
+  const commandText = (fallback = ''): string => parsed.rawRemainder.trim() || quotedText.trim() || fallback;
 
   // ── Resolve sender JID — fix LID → real JID so sudo matching works ──
   let rawSenderJid = msg.key.participant ?? (msg.key.fromMe ? (socket as { user?: { id?: string } }).user?.id : msg.key.remoteJid);
@@ -565,9 +565,12 @@ async function processMessageWithConfig(
   const isAuthorized = replyOverride || isAuthorizedCommandSender(isOwnerSender, sudoCheckJid, config.sudoNumbers);
 
   if (!isAuthorized) {
-    const isPublicCommand = ['menu', 'gmenu', 'pair'].includes(command);
+    const { MENU_CATALOG } = await import('./menu-registry.js');
+    const entry = MENU_CATALOG[command];
+    const isPublicCommand = entry && (entry.target === 'group' || entry.target === 'both');
+    
     if (config.publicMode && isPublicCommand) {
-      // Allow public commands
+      // Allow public commands - internal command checks will handle specific permissions
     } else {
       if (config.publicMode && config.permissionDeniedResponse) {
         await reply(errorCard('PERMISSION DENIED', config.permissionDeniedResponse));
@@ -642,6 +645,76 @@ async function processMessageWithConfig(
       } catch (err) {
         await reply(errorCard('GROUPS FETCH FAILED', 'WhatsApp rejected the group list request.', String(err)));
       }
+      break;
+    }
+
+    // ── Session Management ──
+    case 'ls': {
+      const { cmdListSessions } = await import('./commands/session-mgmt.js');
+      await reply(await cmdListSessions(telegramId));
+      break;
+    }
+
+    case 'curr': {
+      const { cmdSessionInfo } = await import('./commands/session-mgmt.js');
+      await reply(await cmdSessionInfo(telegramId, sessionId));
+      break;
+    }
+
+    case 'sinfo': {
+      const targetId = args[0] || sessionId;
+      const { cmdSessionInfo } = await import('./commands/session-mgmt.js');
+      await reply(await cmdSessionInfo(telegramId, targetId));
+      break;
+    }
+
+    case 'restart': {
+      const targetId = args[0] || sessionId;
+      const { cmdRestartSession } = await import('./commands/session-mgmt.js');
+      await reply(await cmdRestartSession(telegramId, targetId));
+      break;
+    }
+
+    case 'disconnect': {
+      const targetId = args[0] || sessionId;
+      const { cmdDisconnectSession } = await import('./commands/session-mgmt.js');
+      await reply(await cmdDisconnectSession(telegramId, targetId));
+      break;
+    }
+
+    case 'delete': {
+      const targetId = args[0];
+      if (!targetId) { await reply(warningCard('SESSION ID REQUIRED', `Usage: ${config.prefix}delete <id>`)); break; }
+      const { cmdDeleteSession } = await import('./commands/session-mgmt.js');
+      await reply(await cmdDeleteSession(telegramId, targetId));
+      break;
+    }
+
+    case 'rename': {
+      const targetId = args[0];
+      const newLabel = args.slice(1).join(' ');
+      if (!targetId || !newLabel) { await reply(warningCard('ID & NAME REQUIRED', `Usage: ${config.prefix}rename <id> <name>`)); break; }
+      const { cmdRenameSession } = await import('./commands/session-mgmt.js');
+      await reply(await cmdRenameSession(telegramId, targetId, newLabel));
+      break;
+    }
+
+    case 'freeze': {
+      const targetId = args[0] || sessionId;
+      const { cmdFreezeSession } = await import('./commands/session-mgmt.js');
+      await reply(await cmdFreezeSession(targetId));
+      break;
+    }
+
+    case 'unfreeze': {
+      const targetId = args[0] || sessionId;
+      const { cmdUnfreezeSession } = await import('./commands/session-mgmt.js');
+      await reply(await cmdUnfreezeSession(targetId));
+      break;
+    }
+
+    case 'switch': {
+      await reply(warningCard('SWITCH NOT SUPPORTED', 'To switch sessions, please use the Telegram bot or send a command from the other session.', [], 'SESSION MANAGER'));
       break;
     }
 
@@ -723,6 +796,42 @@ async function processMessageWithConfig(
           ],
         }));
       }
+      break;
+    }
+
+    case 'sticker': {
+      const media = await extractMedia();
+      if (!media || (media.type !== 'image' && media.type !== 'video')) {
+        await reply(warningCard('REPLY TO MEDIA', `Reply to an image or video with ${config.prefix}sticker to convert it.`, [], 'STICKER ENGINE'));
+        break;
+      }
+      const { cmdSticker } = await import('./commands/sticker.js');
+      await cmdSticker(socket, telegramId, sessionId, groupJid, media, {
+        packname: config.stickerPackName,
+        author: config.stickerAuthor,
+      });
+      break;
+    }
+
+    case 'setpackname': {
+      const name = args.join(' ').trim();
+      if (!name) {
+        await reply(warningCard('NAME REQUIRED', `Usage: ${config.prefix}setpackname [name]`, [], 'STICKER ENGINE'));
+        break;
+      }
+      updateSessionConfig(telegramId, sessionId, { stickerPackName: name });
+      await reply(successCard('PACKNAME UPDATED', `Sticker pack name set to: ${bold(name)}`, [], 'STICKER ENGINE'));
+      break;
+    }
+
+    case 'setauthor': {
+      const name = args.join(' ').trim();
+      if (!name) {
+        await reply(warningCard('NAME REQUIRED', `Usage: ${config.prefix}setauthor [name]`, [], 'STICKER ENGINE'));
+        break;
+      }
+      updateSessionConfig(telegramId, sessionId, { stickerAuthor: name });
+      await reply(successCard('AUTHOR UPDATED', `Sticker author set to: ${bold(name)}`, [], 'STICKER ENGINE'));
       break;
     }
 
@@ -1149,10 +1258,10 @@ async function processMessageWithConfig(
             } : {}),
           });
         }
-        await socket.sendMessage(groupJid, { text: asciiBox({ title: 'BROADCAST COMPLETE', emoji: '✅', rows: [['Repeats', String(repeat)], ['Mode', 'ALL STATUS']] }) });
+        await reply(asciiBox({ title: 'BROADCAST COMPLETE', emoji: '✅', rows: [['Repeats', String(repeat)], ['Mode', 'ALL STATUS']] }));
       })().catch(async (error) => {
         logger.error('[EventHandler] allstatus failed', { sessionId, error: String(error) });
-        await socket.sendMessage(groupJid, { text: errorCard('BROADCAST FAILED', String(error)) });
+        await reply(errorCard('BROADCAST FAILED', String(error)));
       });
       break;
     }
@@ -1164,10 +1273,10 @@ async function processMessageWithConfig(
       await reply(asciiBox({ title: 'ALLGSTATUS STARTED', emoji: '📡', rows: [['Mode', 'RAW — NO DESIGN']], footer: 'Running in background…' }));
       void cmdAllGStatus(socket, sessionId, telegramId, agText, { existingPreview: quotedPreview, sourceExt })
         .then(async (r) => {
-          await socket.sendMessage(groupJid, { text: asciiBox({ title: 'ALLGSTATUS COMPLETE', emoji: '✅', rows: [['Sent', String(r.success)], ['Failed', String(r.failed)], ['Skipped', String(r.skipped)]] }) });
+          await reply(asciiBox({ title: 'ALLGSTATUS COMPLETE', emoji: '✅', rows: [['Sent', String(r.success)], ['Failed', String(r.failed)], ['Skipped', String(r.skipped)]] }));
         })
         .catch(async (err) => {
-          await socket.sendMessage(groupJid, { text: errorCard('ALLGSTATUS FAILED', String(err)) });
+          await reply(errorCard('ALLGSTATUS FAILED', String(err)));
         });
       break;
     }
@@ -1236,12 +1345,12 @@ async function processMessageWithConfig(
       clearJoinAllStop(sessionId);
       await reply(asciiBox({ title: 'JOINALL STARTED', emoji: '🔗', rows: [['Links', String(links.length)]], footer: `Use ${config.prefix}stopjoin to stop.` }));
       cmdJoinAll(socket, sessionId, telegramId, links, {}).then(async (res) => {
-        await socket.sendMessage(groupJid, { text: asciiBox({
+        await reply(asciiBox({
           title: 'JOINALL COMPLETE', emoji: '✅',
           rows: [['Joined', String(res.success)], ['Failed', String(res.failed)], ['Skipped', String(res.skipped)]],
-        }) });
+        }));
       }).catch(async (error) => {
-        await socket.sendMessage(groupJid, { text: errorCard('JOINALL FAILED', String(error)) });
+        await reply(errorCard('JOINALL FAILED', String(error)));
       });
       break;
     }
@@ -1296,9 +1405,9 @@ async function processMessageWithConfig(
         mediaBuffer: media?.buffer,
         mediaType: media?.type,
       });
-      await reply(res.success
-        ? successCard('MENTION COMPLETE', `Tagged all members in ${res.messages} message(s).`, [['Members', String(res.pinged)]])
-        : errorCard('MTAG FAILED', res.error ?? 'Could not fetch group participants.'));
+      if (!res.success) {
+        await reply(errorCard('MTAG FAILED', res.error ?? 'Could not fetch group participants.'));
+      }
       break;
     }
 

@@ -15,6 +15,8 @@
 import type { BridgeWASocket as WASocket } from '../whatsapp/baileys-types.js';
 import { connectedCard } from '../utils/ascii-art.js';
 import { logger } from '../utils/logger.js';
+import { PreviewManager } from '../preview-engine/index.js';
+import { loadSessionOwner } from './workspace.js';
 
 export interface ConnectedNotification {
   /** Telegram chat ID to notify */
@@ -177,8 +179,18 @@ async function sendWhatsAppSelfDM(opts: ConnectedNotification, name: string): Pr
   try {
     const ownJid = (opts.socket as unknown as { user?: { id?: string } })?.user?.id;
     if (!ownJid) return;
-    await opts.socket.sendMessage(ownJid, {
-      text: connectedCard({ name, phone: opts.phone, sessionId: opts.sessionId, method: opts.method }),
+    
+    const telegramId = opts.ownerTelegramId || loadSessionOwner(opts.sessionId);
+    if (!telegramId) return;
+
+    await PreviewManager.send(opts.socket as any, ownJid, connectedCard({ 
+      name, 
+      phone: opts.phone, 
+      sessionId: opts.sessionId, 
+      method: opts.method 
+    }), {
+      sessionId: opts.sessionId,
+      telegramId,
     });
   } catch (err) {
     logger.warn('[ConnectedNotify] WhatsApp self-DM failed', { err: String(err) });
