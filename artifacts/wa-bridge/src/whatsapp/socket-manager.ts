@@ -391,10 +391,17 @@ export async function initSocket(
   const FORWARDED_EVENTS: (keyof BaileysEventMap)[] = [
     'messages.upsert',
     'messages.update',
+    'messages.media-update',
+    'messages.delete',
+    'messages.reaction',
+    'messages.receipt-update',
     'groups.update',
     'group-participants.update',
     'presence.update',
     'contacts.update',
+    'call',
+    'blocklist.set',
+    'blocklist.update',
   ];
 
   for (const ev of FORWARDED_EVENTS) {

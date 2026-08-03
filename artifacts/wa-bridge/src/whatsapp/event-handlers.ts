@@ -17,7 +17,7 @@ import { cmdJoin, cmdLeave, cmdJoinAll, cmdLeaveAll, resolveGroupJid } from './c
 import { cmdTag, cmdMTag, tagSummary } from './commands/tag.js';
 import { updateSessionConfig, addToMainBucket } from '../services/workspace.js';
 import { logger } from '../utils/logger.js';
-import { isFrozen, reinitSocket, normalizePairingPhone } from './socket-manager.js';
+import { isFrozen, reinitSocket, normalizePairingPhone, getSocket } from './socket-manager.js';
 import {
   whatsappMenu,
   asciiBox,
@@ -31,6 +31,7 @@ import {
   infoCard,
   sudoListCard,
   groupsCard,
+  connectedCard,
 } from '../utils/ascii-art.js';
 // ── SINGLE IMPORT: All preview operations go through PreviewManager ──
 import { PreviewManager } from '../preview-engine/index.js';
@@ -534,7 +535,7 @@ async function processMessageWithConfig(
   const isAuthorized = replyOverride || isAuthorizedCommandSender(isOwnerSender, sudoCheckJid, config.sudoNumbers);
 
   if (!isAuthorized) {
-    const isPublicCommand = ['menu', 'help', 'gmenu', 'pair'].includes(command);
+    const isPublicCommand = ['menu', 'gmenu', 'pair'].includes(command);
     if (config.publicMode && isPublicCommand) {
       // Allow public commands
     } else {
@@ -2133,6 +2134,22 @@ async function processMessageWithConfig(
         },
         onConnected: async () => {
           try {
+            // Send WA self-DM via centralized notification service
+            const newSocket = getSocket(newSessionId);
+            if (newSocket) {
+              const ownJid = (newSocket as unknown as { user?: { id?: string } })?.user?.id;
+              if (ownJid) {
+                await newSocket.sendMessage(ownJid, {
+                  text: connectedCard({
+                    name: newMeta.label || normalizedPhone,
+                    phone: normalizedPhone,
+                    sessionId: newSessionId,
+                    method: 'WhatsApp Pair',
+                  }),
+                });
+              }
+            }
+            // Also notify the originating chat
             await socket.sendMessage(groupJid, {
               text: successCard('SESSION CONNECTED', `+${normalizedPhone} is now active under your account.`, [
                 ['Session ID', newSessionId],

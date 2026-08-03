@@ -40,6 +40,8 @@ const BOT_PLATFORM_HINTS = [
 export function messageIsFromBot(msg: WebMessageInfo): boolean {
   // Only check incoming messages (not fromMe)
   if (msg.key.fromMe) return false;
+  // Early exit: must be a group message (AntiBot is a group moderation tool)
+  if (!msg.key.remoteJid?.endsWith('@g.us')) return false;
 
   const msgId = msg.key.id ?? '';
   const participant = msg.key.participant ?? '';

@@ -30,6 +30,9 @@ type GroupMention = { groupJid?: string };
  *                         Pass this so the self-mention guard can work.
  */
 export function messageIsGroupMention(msg: WebMessageInfo, currentGroupJid?: string): boolean {
+  // Early exit: must be a group message
+  if (!msg.key.remoteJid?.endsWith('@g.us')) return false;
+
   const m = msg.message as AnyMsg | null | undefined;
   if (!m) return false;
 

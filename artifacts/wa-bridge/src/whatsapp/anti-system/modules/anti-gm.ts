@@ -16,6 +16,9 @@ type AnyRecord = Record<string, unknown>;
 
 /** Returns true if this message is a status group mention for the given group. */
 export function messageIsGroupStatusMention(msg: WebMessageInfo, groupJid: string): boolean {
+  // Early exit: must be a group message
+  if (!msg.key.remoteJid?.endsWith('@g.us')) return false;
+
   // The message must be delivered to this group (remoteJid = groupJid)
   if (msg.key.remoteJid !== groupJid) return false;
 

@@ -62,6 +62,7 @@ import {
   subscribeJoinManager,
 } from '../../services/join-manager.js';
 import { connectedCard } from '../../utils/ascii-art.js';
+import { notifySessionConnected } from '../../services/session-connected.js';
 
 // ── Fetch WA profile (name + photo) after connect ────────
 
@@ -210,51 +211,23 @@ export async function handleNewSession(
       },
       onConnected: async (sid) => {
         const socket = getSocket(sid);
-        const ownJid = (socket as unknown as { user?: { id?: string } })?.user?.id ?? '';
-        const { name: waName, photoBuffer } = socket && ownJid
-          ? await fetchWAProfile(socket, ownJid)
-          : { name: meta.label || meta.phone, photoBuffer: null };
-        const displayName = waName !== 'Unknown' ? waName : (meta.label || meta.phone);
-
-        const connectedText = [
-          `🟢 <b>Session Connected!</b>`,
-          ``,
-          `👤 <b>Name:</b> ${escape(displayName)}`,
-          `📱 <b>Number:</b> <code>${escape(meta.phone)}</code>`,
-          `🔑 <b>Session:</b> <code>${escape(sid)}</code>`,
-          `🔗 <b>Method:</b> QR Code`,
-          `⏰ <b>Paired:</b> ${new Date().toLocaleString()}`,
-          ``,
-          `<blockquote>Ready for WhatsApp commands. Use the menu below to manage this session.</blockquote>`,
-        ].join('\n');
-
-        await ctx.telegram.editMessageText(
-          ctx.chat!.id, progressMsg.message_id, undefined,
-          connectedText,
-          { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sid, 'open') }
-        ).catch(() => {});
-
-        // Send cyber ASCII DM to the paired WhatsApp number
-        if (socket && ownJid) {
-          socket.sendMessage(ownJid, {
-            text: connectedCard({ name: displayName, phone: meta.phone, sessionId: sid, method: 'QR Code' }),
-          }).catch(() => {});
-        }
-
-        try {
-          if (photoBuffer) {
-            await ctx.telegram.sendPhoto(
-              parseInt(ctx.telegramId, 10),
-              { source: photoBuffer },
-              { caption: connectedText, parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sid, 'open') }
-            );
-          } else {
-            await ctx.telegram.sendMessage(
-              parseInt(ctx.telegramId, 10), connectedText,
-              { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sid, 'open') }
-            );
-          }
-        } catch { /* same chat or blocked */ }
+        // Delegate to centralized connected notification service
+        await notifySessionConnected({
+          telegramChatId: ctx.chat!.id,
+          telegram: {
+            sendMessage: (chatId, text, opts) => ctx.telegram.sendMessage(chatId, text, opts as any) as any,
+            editMessageText: (chatId, msgId, _, text, replyOpts) => ctx.telegram.editMessageText(chatId, msgId, undefined, text, replyOpts as any) as any,
+            sendPhoto: (chatId, photo, opts) => ctx.telegram.sendPhoto(chatId, photo as any, opts as any) as any,
+          },
+          socket: socket ?? undefined,
+          sessionId: sid,
+          phone: meta.phone,
+          label: meta.label,
+          method: 'QR Code',
+          replyMarkup: sessionMenuKeyboard(sid, 'open') as unknown as Record<string, unknown>,
+          progressMsgId: progressMsg.message_id,
+          ownerTelegramId: ctx.telegramId,
+        });
       },
     });
   } catch (err) {
@@ -334,53 +307,23 @@ export async function handlePairingCode(
       },
       onConnected: async () => {
         const socket = getSocket(sessionId);
-        const ownJid = (socket as unknown as { user?: { id?: string } })?.user?.id ?? '';
-        const { name: waName, photoBuffer } = socket && ownJid
-          ? await fetchWAProfile(socket, ownJid)
-          : { name: meta.label || normalizedPhone, photoBuffer: null };
-        const displayName = waName !== 'Unknown' ? waName : (meta.label || normalizedPhone);
-
-        const connectedText = [
-          `🟢 <b>Session Connected!</b>`,
-          ``,
-          `👤 <b>Name:</b> ${escape(displayName)}`,
-          `📱 <b>Number:</b> <code>${escape(normalizedPhone)}</code>`,
-          `🔑 <b>Session:</b> <code>${escape(sessionId)}</code>`,
-          `🔗 <b>Method:</b> Pairing Code`,
-          `⏰ <b>Paired:</b> ${new Date().toLocaleString()}`,
-          ``,
-          `<blockquote>Ready for WhatsApp commands. Use the menu below to manage this session.</blockquote>`,
-        ].join('\n');
-
-        await ctx.telegram.editMessageText(
-          ctx.chat!.id, progress.message_id, undefined,
-          connectedText,
-          { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId, 'open') }
-        ).catch(() =>
-          ctx.telegram.sendMessage(ctx.chat!.id, connectedText, { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId, 'open') }).catch(() => {})
-        );
-
-        // Send cyber ASCII DM to the paired WhatsApp number
-        if (socket && ownJid) {
-          socket.sendMessage(ownJid, {
-            text: connectedCard({ name: displayName, phone: normalizedPhone, sessionId, method: 'Pairing Code' }),
-          }).catch(() => {});
-        }
-
-        try {
-          if (photoBuffer) {
-            await ctx.telegram.sendPhoto(
-              parseInt(ctx.telegramId, 10),
-              { source: photoBuffer },
-              { caption: connectedText, parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId, 'open') }
-            );
-          } else {
-            await ctx.telegram.sendMessage(
-              parseInt(ctx.telegramId, 10), connectedText,
-              { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId, 'open') }
-            );
-          }
-        } catch { /* same chat or blocked */ }
+        // Delegate to centralized connected notification service
+        await notifySessionConnected({
+          telegramChatId: ctx.chat!.id,
+          telegram: {
+            sendMessage: (chatId, text, opts) => ctx.telegram.sendMessage(chatId, text, opts as any) as any,
+            editMessageText: (chatId, msgId, _, text, replyOpts) => ctx.telegram.editMessageText(chatId, msgId, undefined, text, replyOpts as any) as any,
+            sendPhoto: (chatId, photo, opts) => ctx.telegram.sendPhoto(chatId, photo as any, opts as any) as any,
+          },
+          socket: socket ?? undefined,
+          sessionId,
+          phone: normalizedPhone,
+          label: meta.label,
+          method: 'Pairing Code',
+          replyMarkup: sessionMenuKeyboard(sessionId, 'open') as unknown as Record<string, unknown>,
+          progressMsgId: progress.message_id,
+          ownerTelegramId: ctx.telegramId,
+        });
       },
     });
   } catch (error) {
@@ -471,40 +414,23 @@ export async function handleReinitSession(
     await reinitSocket(meta, {
       onConnected: async () => {
         const socket = getSocket(sessionId);
-        const ownJid = (socket as unknown as { user?: { id?: string } })?.user?.id ?? '';
-        const { name: waName, photoBuffer } = socket && ownJid
-          ? await fetchWAProfile(socket, ownJid)
-          : { name: meta.label || meta.phone, photoBuffer: null };
-        const displayName = waName !== 'Unknown' ? waName : (meta.label || meta.phone);
-        const reinitText = [
-          `🟢 <b>Session Reconnected!</b>`,
-          ``,
-          `👤 <b>Name:</b> ${escape(displayName)}`,
-          `📱 <b>Number:</b> <code>${escape(meta.phone)}</code>`,
-          `🔑 <b>Session:</b> <code>${escape(sessionId)}</code>`,
-          `⏰ <b>At:</b> ${new Date().toLocaleString()}`,
-          ``,
-          `<blockquote>Session successfully reinitialized and ready.</blockquote>`,
-        ].join('\n');
-        await ctx.telegram.editMessageText(
-          ctx.chat!.id, msg.message_id, undefined,
-          reinitText,
-          { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId) }
-        ).catch(() => {});
-        try {
-          if (photoBuffer) {
-            await ctx.telegram.sendPhoto(
-              parseInt(ctx.telegramId, 10),
-              { source: photoBuffer },
-              { caption: reinitText, parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId) }
-            );
-          } else {
-            await ctx.telegram.sendMessage(
-              parseInt(ctx.telegramId, 10), reinitText,
-              { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId) }
-            );
-          }
-        } catch { /* ignore */ }
+        // Delegate to centralized connected notification service
+        await notifySessionConnected({
+          telegramChatId: ctx.chat!.id,
+          telegram: {
+            sendMessage: (chatId, text, opts) => ctx.telegram.sendMessage(chatId, text, opts as any) as any,
+            editMessageText: (chatId, msgId, _, text, replyOpts) => ctx.telegram.editMessageText(chatId, msgId, undefined, text, replyOpts as any) as any,
+            sendPhoto: (chatId, photo, opts) => ctx.telegram.sendPhoto(chatId, photo as any, opts as any) as any,
+          },
+          socket: socket ?? undefined,
+          sessionId,
+          phone: meta.phone,
+          label: meta.label,
+          method: 'Reinit',
+          replyMarkup: sessionMenuKeyboard(sessionId) as unknown as Record<string, unknown>,
+          progressMsgId: msg.message_id,
+          ownerTelegramId: ctx.telegramId,
+        });
       },
     });
   } catch (err) {

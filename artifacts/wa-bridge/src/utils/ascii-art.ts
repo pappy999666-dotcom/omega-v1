@@ -187,6 +187,30 @@ export function connectedCard(opts: { name: string; phone: string; sessionId: st
   ].join('\n');
 }
 
+// ── Premium Tips (rotating) ──────────────────────────────
+
+const PREMIUM_TIPS: string[] = [
+  '💎 Premium unlock: Unlimited group status broadcasts with zero rate limits.',
+  '💎 Premium unlock: Priority queue for joinall & leaveall operations.',
+  '💎 Premium unlock: Custom menu media (video/image) for branded menus.',
+  '💎 Premium unlock: Multi-session management from a single Telegram.',
+  '💎 Premium unlock: Real-time join-manager with country-based approvals.',
+  '💎 Premium unlock: AntiNSFW AI-powered content detection engine.',
+  '💎 Premium unlock: Auto-approval pipeline with scheduled country targets.',
+  '💎 Premium unlock: Dedicated support channel & feature requests.',
+  '💎 Premium unlock: Custom status design themes beyond the free set.',
+  '💎 Premium unlock: Unlimited bucket capacity for group links.',
+];
+
+/** Get a rotating premium tip based on day of year (deterministic) */
+export function getPremiumTip(index?: number): string {
+  if (index !== undefined) {
+    return PREMIUM_TIPS[index % PREMIUM_TIPS.length];
+  }
+  const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
+  return PREMIUM_TIPS[dayOfYear % PREMIUM_TIPS.length];
+}
+
 export function whatsappMenu(
   _title: string,
   sections: { heading: string; items: { cmd: string; desc: string }[] }[]
@@ -208,6 +232,15 @@ export function whatsappMenu(
       lines.push(`◈ *${cleanCommand(item.cmd)}*`, `  └ ${item.desc}`);
     }
   }
+
+  // ── Rotating Premium Tip Section ──
+  lines.push(
+    '',
+    safeDivider,
+    '◈ *PREMIUM HIGHLIGHT*',
+    safeDivider,
+  );
+  lines.push(`◉ ${getPremiumTip()}`);
 
   lines.push(
     '',

@@ -259,6 +259,7 @@ export async function runAntiChecks(
   // ── AntiNSFW (async — runs separately to avoid blocking sync checks) ─
   const nsfwCfg = gc.antinsfw;
   if (nsfwCfg?.enabled && !isPermitted(nsfwCfg, senderNumber)) {
+    triggered = true; // Mark as potentially triggered; actual violation only if detected
     violations.push(
       messageIsNSFW(socket, msg).then((isNsfw) => {
         if (!isNsfw) return;

@@ -23,7 +23,19 @@ export function parseUrlButtons(input: string | string[] | null | undefined): Ur
     const [labelPart, ...urlParts] = entry.includes('|') ? entry.split('|') : ['', entry];
     const url = cleanUrl(urlParts.join('|') || labelPart);
     if (!url) return [];
-    const text = urlParts.length > 0 && labelPart.trim() ? labelPart.trim().slice(0, 25) : `Open ${index + 1}`;
+    // Fallback label: use provided label if non-empty, otherwise derive from URL host
+    let text: string;
+    if (urlParts.length > 0 && labelPart.trim()) {
+      text = labelPart.trim().slice(0, 25);
+    } else {
+      // Extract host from URL for a sensible default label
+      try {
+        const host = new URL(url).hostname.replace(/^www\./, '');
+        text = host.length <= 25 ? host : host.slice(0, 25);
+      } catch {
+        text = `Open ${index + 1}`;
+      }
+    }
     return [{ text, url }];
   });
 }

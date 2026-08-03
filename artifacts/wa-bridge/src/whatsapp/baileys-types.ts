@@ -43,12 +43,19 @@ export interface BridgeWASocket extends BaseWASocket {
 export interface BaileysEventMap {
   'messages.upsert': unknown;
   'messages.update': unknown;
+  'messages.media-update': unknown;
+  'messages.delete': unknown;
+  'messages.reaction': unknown;
+  'messages.receipt-update': unknown;
   'groups.update': unknown;
   'group-participants.update': unknown;
   'presence.update': unknown;
   'contacts.update': unknown;
   'creds.update': unknown;
   'connection.update': unknown;
+  'call': unknown;
+  'blocklist.set': unknown;
+  'blocklist.update': unknown;
 }
 
 export interface WebMessageInfo {

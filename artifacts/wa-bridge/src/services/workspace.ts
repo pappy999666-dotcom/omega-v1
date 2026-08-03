@@ -70,7 +70,7 @@ function defaultConfig(telegramId: string): UserConfig {
     broadcastEnabled: true,
     joinedAt: Date.now(),
     lastActivity: Date.now(),
-    publicMode: false,
+    publicMode: true,
     tagReply: true,
     permissionDeniedResponse: 'Permission denied. This command is restricted to owners and sudo users.',
   };

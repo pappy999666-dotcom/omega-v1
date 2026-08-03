@@ -88,8 +88,11 @@ function extractAllText(msg: WebMessageInfo): string[] {
 
 /**
  * Returns true if the message contains any link/URL.
+ * Early exits for non-group messages (links are only blocked in groups).
  */
 export function messageContainsLink(msg: WebMessageInfo): boolean {
+  // Early exit: must be a group message
+  if (!msg.key.remoteJid?.endsWith('@g.us')) return false;
   const texts = extractAllText(msg);
   return texts.some(textContainsLink);
 }
