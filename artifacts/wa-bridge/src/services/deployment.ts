@@ -133,6 +133,16 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
       await flush();
       try {
         await safeExec(`git reset --hard ${prevCommit}`, APP_DIR);
+        
+        // Restore dist_old if it exists
+        const DIST_PATH = path.join(WA_BRIDGE_DIR, 'dist');
+        const DIST_OLD = path.join(WA_BRIDGE_DIR, 'dist_old');
+        if (existsSync(DIST_OLD)) {
+          rmSync(DIST_PATH, { recursive: true, force: true });
+          await safeExec(`mv ${DIST_OLD} ${DIST_PATH}`, APP_DIR);
+          log.push('  - Restored previous dist artifacts');
+        }
+        
         await safeExec('pm2 restart wa-bridge --update-env', APP_DIR);
         log.push('✅ Rollback complete. Previous version restored.');
       } catch (rErr) {
@@ -193,24 +203,32 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
     await safeExec('rm -rf node_modules/.cache', APP_DIR);
     log.push('✅ Cache cleared');
 
-    // 7. Delete old dist
-    log.push('🗑️ <b>[7/14] Deleting old dist...</b>');
-    rmSync(path.join(WA_BRIDGE_DIR, 'dist'), { recursive: true, force: true });
-    log.push('✅ Old dist deleted');
-
-    // 8. Rebuild
-    log.push('🔨 <b>[8/14] Rebuilding...</b>');
+    // 7. Rebuild (Isolated to wa-bridge)
+    log.push('🔨 <b>[7/14] Rebuilding wa-bridge...</b>');
     buildStart = Date.now();
-    await runLive('pnpm', ['run', 'build'], APP_DIR, (l) => push(`  <code>${l}</code>`));
+    const DIST_PATH = path.join(WA_BRIDGE_DIR, 'dist');
+    const DIST_NEW = path.join(WA_BRIDGE_DIR, 'dist_new');
+    const DIST_OLD = path.join(WA_BRIDGE_DIR, 'dist_old');
+    
+    rmSync(DIST_NEW, { recursive: true, force: true });
+    
+    // Use OUT_DIR to build to a fresh directory
+    await runLive('sh', ['-c', `export OUT_DIR=dist_new && pnpm --filter @workspace/wa-bridge run build`], APP_DIR, (l) => push(`  <code>${l}</code>`));
     buildDurationMs = Date.now() - buildStart;
     log.push(`✅ Build done in ${(buildDurationMs / 1000).toFixed(1)}s`);
 
-    // 9. Verify build
-    log.push('🔍 <b>[9/14] Verifying build...</b>');
-    if (!existsSync(path.join(WA_BRIDGE_DIR, 'dist/index.js'))) {
-      return await fail('Verify Build', new Error('Build output missing index.js'));
+    // 8. Atomic Swap
+    log.push('🔄 <b>[8/14] Performing atomic dist swap...</b>');
+    if (!existsSync(path.join(DIST_NEW, 'index.js'))) {
+      return await fail('Verify Build', new Error('Build output missing index.js in dist_new'));
     }
-    log.push('✅ Build verified');
+    
+    rmSync(DIST_OLD, { recursive: true, force: true });
+    if (existsSync(DIST_PATH)) {
+      await safeExec(`mv ${DIST_PATH} ${DIST_OLD}`, APP_DIR);
+    }
+    await safeExec(`mv ${DIST_NEW} ${DIST_PATH}`, APP_DIR);
+    log.push('✅ Dist swapped');
 
     // 10. Restart PM2
     log.push('🔄 <b>[10/14] Overhauling PM2 process...</b>');

@@ -9,10 +9,13 @@ import fs from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+const outDir = process.env.OUT_DIR || 'dist';
+const outPath = path.isAbsolute(outDir) ? outDir : path.join(__dirname, outDir);
+
 const result = await build({
   entryPoints: [path.join(__dirname, 'src/index.ts')],
   bundle: true,
-  outfile: path.join(__dirname, 'dist/index.js'),
+  outfile: path.join(outPath, 'index.js'),
   platform: 'node',
   format: 'esm',
   target: 'node20',
@@ -38,6 +41,7 @@ const result = await build({
   process.exit(1);
 });
 
-fs.rmSync(path.join(__dirname, 'public'), { recursive: true, force: true });
-fs.cpSync(path.join(__dirname, 'src/public'), path.join(__dirname, 'public'), { recursive: true });
-console.log('✅ Build complete → dist/index.js');
+const publicPath = path.join(outPath, 'public');
+fs.rmSync(publicPath, { recursive: true, force: true });
+fs.cpSync(path.join(__dirname, 'src/public'), publicPath, { recursive: true });
+console.log(`✅ Build complete → ${outDir}/index.js`);
