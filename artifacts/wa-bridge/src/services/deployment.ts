@@ -5,6 +5,8 @@
 
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { logger } from '../utils/logger.js';
 
 // ── Types ─────────────────────────────────────────────────
@@ -24,8 +26,37 @@ type ProgressCallback = (lines: string[]) => Promise<void>;
 
 // ── Helpers ───────────────────────────────────────────────
 
-const APP_DIR = process.env.APP_DIR ?? '/root/omega-v1';
-const WA_BRIDGE_DIR = `${APP_DIR}/artifacts/wa-bridge`;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Dynamically resolve the application root directory by looking for .git
+ * starting from the current file's location and moving upwards.
+ */
+function resolveAppDir(): string {
+  if (process.env.APP_DIR) return path.resolve(process.env.APP_DIR);
+  
+  let current = __dirname;
+  // Limit to 10 levels up to prevent infinite loops
+  for (let i = 0; i < 10; i++) {
+    if (existsSync(path.join(current, '.git'))) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  
+  // Fallback to process.cwd() if .git not found in hierarchy
+  if (existsSync(path.join(process.cwd(), '.git'))) {
+    return process.cwd();
+  }
+  
+  // Ultimate fallback to the hardcoded path if all else fails
+  return '/root/omega-v1';
+}
+
+const APP_DIR = resolveAppDir();
+const WA_BRIDGE_DIR = path.join(APP_DIR, 'artifacts/wa-bridge');
 
 // Run a command and stream output line-by-line to onLine callback
 function runLive(
