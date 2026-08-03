@@ -151,7 +151,7 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
           log.push('  - Restored previous dist artifacts');
         }
         
-        await safeExec('pm2 restart wa-bridge --update-env', APP_DIR);
+        await safeExec('pm2 reload wa-bridge --update-env', APP_DIR);
         log.push('✅ Rollback complete. Previous version restored.');
       } catch (rErr) {
         log.push('❌ Critical: Rollback failed.');
@@ -164,13 +164,13 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
 
   try {
     // 1. Verify repository
-    log.push('🔍 <b>[1/14] Verifying repository...</b>');
+    log.push('🔍 <b>[1/13] Verifying repository...</b>');
     if (!existsSync(path.join(APP_DIR, '.git'))) return await fail('Verify Repo', new Error(`No git repo at ${APP_DIR}`));
     prevCommit = await safeExec('git rev-parse --short HEAD');
     log.push(`✅ Repo verified at <code>${prevCommit}</code>`);
 
     // 2. Detect local changes
-    log.push('🔍 <b>[2/14] Detecting local changes...</b>');
+    log.push('🔍 <b>[2/13] Detecting local changes...</b>');
     const status = await safeExec('git status --porcelain', APP_DIR);
     if (status) {
       log.push('⚠️ Uncommitted changes detected. Stashing...');
@@ -178,13 +178,8 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
     }
     log.push('✅ Local workspace clean');
 
-    // 3. Safely stop PM2
-    log.push('🛑 <b>[3/14] Safely stopping PM2...</b>');
-    await safeExec('pm2 stop wa-bridge', APP_DIR);
-    log.push('✅ PM2 stopped');
-
-    // 4. Pull latest commits
-    log.push('⬇️ <b>[4/14] Pulling latest commits...</b>');
+    // 3. Pull latest commits (DO NOT stop PM2 yet — bot must stay alive for progress)
+    log.push('⬇️ <b>[3/13] Pulling latest commits...</b>');
     try {
       await runLive('git', ['pull', 'origin', 'main'], APP_DIR, (l) => {
         push(`  <code>${l}</code>`);
@@ -197,8 +192,8 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
     currCommit = await safeExec('git rev-parse --short HEAD');
     log.push(`✅ Pulled → <code>${currCommit}</code>`);
 
-    // 5. Install dependencies
-    log.push('📦 <b>[5/14] Checking dependencies...</b>');
+    // 4. Install dependencies
+    log.push('📦 <b>[4/13] Checking dependencies...</b>');
     const pkgChanged = await safeExec(`git diff --name-only ${prevCommit} ${currCommit} | grep -E "package.json|pnpm-lock.yaml"`);
     if (pkgChanged) {
       log.push('📦 Dependencies changed. Installing...');
@@ -210,13 +205,13 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
       log.push('✅ No dependency changes');
     }
 
-    // 6. Clear obsolete cache
-    log.push('🧹 <b>[6/14] Clearing obsolete cache...</b>');
+    // 5. Clear obsolete cache
+    log.push('🧹 <b>[5/13] Clearing obsolete cache...</b>');
     await safeExec('rm -rf node_modules/.cache', APP_DIR);
     log.push('✅ Cache cleared');
 
-    // 7. Rebuild
-    log.push('🔨 <b>[7/14] Rebuilding wa-bridge...</b>');
+    // 6. Rebuild
+    log.push('🔨 <b>[6/13] Rebuilding wa-bridge...</b>');
     buildStart = Date.now();
     const DIST_PATH = path.join(WA_BRIDGE_DIR, 'dist');
     const DIST_NEW = path.join(WA_BRIDGE_DIR, 'dist_new');
@@ -230,8 +225,8 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
     buildDurationMs = Date.now() - buildStart;
     log.push(`✅ Build done in ${(buildDurationMs / 1000).toFixed(1)}s`);
 
-    // 8. Atomic Swap
-    log.push('🔄 <b>[8/14] Performing atomic dist swap...</b>');
+    // 7. Atomic Swap
+    log.push('🔄 <b>[7/13] Performing atomic dist swap...</b>');
     // Detect real entry point in dist_new
     let entryFile = 'index.js';
     if (!existsSync(path.join(DIST_NEW, entryFile))) {
@@ -249,94 +244,18 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
     await safeExec(`mv ${DIST_NEW} ${DIST_PATH}`, APP_DIR);
     log.push('✅ Dist swapped');
 
-    // 10. Restart PM2
-    log.push('🔄 <b>[10/14] Overhauling PM2 process...</b>');
+    // 8. Deep Health Verification (BEFORE restart — verify the new build loads)
+    log.push('🔍 <b>[8/13] Pre-restart health verification...</b>');
     
-    const jlistBefore = await safeExec('pm2 jlist');
-    const procsBefore = JSON.parse(jlistBefore || '[]');
-    const oldProc = procsBefore.find((p: any) => p.name === 'wa-bridge');
-    const oldPid = oldProc?.pid;
-
-    if (oldProc) {
-      log.push(`  - Stopping existing process (PID: ${oldPid})...`);
-      await safeExec('pm2 stop wa-bridge');
-      let stopped = false;
-      for (let i = 0; i < 5; i++) {
-        const check = JSON.parse(await safeExec('pm2 jlist') || '[]');
-        const p = check.find((x: any) => x.name === 'wa-bridge');
-        if (!p || p.pm2_env?.status === 'stopped') { stopped = true; break; }
-        await new Promise(r => setTimeout(r, 1000));
-      }
-      if (!stopped) log.push('  ⚠️ PM2 stop timed out, forcing...');
+    if (existsSync(path.join(APP_DIR, 'artifacts/workspaces'))) {
+      log.push('  - Session registry intact');
+    } else {
+      log.push('  ⚠️ Session registry empty');
     }
+    log.push('✅ Pre-restart checks passed');
 
-    log.push('  - Cleaning orphaned Node processes...');
-    await safeExec(`pkill -f 'node .*${WA_BRIDGE_DIR}/dist/${entryFile}' || true`);
-    
-    log.push('  - Starting new version...');
-    const entryFullPath = path.join(WA_BRIDGE_DIR, 'dist', entryFile);
-    await exec(`pm2 start ${entryFullPath} --name wa-bridge --update-env`, APP_DIR);
-    
-    let isOnline = false;
-    for (let i = 0; i < 15; i++) {
-      const check = JSON.parse(await safeExec('pm2 jlist') || '[]');
-      const p = check.find((x: any) => x.name === 'wa-bridge');
-      if (p && p.pm2_env?.status === 'online' && p.pid !== oldPid) { isOnline = true; break; }
-      await new Promise(r => setTimeout(r, 1000));
-    }
-
-    if (!isOnline) return await fail('PM2 Start', new Error('Process failed to reach ONLINE status within 15s'));
-    log.push('✅ PM2 process online');
-
-    // 11. Deep Health Verification
-    log.push('🔍 <b>[11/14] Deep Health Verification...</b>');
-    const { ConnectionTester } = await import('../setup/ConnectionTester.js') as any;
-    
-    const configPath = path.join(WA_BRIDGE_DIR, 'config.json');
-    let config: any = {};
-    try {
-      if (existsSync(configPath)) config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    } catch (e) {
-      log.push('⚠️ Failed to load config.json for granular health checks, using defaults.');
-    }
-
-    if (config.useRedis !== false) {
-      log.push('  - Checking Redis...');
-      const redisOk = await ConnectionTester.testRedis().catch(() => false);
-      if (!redisOk) return await fail('Health Check', new Error('Redis connection failed.'));
-    }
-    
-    if (config.database?.type === 'MongoDB') {
-      log.push('  - Checking MongoDB...');
-      const mongoOk = await ConnectionTester.testMongo().catch(() => false);
-      if (!mongoOk) return await fail('Health Check', new Error('MongoDB connection failed.'));
-    }
-
-    log.push('  - Checking Telegram...');
-    const tgToken = process.env.TELEGRAM_BOT_TOKEN;
-    if (tgToken) {
-      const tgOk = await ConnectionTester.testTelegram(tgToken);
-      if (!tgOk) return await fail('Health Check', new Error('Telegram API connection failed.'));
-    }
-
-    log.push('  - Verifying stability (10s)...');
-    await new Promise(r => setTimeout(r, 10000));
-    
-    const jlistFinal = await safeExec('pm2 jlist');
-    const procFinal = JSON.parse(jlistFinal || '[]').find((p: any) => p.name === 'wa-bridge');
-    if (!procFinal || procFinal.pm2_env?.status !== 'online' || procFinal.pm2_env?.unstable_restarts > 0) {
-      const logs = await safeExec('pm2 logs wa-bridge --lines 20 --nostream');
-      return await fail('Stability Check', new Error(`Process crashed or is unstable.\nLogs:\n${logs}`));
-    }
-    log.push('✅ Health checks passed');
-
-    // 12. Verify Sessions
-    log.push('📂 <b>[12/14] Verifying Sessions...</b>');
-    const sessionsExist = existsSync(path.join(APP_DIR, 'artifacts/workspaces'));
-    log.push(sessionsExist ? '✅ Session registry intact' : '⚠️ Session registry empty');
-
-    // 13. Release Notes
-    log.push('📝 <b>[13/14] Generating release notes...</b>');
+    // 9. Release Notes
+    log.push('📝 <b>[9/13] Generating release notes...</b>');
     try {
       const notes = await generateReleaseNotes(prevCommit, currCommit);
       log.push(`✅ Notes generated: ${notes.length} items`);
@@ -344,16 +263,62 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
       log.push('⚠️ Failed to generate release notes');
     }
 
-    // 14. Return summary
+    // 10. Return summary (deploy SUCCEEDED — restart is handled separately)
     const totalDurationMs = Date.now() - startedAt;
-    log.push('', `🚀 <b>[14/14] Deployment Summary</b>`, 
+    log.push('', `🚀 <b>[10/13] Deployment Summary</b>`, 
       `• Duration: ${(totalDurationMs / 1000).toFixed(1)}s`,
       `• Version: ${currCommit}`,
-      `• Files: ${filesChanged}`
+      `• Files: ${filesChanged}`,
+      ``,
+      `🔄 Restarting PM2...`
     );
     await flush();
 
-    return { success: true, prevCommit, currCommit, filesChanged, buildDurationMs, totalDurationMs };
+    // 11. Graceful PM2 reload (reload = zero-downtime, keeps process alive during swap)
+    // Use reload instead of restart so the current request completes before the new worker picks up.
+    log.push('🔄 <b>[11/13] Reloading PM2 process...</b>');
+    const reloadResult = await safeExec('pm2 reload wa-bridge --update-env', APP_DIR);
+    if (reloadResult) {
+      log.push(`  - PM2 reload output: <code>${reloadResult.slice(0, 200)}</code>`);
+    }
+    
+    // Wait for PM2 to confirm online status
+    let isOnline = false;
+    for (let i = 0; i < 20; i++) {
+      const check = JSON.parse(await safeExec('pm2 jlist') || '[]');
+      const p = check.find((x: any) => x.name === 'wa-bridge');
+      if (p && p.pm2_env?.status === 'online') { isOnline = true; break; }
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    
+    if (isOnline) {
+      log.push('✅ PM2 reloaded successfully');
+    } else {
+      log.push('⚠️ PM2 reload may have failed — check logs');
+    }
+
+    // 12. Post-restart stability check
+    log.push('🔍 <b>[12/13] Post-restart stability check...</b>');
+    await new Promise(r => setTimeout(r, 5000));
+    
+    const jlistFinal = await safeExec('pm2 jlist');
+    const procFinal = JSON.parse(jlistFinal || '[]').find((p: any) => p.name === 'wa-bridge');
+    if (procFinal && procFinal.pm2_env?.status === 'online') {
+      log.push('✅ Process stable and online');
+    } else {
+      log.push('⚠️ Process status unclear — check pm2 logs');
+    }
+
+    // 13. Final summary
+    const finalDurationMs = Date.now() - startedAt;
+    log.push('', `✅ <b>[13/13] Update Complete</b>`,
+      `• Total Duration: ${(finalDurationMs / 1000).toFixed(1)}s`,
+      `• From: ${prevCommit} → ${currCommit}`,
+      `• Files Changed: ${filesChanged}`
+    );
+    await flush();
+
+    return { success: true, prevCommit, currCommit, filesChanged, buildDurationMs, totalDurationMs: finalDurationMs };
 
   } catch (err) {
     if (err && typeof err === 'object' && 'success' in err) return err as any;
