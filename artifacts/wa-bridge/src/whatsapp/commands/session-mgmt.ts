@@ -66,14 +66,14 @@ export async function cmdSessionInfo(telegramId: string, sessionId: string): Pro
     phone: meta.phone,
     status: meta.status,
     groups: meta.linksCollected ?? 0,
-    connectedSessions: allSockets.length,
+    connectedSessions: allSockets.size,
     device: (socket as any)?.user?.name || (socket as any)?.user?.id || 'Unknown',
     node: process.version,
     workspace: 'OMEGA-V1',
     runtime: `${h}h ${m}m ${s}s`,
     memory: `${(process.memoryUsage().rss / 1024 / 1024).toFixed(2)} MB`,
     version: '1.0.0',
-    lastReconnect: meta.lastConnectedAt ? new Date(meta.lastConnectedAt).toLocaleString() : 'Never'
+    lastReconnect: meta.lastSeen ? new Date(meta.lastSeen).toLocaleString() : 'Never'
   });
 }
 

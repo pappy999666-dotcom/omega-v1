@@ -30,6 +30,8 @@ export interface ResolvedGroupMeta {
   participants: GroupParticipant[];
   /** Group display name */
   subject: string;
+  /** Group description */
+  desc?: string;
 }
 
 // ── Group Metadata TTL Cache ───────────────────────────────
@@ -163,6 +165,7 @@ export async function fetchGroupMeta(
     const meta = await (socket as unknown as {
       groupMetadata(jid: string): Promise<{
         subject?: string;
+        desc?: string;
         participants: {
           id: string;
           admin?: 'admin' | 'superadmin' | null;
@@ -214,6 +217,7 @@ export async function fetchGroupMeta(
       botIsAdmin,
       participants,
       subject: meta.subject ?? groupJid.split('@')[0] ?? 'Group',
+      desc: meta.desc,
     };
 
     // ── Cache write ───────────────────────────────────────

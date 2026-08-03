@@ -242,7 +242,8 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
 
   // AntiPoll
   antipoll: { section: '🛡 ANTI SYSTEM', syntax: 'antipoll <kick|warn N|delete|off>', desc: 'Block poll creation', target: 'group' },
-  pollpermit: { section: '🛡 ANTI SYSTEM', syntax: 'pollpermit @user', desc: 'Exempt from AntiPoll', target: 'group' },replace:mit: { section: '🛡 ANTI SYSTEM', syntax: 'rmpollpermit @user', desc: 'Remove AntiPoll exemption', target: 'group' },
+  pollpermit: { section: '🛡 ANTI SYSTEM', syntax: 'pollpermit @user', desc: 'Exempt from AntiPoll', target: 'group' },
+  rmpollpermit: { section: '🛡 ANTI SYSTEM', syntax: 'rmpollpermit @user', desc: 'Remove AntiPoll exemption', target: 'group' },
 
   // AntiForward
   antiforward: { section: '🛡 ANTI SYSTEM', syntax: 'antiforward <kick|warn N|delete|off>', desc: 'Block forwarded messages', target: 'group' },
