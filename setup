@@ -53,9 +53,28 @@ echo -e "✅ Node.js: ${G}$($NODE_PATH -v)${NC} at $NODE_PATH"
 # 2. Ensure NPM is present
 NPM_PATH=$(find_cmd npm)
 if [ -z "$NPM_PATH" ]; then
-    echo -e "${R}❌ FATAL: npm is missing. Please install Node.js with npm.${NC}"
-    exit 1
+    echo -e "${Y}⚠️  npm missing. Attempting emergency installation...${NC}"
+    if command -v apt-get &> /dev/null; then
+        $SUDO apt-get update -y && $SUDO apt-get install -y npm
+        NPM_PATH=$(find_cmd npm)
+    fi
+    
+    if [ -z "$NPM_PATH" ]; then
+        # Last resort: Try corepack if Node.js version supports it
+        if $NODE_PATH -e "process.exit(process.versions.node.split('.')[0] >= 16 ? 0 : 1)" 2>/dev/null; then
+            echo -e "${Y}Attempting to enable corepack...${NC}"
+            $SUDO corepack enable 2>/dev/null
+            NPM_PATH=$(find_cmd npm)
+        fi
+    fi
+
+    if [ -z "$NPM_PATH" ]; then
+        echo -e "${R}❌ FATAL: npm is missing and could not be installed automatically.${NC}"
+        echo -e "Please install npm manually: ${Y}sudo apt-get install npm${NC}"
+        exit 1
+    fi
 fi
+echo -e "✅ npm: ${G}$($NPM_PATH -v)${NC} at $NPM_PATH"
 
 # 3. Ensure PNPM or Fallback
 PNPM_PATH=$(find_cmd pnpm)
