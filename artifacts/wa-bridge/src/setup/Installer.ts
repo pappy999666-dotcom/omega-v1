@@ -48,10 +48,20 @@ export class Installer {
                     break;
                 case 'mongodb':
                     if (this.checkCommand('apt-get')) {
-                        // Use official MongoDB repo for Ubuntu/Debian
-                        command = `curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc | ${sudo}gpg --dearmor -o /usr/share/keyrings/mongodb-server-7.0.gpg --yes && ` +
-                                 `echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu $(lsb_release -cs)/mongodb-org/7.0 multiverse" | ${sudo}tee /etc/apt/sources.list.d/mongodb-org-7.0.list && ` +
-                                 `${sudo}apt-get update -y && ${sudo}apt-get install -y mongodb-org && ${sudo}systemctl enable mongod && ${sudo}systemctl start mongod`;
+                        // Resilient MongoDB Installation Strategy
+                        // 1. Try to detect a supported LTS release, default to 'jammy' (22.04) if unknown
+                        const release = execSync('lsb_release -cs 2>/dev/null || echo jammy').toString().trim();
+                        const supportedReleases = ['focal', 'jammy', 'noble'];
+                        const targetRelease = supportedReleases.includes(release) ? release : 'jammy';
+                        
+                        console.log(`\x1b[36mDetected release: ${release}. Using MongoDB repo for: ${targetRelease}\x1b[0m`);
+                        
+                        command = `(curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc | ${sudo}gpg --dearmor -o /usr/share/keyrings/mongodb-server-7.0.gpg --yes && ` +
+                                 `echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu ${targetRelease}/mongodb-org/7.0 multiverse" | ${sudo}tee /etc/apt/sources.list.d/mongodb-org-7.0.list && ` +
+                                 `${sudo}apt-get update -y && ${sudo}apt-get install -y mongodb-org) || ` +
+                                 `(${sudo}apt-get update -y && ${sudo}apt-get install -y mongodb || ${sudo}apt-get install -y mongodb-server)`;
+                        
+                        command += ` && (${sudo}systemctl enable mongod && ${sudo}systemctl start mongod || ${sudo}service mongodb start || true)`;
                     } else if (this.checkCommand('brew')) {
                         command = `brew tap mongodb/brew && brew install mongodb-community && brew services start mongodb-community`;
                     }
@@ -83,7 +93,7 @@ export class Installer {
                 throw new Error(`No installation strategy found for ${depName} on this system.`);
             }
 
-            console.log(`Running: ${command}`);
+            console.log(`Running installation sequence...`);
             execSync(command, { stdio: 'inherit', shell: '/bin/bash' });
             return true;
         } catch (error: any) {
