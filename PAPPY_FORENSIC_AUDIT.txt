@@ -1,0 +1,307 @@
+# PAPPY FINAL FORENSIC AUDIT — WELCOME SYSTEM, RICH MESSAGES & TAG ENGINE REBUILD
+
+This is a production-level implementation audit.
+
+Do NOT patch the current implementation.
+
+Before changing anything, audit the entire event pipeline, message sender, participant update handlers, and the installed version of @crysnovax/baileys.
+
+Understand how Baileys natively exposes participant events, mentions, hidetag functionality, and rich message capabilities.
+
+If Baileys already supports something natively, use it instead of custom workarounds.
+
+Remove every incorrect implementation and rebuild these systems cleanly.
+
+Only commit and push after every verification passes.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. WELCOME & GOODBYE SYSTEM (FULL REBUILD)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The current Welcome and Goodbye system is still broken.
+
+Current behaviour:
+
+• Joining a group sometimes does nothing.
+• Leaving a group sometimes does nothing.
+• Welcome messages are inconsistent.
+• Goodbye messages are inconsistent.
+
+This is unacceptable.
+
+Perform a forensic audit.
+
+Inspect:
+
+• group-participant events
+• participant update listeners
+• reconnect handling
+• session restore
+• duplicate listeners
+• event subscriptions
+
+Requirements:
+
+Use the native participant update events exposed by the installed version of @crysnovax/baileys.
+
+Correctly detect:
+
+✓ Member Joined
+✓ Member Left
+✓ Member Removed
+✓ Admin Promotion (where supported)
+✓ Admin Demotion (where supported)
+
+Do NOT use polling.
+
+Do NOT infer joins from messages.
+
+Do NOT rely on legacy Baileys APIs if newer native APIs exist.
+
+The system must continue working after:
+
+• reconnect
+• restart
+• session restore
+• multiple active sessions
+
+Prevent:
+
+• duplicate welcomes
+• duplicate goodbyes
+• missed events
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. BAILEYS RICH MESSAGE SUPPORT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Audit the entire sendMessage pipeline.
+
+The installed version of @crysnovax/baileys supports rich message formatting.
+
+Current implementation is not fully using it.
+
+Inspect support for:
+
+• ExternalAdReply
+• Rich previews
+• Interactive messages
+• Native mentions
+• ContextInfo
+• Link previews
+• Footer text
+• Native buttons (where supported)
+• Native quoted formatting
+
+Where appropriate, use Baileys' native rich message capabilities instead of plain text.
+
+Do not break compatibility.
+
+Gracefully fall back if a feature is unavailable.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. MTAG (VISIBLE TAG) COMPLETE REBUILD
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The current implementation is completely wrong.
+
+Current behaviour:
+
+Everyone is mentioned in one paragraph.
+
+Example:
+
+@user @user @user @user @user
+
+This is NOT what .mtag should do.
+
+Requirements:
+
+.mtag is the VISIBLE mention command.
+
+It should:
+
+✓ Mention every group member.
+✓ Display one member per line.
+✓ Never place everyone on one line.
+✓ Support thousands of members.
+✓ Support attached text.
+✓ Support quoted messages.
+✓ Support media.
+
+Example:
+
+╭─〔 ✠ MEMBER SUMMON ✠ 〕
+│
+│ ☩ @Alpha
+│ ☩ @Nova
+│ ☩ @Ghost
+│ ☩ @Shadow
+│ ☩ @Pappy
+│ ☩ @Charmaine
+│
+╰─ 𝕻𝕬𝕻𝕻𝖄 ×͜×
+
+The mention list must be generated dynamically.
+
+No commas.
+
+No inline mentions.
+
+No paragraph formatting.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. TAG (HIDETAG) COMPLETE REBUILD
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+.tag has a completely different purpose.
+
+It should NOT behave like .mtag.
+
+.tag is a HIDDEN MENTION command.
+
+Requirements:
+
+Mention every participant internally.
+
+Do NOT print the mention list.
+
+Instead:
+
+If user replies to:
+
+• Text
+• Photo
+• Video
+• Sticker
+• Voice Note
+• Audio
+• GIF
+• Document
+• Poll
+• Contact
+
+The bot should resend that content while silently mentioning every participant.
+
+If user supplies text:
+
+.tag Hello everyone
+
+Everyone should be hidden-tagged while only displaying:
+
+Hello everyone
+
+No visible mention list.
+
+If no content is supplied:
+
+Display a premium usage guide explaining that:
+
+.tag requires either:
+
+• replied content
+• attached text
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. MENU DESIGN — COMPACT PAPPY • OMEGA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The menu MUST use this exact compact design language.
+
+It must NOT be too long for WhatsApp mobile width.
+
+No oversized ASCII borders.
+
+No wasted blank lines.
+
+WhatsApp-safe width: max ~35 chars per line.
+
+Reference design:
+
+╔══ ✠ 𝕻𝕬𝕻𝕻𝖄 • 𝕺𝕸𝕰𝕲𝕬 ✠ ══╗
+║
+║  ⛧ 𝕮𝕳𝕽𝕺𝕹𝕴𝕮𝕷𝕰 𝕺𝕱 𝕿𝕳𝕰 𝕮𝕺𝕽𝕰 ⛧
+║  𝕲𝖔𝖙𝖍𝖎𝖈 • 𝕮𝖞𝖇𝖊𝖗 • 𝕬𝖚𝖙𝖔
+║
+╠═════════════════════════╣
+
+   ⛧「 𝕮𝕺𝕽𝕰 𝕾𝕿𝕬𝕿𝕰 」⛧
+
+  ✦ Engine  ⟫  OMEGA CORE
+  ✦ Status  ⟫  ONLINE
+  ✦ Session ⟫  VERIFIED
+  ✦ Prefix  ⟫  .
+  ✦ Runtime ⟫  STABLE
+
+╠═════════════════════════╣
+
+✠ 𝕿𝕬𝕲 𝕾𝕬𝕹𝕮𝕿𝕰𝕸
+╭─────────────────────╮
+│ ☩ .tag
+│   ╰─ Shadow summon
+│ ☩ .mtag
+│   ╰─ Visible ritual
+╰─────────────────────╯
+
+✠ 𝕾𝕿𝕴𝕮𝕶𝕰𝕽 𝕱𝕺𝕽𝕲𝕰
+╭─────────────────────╮
+│ ☩ .sticker
+│   ╰─ Forge media
+╰─────────────────────╯
+
+✠ 𝕸𝕺𝕯𝕰𝕽𝕬𝕿𝕴𝕺𝕹 𝕿𝕳𝕽𝕺𝕹𝕰
+╭─────────────────────╮
+│ ☩ Kick ☩ Ban ☩ Warn
+│ ☩ Promote ☩ Demote
+│ ☩ Poll ☩ BlockAll
+╰─────────────────────╯
+
+✠ 𝕭𝕷𝕬𝕮𝕶 𝕾𝕳𝕴𝕰𝕷𝕯
+╭─────────────────────╮
+│ ☩ AntiLink ☩ AntiSpam
+│ ☩ AntiBot ☩ AntiGM
+│ ☩ AntiForward ☩ AntiChan
+│ ☩ AntiCall ☩ AntiNSFW
+╰─────────────────────╯
+
+✠ 𝕲𝕽𝕺𝕫𝕻 𝕾𝕬𝕹𝕮𝕿𝕰𝕸
+╭─────────────────────╮
+│ ☩ Welcome ☩ Goodbye
+│ ☩ JoinApproval
+│ ☩ EventControl
+╰─────────────────────╯
+
+✠ 𝕺𝕻𝕰𝕽𝕬𝕿𝕺𝕽 𝕹𝕺𝕯𝕰
+╭─────────────────────╮
+│ ☩ .idea
+│   ╰─ Ideas to Owner
+╰─────────────────────╯
+
+╠═════════════════════════╣
+
+   ☩ SECURITY MATRIX ☩
+
+   ▰▰▰▰▰▰▰▰▰▰
+   INTEGRITY : 100%
+
+   ◉ Encryption Active
+   ◉ Defense Online
+   ◉ Events Synced
+   ◉ AI Core Operational
+
+╠═════════════════════════╣
+
+  ⚜「 AWAITING OPERATOR 」⚜
+   𝕰𝖝𝖊𝖈 • 𝕯𝖔𝖒 • 𝕽𝖊𝖕
+
+╚══ ✠ 𝕻𝕬𝕻𝕻𝖄 ×͜× ✠ ══════╝
+
+This is the canonical design.
+
+The live menu in whatsappMenu() MUST produce output matching this style.
+
+Every section box must be compact.
+
+No section should overflow WhatsApp mobile width.
+
+Only commit and push after every verification passes.

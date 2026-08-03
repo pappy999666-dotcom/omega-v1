@@ -1,6 +1,7 @@
 // ============================================================
-// WA-Bridge — PAPPY Response Engine v2
-// High-tech, Cyberpunk, Gothic, and Premium styling for WhatsApp.
+// WA-Bridge — PAPPY Response Engine v3
+// Compact Cyberpunk, Gothic, and Premium styling for WhatsApp.
+// Optimized for WhatsApp mobile width (~35 chars per line).
 // ============================================================
 
 import { bold, italic } from './ascii-art.js';
@@ -15,41 +16,21 @@ export interface Theme {
   layout?: 'standard' | 'compact' | 'minimal' | 'matrix' | 'gothic';
 }
 
+// Compact themes — all optimized for WhatsApp mobile width
 export const THEMES: Theme[] = [
-  { name: 'Gothic Cathedral', header: '☩ GOTHIC CATHEDRAL ☩', border: '┃', divider: '── ⸸ ──', symbol: '✦', footer: '╰────── ⸸ ──────╯', layout: 'gothic' },
-  { name: 'Omega Core', header: '⟦ ◈ OMEGA • CORE ◈ ⟧', border: '┃', divider: '━━━━━━━━━━━━', symbol: '⚡', footer: '╰─── OMEGA ───╯', layout: 'standard' },
-  { name: 'Cyber Monastery', header: '☩ CYBER MONASTERY ☩', border: '┇', divider: '── ◈ ──', symbol: '❖', footer: '╰── DIGITAL ☩ ──╯', layout: 'gothic' },
-  { name: 'Dark Terminal', header: '『 DARK TERMINAL 』', border: '▏', divider: '----------', symbol: '>', footer: '└───────────────┘', layout: 'compact' },
-  { name: 'Matrix Console', header: '［ MATRIX CONSOLE ］', border: '║', divider: '══ ⚡ ══', symbol: '◈', footer: '［ SYSTEM OK ］', layout: 'matrix' },
-  { name: 'Quantum Engine', header: '⚛ QUANTUM ENGINE ⚛', border: '┇', divider: '〰〰〰〰〰', symbol: '⌬', footer: '⚛ QUANTUM ⚛', layout: 'minimal' },
-  { name: 'Royal Gothic', header: '⚜ ROYAL GOTHIC ⚜', border: '┃', divider: '── ⚜ ──', symbol: '◈', footer: '⚜ 𝕻𝕬𝕻𝕻𝖄 ⚜', layout: 'gothic' },
-  { name: 'Neon Frame', header: '『 NEON FRAME 』', border: '┇', divider: '━━ ✦ ━━', symbol: '⚡', footer: '『 NEON ⚡ 』', layout: 'compact' },
-  { name: 'Digital Scroll', header: '📜 DIGITAL SCROLL 📜', border: '│', divider: '┈┈┈┈┈┈', symbol: '🔹', footer: '📜 END SCROLL 📜', layout: 'minimal' },
-  { name: 'Shadow Protocol', header: '👤 SHADOW PROTOCOL 👤', border: '▏', divider: '── 👤 ──', symbol: '✖', footer: '👤 SHADOW 👤', layout: 'compact' },
-  { name: 'Inferno', header: '🔥 INFERNO 🔥', border: '┃', divider: '── 🔥 ──', symbol: '⚡', footer: '🔥 INFERNO 🔥', layout: 'standard' },
-  { name: 'Obsidian', header: '🌑 OBSIDIAN 🌑', border: '┃', divider: '── 🌑 ──', symbol: '✦', footer: '🌑 OBSIDIAN 🌑', layout: 'standard' },
-  { name: 'Phantom', header: '👻 PHANTOM 👻', border: '┇', divider: '── 👻 ──', symbol: '❖', footer: '👻 PHANTOM 👻', layout: 'minimal' },
-  { name: 'Void Engine', header: '🌌 VOID ENGINE 🌌', border: '║', divider: '── 🌌 ──', symbol: '◈', footer: '🌌 VOID 🌌', layout: 'matrix' },
-  { name: 'Black Archive', header: '🗄️ BLACK ARCHIVE 🗄️', border: '│', divider: '── 🗄️ ──', symbol: '🔹', footer: '🗄️ ARCHIVE 🗄️', layout: 'minimal' },
-  { name: 'Frost', header: '❄️ FROST ❄️', border: '┃', divider: '── ❄️ ──', symbol: '✦', footer: '❄️ FROST ❄️', layout: 'standard' },
-  { name: 'Crimson', header: '🩸 CRIMSON 🩸', border: '┃', divider: '── 🩸 ──', symbol: '⚡', footer: '🩸 CRIMSON 🩸', layout: 'standard' },
-  { name: 'Sakura Noir', header: '🌸 SAKURA NOIR 🌸', border: '┇', divider: '── 🌸 ──', symbol: '❖', footer: '🌸 SAKURA 🌸', layout: 'minimal' },
-  { name: 'Eclipse', header: '🌑 ECLIPSE 🌑', border: '║', divider: '── 🌑 ──', symbol: '◈', footer: '🌑 ECLIPSE 🌑', layout: 'matrix' },
-  { name: 'Cyber Core', header: '🤖 CYBER CORE 🤖', border: '│', divider: '── 🤖 ──', symbol: '🔹', footer: '🤖 CYBER 🤖', layout: 'minimal' },
-  { name: 'Blood Moon', header: '🌕 BLOOD MOON 🌕', border: '┃', divider: '── 🌕 ──', symbol: '✦', footer: '🌕 MOON 🌕', layout: 'standard' },
-  { name: 'Iron Ghost', header: '⛓️ IRON GHOST ⛓️', border: '┃', divider: '── ⛓️ ──', symbol: '⚡', footer: '⛓️ IRON ⛓️', layout: 'standard' },
-  { name: 'Neon Viper', header: '🐍 NEON VIPER 🐍', border: '┇', divider: '── 🐍 ──', symbol: '❖', footer: '🐍 VIPER 🐍', layout: 'minimal' },
-  { name: 'Cyber Samurai', header: '⚔️ CYBER SAMURAI ⚔️', border: '║', divider: '── ⚔️ ──', symbol: '◈', footer: '⚔️ SAMURAI ⚔️', layout: 'matrix' },
-  { name: 'Void Walker', header: '🚶 VOID WALKER 🚶', border: '│', divider: '── 🚶 ──', symbol: '🔹', footer: '🚶 WALKER 🚶', layout: 'minimal' },
-  { name: 'Dark Nebula', header: '🌌 DARK NEBULA 🌌', border: '┃', divider: '── 🌌 ──', symbol: '✦', footer: '🌌 NEBULA 🌌', layout: 'standard' },
-  { name: 'Cyber Punk', header: '🎸 CYBER PUNK 🎸', border: '┃', divider: '── 🎸 ──', symbol: '⚡', footer: '🎸 PUNK 🎸', layout: 'standard' },
-  { name: 'Neon Dragon', header: '🐉 NEON DRAGON 🐉', border: '┇', divider: '── 🐉 ──', symbol: '❖', footer: '🐉 DRAGON 🐉', layout: 'minimal' },
-  { name: 'Void Reaper', header: '💀 VOID REAPER 💀', border: '║', divider: '── 💀 ──', symbol: '◈', footer: '💀 REAPER 💀', layout: 'matrix' },
-  { name: 'Cyber Shogun', header: '🏯 CYBER SHOGUN 🏯', border: '│', divider: '── 🏯 ──', symbol: '🔹', footer: '🏯 SHOGUN 🏯', layout: 'minimal' },
-  { name: 'High-Tech', header: '📡 HIGH-TECH 📡', border: '▏', divider: '── 📡 ──', symbol: '⚡', footer: '📡 TECH 📡', layout: 'compact' },
-  { name: 'Matrix v2', header: '⚡ MATRIX V2 ⚡', border: '║', divider: '══ ⚡ ══', symbol: '◈', footer: '⚡ MATRIX ⚡', layout: 'matrix' },
+  { name: 'Omega Core', header: '⟦ ◈ OMEGA • CORE ◈ ⟧', border: '│', divider: '────────', symbol: '⚡', footer: '╰─── OMEGA ───╯', layout: 'compact' },
+  { name: 'Dark Terminal', header: '『 DARK TERMINAL 』', border: '│', divider: '----------', symbol: '>', footer: '└──────────────┘', layout: 'compact' },
+  { name: 'Royal Gothic', header: '⚜ ROYAL GOTHIC ⚜', border: '│', divider: '── ⚜ ──', symbol: '◈', footer: '⚜ 𝕻𝕬𝕻𝕻𝖄 ⚜', layout: 'compact' },
+  { name: 'Matrix Console', header: '［ MATRIX ］', border: '│', divider: '══ ⚡ ══', symbol: '◈', footer: '［ SYSTEM OK ］', layout: 'compact' },
+  { name: 'Shadow Protocol', header: '👤 SHADOW PROTOCOL', border: '│', divider: '── 👤 ──', symbol: '✖', footer: '👤 SHADOW 👤', layout: 'compact' },
+  { name: 'Obsidian', header: '🌑 OBSIDIAN 🌑', border: '│', divider: '── 🌑 ──', symbol: '✦', footer: '🌑 OBSIDIAN 🌑', layout: 'compact' },
+  { name: 'Eclipse', header: '🌑 ECLIPSE 🌑', border: '│', divider: '── 🌑 ──', symbol: '◈', footer: '🌑 ECLIPSE 🌑', layout: 'compact' },
+  { name: 'Blood Moon', header: '🌕 BLOOD MOON 🌕', border: '│', divider: '── 🌕 ──', symbol: '✦', footer: '🌕 MOON 🌕', layout: 'compact' },
+  { name: 'Frost', header: '❄️ FROST ❄️', border: '│', divider: '── ❄️ ──', symbol: '✦', footer: '❄️ FROST ❄️', layout: 'compact' },
+  { name: 'Crimson', header: '🩸 CRIMSON 🩸', border: '│', divider: '── 🩸 ──', symbol: '⚡', footer: '🩸 CRIMSON 🩸', layout: 'compact' },
 ];
 
+/** Default to Omega Core — the PAPPY signature theme */
 export function getRandomTheme(): Theme {
   return THEMES[Math.floor(Math.random() * THEMES.length)]!;
 }
@@ -64,51 +45,34 @@ export interface PappyBoxOptions {
 }
 
 /**
- * PAPPY Response Engine v2 — Structured Layout
+ * PAPPY Response Engine v3 — Compact Structured Layout
  * Header → Title → Content → Information Panel → Footer
+ * All layouts fit within WhatsApp mobile width.
  */
 export function pappyBox(opts: PappyBoxOptions): string {
   const theme = opts.theme || getRandomTheme();
-  const { header, border, divider, symbol, footer: themeFooter, layout = 'standard' } = theme;
+  const { border, divider, symbol, footer: themeFooter, layout = 'compact' } = theme;
 
   const lines: string[] = [];
 
-  // 1. Premium Box Header
-  const boxTitle = opts.moduleIdentity ? `⚔ ${opts.moduleIdentity.toUpperCase()}` : `${opts.emoji ? `${opts.emoji} ` : ''}${opts.title.toUpperCase()}`;
-  lines.push(`╭━━━〔 ${boxTitle} 〕━━━╮`);
+  // 1. Compact Box Header
+  const boxTitle = opts.moduleIdentity
+    ? `${opts.emoji || ''} ${opts.moduleIdentity.toUpperCase()}`
+    : `${opts.emoji || ''} ${opts.title.toUpperCase()}`;
+
+  lines.push(`╭─〔 ${boxTitle} 〕`);
   lines.push(border);
 
   // 2. Main Message / Description
-  if (opts.footer && !opts.footer.includes('◈')) { // If footer is actually the main message
+  if (opts.footer && !opts.footer.includes('◈')) {
     lines.push(`${border} ${opts.footer}`);
     lines.push(border);
   }
 
-  // 3. Information Panel (Rows)
+  // 3. Information Panel (Rows) — compact layout
   if (opts.rows.length > 0) {
-    switch (layout) {
-      case 'matrix':
-        for (const [label, value] of opts.rows) {
-          lines.push(`${border} ${symbol} ${bold(label.toUpperCase())}`);
-          lines.push(`${border} ┗▶ ${value}`);
-          lines.push(border);
-        }
-        break;
-      case 'gothic':
-        for (const [label, value] of opts.rows) {
-          lines.push(`${border} ☩ ${bold(label)}`);
-          lines.push(`${border}   ${italic(value)}`);
-          lines.push(border);
-        }
-        break;
-      case 'standard':
-      default:
-        for (const [label, value] of opts.rows) {
-          lines.push(`${border} ${symbol} ${bold(label)}`);
-          lines.push(`${border}   ${value}`);
-          lines.push(border);
-        }
-        break;
+    for (const [label, value] of opts.rows) {
+      lines.push(`${border} ${symbol} ${bold(label)}  ${value}`);
     }
   }
 
@@ -117,9 +81,9 @@ export function pappyBox(opts: PappyBoxOptions): string {
     lines.push(opts.footer);
   }
 
-  // 5. Premium Box Footer
+  // 5. Compact Box Footer
   lines.push(border);
-  lines.push(`╰━━━━━━━ ⸸ 𝕻𝕬𝕻𝕻𝖄 ×͜× ⸸ ━━━━━━━╯`);
+  lines.push(`╰─ 𝕻𝕬𝕻𝕻𝖄 ×͜×`);
 
   return lines.join('\n');
 }
