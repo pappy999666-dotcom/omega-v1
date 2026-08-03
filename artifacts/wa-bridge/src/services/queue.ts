@@ -131,8 +131,7 @@ export async function enqueueJob(
     jobId,
     priority: opts?.priority ?? 0,
     delay: opts?.delay ?? 0,
-    // Add default timeout to prevent stuck jobs
-    timeout: 60_000, 
+    // BullMQ handles job timeouts via Worker lockDuration or custom logic
   });
   
   logger.info(`[Queue] Enqueued ${payload.type} → ${queueName}`, {
