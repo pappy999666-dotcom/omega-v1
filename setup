@@ -4,7 +4,7 @@
 # OMEGA-V1 • ZERO-FAILURE CYBERNETIC BOOTLOADER
 # ============================================================
 
-# Neon Green Color
+# Colors
 G='\033[0;32m'
 R='\033[0;31m'
 Y='\033[0;33m'
@@ -50,49 +50,62 @@ if [ -z "$NODE_PATH" ]; then
 fi
 echo -e "✅ Node.js: ${G}$($NODE_PATH -v)${NC} at $NODE_PATH"
 
-# 2. Ensure PNPM or Fallback
-PNPM_PATH=$(find_cmd pnpm)
-if [ -z "$PNPM_PATH" ]; then
-    echo -e "${Y}⚠️  pnpm missing. Installing globally...${NC}"
-    NPM_PATH=$(find_cmd npm)
-    if [ ! -z "$NPM_PATH" ]; then
-        $SUDO $NPM_PATH install -g pnpm || echo "Global install failed, will use npx fallback"
-        PNPM_PATH=$(find_cmd pnpm)
-    fi
+# 2. Ensure NPM is present
+NPM_PATH=$(find_cmd npm)
+if [ -z "$NPM_PATH" ]; then
+    echo -e "${R}❌ FATAL: npm is missing. Please install Node.js with npm.${NC}"
+    exit 1
 fi
 
-# 3. Launch Wizard with Triple Fallback
+# 3. Ensure PNPM or Fallback
+PNPM_PATH=$(find_cmd pnpm)
+if [ -z "$PNPM_PATH" ]; then
+    echo -e "${Y}⚠️  pnpm missing. Installing locally for setup...${NC}"
+    $NPM_PATH install -g pnpm || $NPM_PATH install pnpm --no-save
+    PNPM_PATH=$(find_cmd pnpm) || PNPM_PATH="./node_modules/.bin/pnpm"
+fi
+
+# 4. Launch Wizard with Triple Fallback
 echo -e "\n🚀 ${G}Initializing Setup Wizard...${NC}\n"
 
 # Change to script directory
 cd "$(dirname "$0")"
 
-# FALLBACK 1: Try pnpm directly
 SETUP_SUCCESS=false
-if [ ! -z "$PNPM_PATH" ]; then
+
+# FALLBACK 1: Try pnpm directly
+if [ -f "$PNPM_PATH" ] || command -v pnpm &> /dev/null; then
     echo "Attempting Fallback 1 (pnpm)..."
     if $PNPM_PATH --filter @workspace/wa-bridge run setup; then
         SETUP_SUCCESS=true
     fi
 fi
 
-# FALLBACK 2: Try npx pnpm
-if command -v npm &> /dev/null; then
-    echo "Attempting Fallback 2 (npm exec pnpm)..."
-    if npm exec pnpm --filter @workspace/wa-bridge run setup; then
+# FALLBACK 2: Try npm
+if [ "$SETUP_SUCCESS" != "true" ]; then
+    echo "Attempting Fallback 2 (npm)..."
+    if npm --prefix artifacts/wa-bridge run setup; then
         SETUP_SUCCESS=true
     fi
 fi
 
-# FALLBACK 3: Emergency direct execution
+# FALLBACK 3: Emergency direct execution with local tsx
 if [ "$SETUP_SUCCESS" != "true" ]; then
-    echo -e "${Y}⚠️  Standard runners failed. Attempting Fallback 3 (Direct Execution)...${NC}"
+    echo -e "${Y}⚠️  Standard runners failed. Attempting Fallback 3 (Local tsx)...${NC}"
     if [ -d "artifacts/wa-bridge" ]; then
         cd artifacts/wa-bridge
-        if command -v npx &> /dev/null; then
+        # Install tsx locally if missing
+        if [ ! -f "node_modules/.bin/tsx" ]; then
+            echo "Installing tsx locally..."
+            npm install tsx --no-save
+        fi
+        
+        if [ -f "node_modules/.bin/tsx" ]; then
+            ./node_modules/.bin/tsx src/setup/run.ts && SETUP_SUCCESS=true
+        elif command -v npx &> /dev/null; then
             npx tsx src/setup/run.ts && SETUP_SUCCESS=true
         else
-            $NODE_PATH -e "console.log('tsx missing and npx not found')"
+            echo -e "${R}❌ FATAL: Could not run setup wizard. No tsx or npx found.${NC}"
             exit 1
         fi
         cd ../..
@@ -107,12 +120,12 @@ if [ "$SETUP_SUCCESS" = "true" ]; then
     echo -e "🚀 ${G}Building and starting the bot...${NC}\n"
     
     # Ensure dependencies are installed and project is built
-    if [ ! -z "$PNPM_PATH" ]; then
-        $PNPM_PATH install
+    if command -v pnpm &> /dev/null; then
+        pnpm install
         echo -e "\n${G}Building wa-bridge...${NC}"
-        $PNPM_PATH --filter @workspace/wa-bridge run build
+        pnpm --filter @workspace/wa-bridge run build
         echo -e "\n${G}Starting bot...${NC}"
-        exec $PNPM_PATH --filter @workspace/wa-bridge run start
+        exec pnpm --filter @workspace/wa-bridge run start
     else
         npm install
         echo -e "\n${G}Building wa-bridge...${NC}"

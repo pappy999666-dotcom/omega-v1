@@ -9,7 +9,7 @@
     "start": "node dist/index.js",
     "build": "tsc --noEmit && node build.mjs",
     "typecheck": "tsc --noEmit",
-    "setup": "npx tsx src/setup/run.ts"
+    "setup": "tsx src/setup/run.ts"
   },
   "dependencies": {
     "@crysnovax/baileys": "2.7.0",
