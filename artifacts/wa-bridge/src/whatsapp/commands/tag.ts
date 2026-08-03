@@ -1,13 +1,13 @@
 // ============================================================
-// WA-Bridge — Tagging Engine
-// .tag (hidetag) / .mtag (visible @mention)
+// WA-Bridge — Tagging Engine v2
+// .tag   — Hidetag broadcast (silent mention ping, no visible @name)
+// .mtag  — Visible mention broadcast (one @name per line)
 //
-// ALL preview operations now flow through the centralized
+// ALL preview operations flow through the centralized
 // PreviewManager — the single source of truth.
 // ============================================================
 
 import type { BridgeWASocket as WASocket, AnyMessageContent, IMessage } from '../baileys-types.js';
-// ── SINGLE IMPORT: All preview operations via PreviewManager ──
 import { PreviewManager } from '../../preview-engine/index.js';
 import type { PartialLinkMeta } from '../../preview-engine/types.js';
 import { sendAsIs } from '../chat-as-is.js';
@@ -38,6 +38,11 @@ async function getParticipants(
  * .tag [msg] — Send a message that mentions ALL participants invisibly.
  * WhatsApp will ping everyone even though no @name appears in the text.
  * Uses the `mentions` array on the message for the silent ping effect.
+ *
+ * Behavior:
+ *   • Text + mentions array → everyone gets notified but sees plain text
+ *   • Media + mentions array → everyone gets notified on the media message
+ *   • Quoted rich message → relayed as-is with mentions injected
  */
 export async function cmdTag(
   socket: WASocket,
@@ -63,17 +68,12 @@ export async function cmdTag(
   }
 
   try {
-    let content: AnyMessageContent;
-
-    const mentionText = participants.map((jid) => `@${jid.split('@')[0]}`).join(' ');
-    const fullText = text ? `${text}\n\n${mentionText}` : mentionText;
-
     if (opts.mediaBuffer) {
-      await PreviewManager.send(socket as any, groupJid, fullText, {
+      await PreviewManager.send(socket as any, groupJid, text || '', {
         media: {
           buffer: opts.mediaBuffer,
           type: opts.mediaType as any ?? 'image',
-          caption: fullText,
+          caption: text || undefined,
         },
         extra: { mentions: participants },
         forceMentions: true,
@@ -82,9 +82,10 @@ export async function cmdTag(
       });
     } else if (opts.sourceExt) {
       // As-is relay — WA-built preview relayed verbatim via likeThis
+      const fullText = text || '';
       const sent = await sendAsIs(socket, groupJid, fullText, opts.sourceExt, { mentions: participants });
       if (sent) return { success: true, pinged: participants.length };
-      // fallthrough if likeThis failed
+      // Fallback if likeThis failed
       await PreviewManager.send(socket as any, groupJid, fullText, {
         existingPreview: opts.existingPreview,
         extra: { mentions: participants },
@@ -93,7 +94,8 @@ export async function cmdTag(
         telegramId,
       });
     } else {
-      await PreviewManager.send(socket as any, groupJid, fullText, {
+      // Plain text hidetag — text only, mentions in array
+      await PreviewManager.send(socket as any, groupJid, text || '', {
         existingPreview: opts.existingPreview,
         extra: { mentions: participants },
         forceMentions: true,
@@ -101,19 +103,25 @@ export async function cmdTag(
         telegramId,
       });
     }
-    logger.info(`[Tag] Hidetag sent to ${groupJid} — ${participants.length} pinged`);
 
+    logger.info(`[Tag] Hidetag sent to ${groupJid} — ${participants.length} pinged`);
     return { success: true, pinged: participants.length };
   } catch (err) {
     return { success: false, pinged: 0, error: String(err) };
   }
 }
 
-// ── .mtag — Visible @mention Broadcast ───────────────────
+// ── .mtag — Visible @mention Broadcast (one per line) ────
 
 /**
  * .mtag [msg] — Explicitly @mention each participant by name.
  * Renders visible @name tags in the WhatsApp message.
+ *
+ * Format: One mention per line for readability.
+ *   @name1
+ *   @name2
+ *   @name3
+ *
  * Uses chunked batches to avoid message size limits.
  */
 export async function cmdMTag(
@@ -152,8 +160,12 @@ export async function cmdMTag(
 
   try {
     for (const chunk of chunks) {
-      // Clean visible @mention string
-      const mentionText = chunk.map((jid) => `@${jid.split('@')[0]}`).join(' ');
+      // Build visible @mention string — ONE per line
+      const mentionText = chunk
+        .map((jid) => `@${jid.split('@')[0]}`)
+        .join('\n');
+
+      // Prepend optional custom text
       const fullText = text ? `${text}\n\n${mentionText}` : mentionText;
 
       if (opts.mediaBuffer) {
