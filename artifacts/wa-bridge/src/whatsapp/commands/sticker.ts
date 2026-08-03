@@ -70,38 +70,46 @@ export async function cmdSticker(
  */
 function addStickerMetadata(buffer: Buffer, packname: string, author: string): Buffer {
   const json = {
-    'sticker-pack-id': 'com.pappy.sticker',
+    'sticker-pack-id': `com.omega.sticker.${Date.now()}`,
     'sticker-pack-name': packname,
     'sticker-pack-publisher': author,
     'emojis': ['⚡'],
   };
 
-  const exifHeader = Buffer.from([0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x41, 0x57, 0x07, 0x00]);
   const jsonBuffer = Buffer.from(JSON.stringify(json), 'utf8');
+  const exifHeader = Buffer.from([
+    0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x41, 0x57, 0x07, 0x00,
+  ]);
+  
+  const lenBuffer = Buffer.alloc(4);
+  lenBuffer.writeUInt32LE(jsonBuffer.length, 0);
+  
   const exifFooter = Buffer.from([0x00, 0x00, 0x16, 0x00, 0x00, 0x00]);
+  const exifData = Buffer.concat([exifHeader, lenBuffer, jsonBuffer, exifFooter]);
   
-  const exif = Buffer.concat([exifHeader, Buffer.alloc(4), jsonBuffer, exifFooter]);
-  exif.writeUInt32LE(jsonBuffer.length, 14);
-
-  const props = Buffer.from([0x45, 0x58, 0x49, 0x46]); // "EXIF"
-  const size = Buffer.alloc(4);
-  size.writeUInt32LE(exif.length, 0);
-
-  const fullExif = Buffer.concat([props, size, exif]);
+  const exifChunkHeader = Buffer.from('EXIF');
+  const exifChunkSize = Buffer.alloc(4);
+  exifChunkSize.writeUInt32LE(exifData.length, 0);
   
-  // Find where to insert EXIF in WebP buffer
-  // WebP format: RIFF [4] | size [4] | WEBP [4] | VP8X [4] | ...
-  const riffHeader = buffer.slice(0, 4).toString();
-  if (riffHeader !== 'RIFF') return buffer;
+  const fullExifChunk = Buffer.concat([exifChunkHeader, exifChunkSize, exifData]);
+  
+  // WebP parsing
+  if (buffer.slice(0, 4).toString() !== 'RIFF' || buffer.slice(8, 12).toString() !== 'WEBP') {
+    return buffer;
+  }
 
-  const webpHeader = buffer.slice(8, 12).toString();
-  if (webpHeader !== 'WEBP') return buffer;
+  // Find insertion point. If VP8X exists, it must be first.
+  let offset = 12;
+  if (buffer.slice(12, 16).toString() === 'VP8X') {
+    const vp8xSize = buffer.readUInt32LE(16);
+    offset = 12 + 8 + vp8xSize;
+    if (offset % 2 !== 0) offset++; // Chunk padding
+  }
 
-  // Insert after WEBP header (offset 12)
   const result = Buffer.concat([
-    buffer.slice(0, 12),
-    fullExif,
-    buffer.slice(12)
+    buffer.slice(0, offset),
+    fullExifChunk,
+    buffer.slice(offset)
   ]);
 
   // Update RIFF size

@@ -16,6 +16,7 @@
 // ============================================================
 
 import type { BridgeWASocket as WASocket } from '../whatsapp/baileys-types.js';
+import { fetchGroupMeta } from '../whatsapp/utils/group-permissions.js';
 
 export interface ResponseContext {
   senderJid: string;
@@ -39,6 +40,7 @@ export async function renderTemplate(
   let result = template;
 
   // ── Synchronous substitutions ─────────────────────────────
+  // Standard variables
   result = result.replace(/@mention/gi, `@${phone}`);
   result = result.replace(/&gcname/gi, gcName);
   result = result.replace(/&date/gi,
@@ -48,25 +50,26 @@ export async function renderTemplate(
     now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
   );
 
+  // User requested aliases
+  result = result.replace(/@user/gi, `@${phone}`);
+  result = result.replace(/@group/gi, gcName);
+
   // ── Group metadata (single fetch for desc + counts) ───────
-  const needsMeta = result.includes('&desc') || result.includes('&membercount') || result.includes('&admincount');
+  const needsMeta = result.includes('&desc') || result.includes('&membercount') || result.includes('&admincount') || result.includes('@count');
   if (needsMeta) {
     try {
-      const meta = await (socket as unknown as {
-        groupMetadata(jid: string): Promise<{
-          desc?: string;
-          participants: { admin?: string | null }[];
-        }>;
-      }).groupMetadata(groupJid);
+      const meta = await fetchGroupMeta(socket, groupJid);
 
       result = result.replace(/&desc/gi, meta?.desc ?? '');
       result = result.replace(/&membercount/gi, String(meta?.participants.length ?? 0));
+      result = result.replace(/@count/gi, String(meta?.participants.length ?? 0));
       result = result.replace(/&admincount/gi,
         String(meta?.participants.filter((p) => p.admin).length ?? 0)
       );
     } catch {
       result = result.replace(/&desc/gi, '');
       result = result.replace(/&membercount/gi, '?');
+      result = result.replace(/@count/gi, '?');
       result = result.replace(/&admincount/gi, '?');
     }
   }

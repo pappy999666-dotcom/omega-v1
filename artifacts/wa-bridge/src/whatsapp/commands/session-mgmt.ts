@@ -53,11 +53,27 @@ export async function cmdSessionInfo(telegramId: string, sessionId: string): Pro
   const meta = loadSessionMeta(telegramId, sessionId);
   if (!meta) return errorCard('SESSION NOT FOUND', `No metadata for session: ${sessionId}`, undefined, MODULE);
   
+  const socket = getSocket(sessionId);
+  const allSockets = getAllSockets();
+  
+  const uptime = process.uptime();
+  const h = Math.floor(uptime / 3600);
+  const m = Math.floor((uptime % 3600) / 60);
+  const s = Math.floor(uptime % 60);
+  
   return sessionBox({
     sessionId: meta.sessionId,
     phone: meta.phone,
     status: meta.status,
-    groups: meta.linksCollected ?? 0
+    groups: meta.linksCollected ?? 0,
+    connectedSessions: allSockets.length,
+    device: (socket as any)?.user?.name || (socket as any)?.user?.id || 'Unknown',
+    node: process.version,
+    workspace: 'OMEGA-V1',
+    runtime: `${h}h ${m}m ${s}s`,
+    memory: `${(process.memoryUsage().rss / 1024 / 1024).toFixed(2)} MB`,
+    version: '1.0.0',
+    lastReconnect: meta.lastConnectedAt ? new Date(meta.lastConnectedAt).toLocaleString() : 'Never'
   });
 }
 

@@ -637,9 +637,38 @@ async function processMessageWithConfig(
     // ── Ping ──
     case 'ping': {
       const latency = Date.now();
+      const startTime = Date.now();
+      
+      const getPingData = (l: number, s: string) => {
+        const uptime = process.uptime();
+        const h = Math.floor(uptime / 3600);
+        const m = Math.floor((uptime % 3600) / 60);
+        const s_uptime = Math.floor(uptime % 60);
+        const runtime = `${h}h ${m}m ${s_uptime}s`;
+        
+        const ram = `${(process.memoryUsage().rss / 1024 / 1024).toFixed(2)} MB`;
+        
+        return {
+          latency: l,
+          sessionId,
+          status: s,
+          runtime,
+          ram,
+          platform: process.platform,
+          version: '1.0.0', // From wa-bridge package.json
+        };
+      };
+
       // Send first, then measure round-trip
-      const updatePing = await createProgressReply(pingCard({ latency: 0, sessionId, status: 'MEASURING' }));
-      await updatePing(pingCard({ latency: Date.now() - latency, sessionId, status: isFrozen(sessionId) ? 'FROZEN' : 'ONLINE' }));
+      const updatePing = await createProgressReply(pingCard(getPingData(0, 'MEASURING')));
+      await updatePing(pingCard(getPingData(Date.now() - startTime, isFrozen(sessionId) ? 'FROZEN' : 'ONLINE')));
+      
+      // Reaction audit: Add a reaction to show the engine supports it
+      try {
+        await socket.sendMessage(groupJid, {
+          react: { text: '⚡', key: msg.key }
+        });
+      } catch { /* ignore */ }
       break;
     }
 

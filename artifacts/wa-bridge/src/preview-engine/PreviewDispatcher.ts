@@ -87,6 +87,8 @@ export interface DispatchOptions {
   };
   /** Edit an existing message */
   edit?: any;
+  /** Explicitly enable global URL buttons for this message */
+  enableButtons?: boolean;
 }
 
 // ── Preview Dispatcher ──────────────────────────────────────
@@ -201,8 +203,8 @@ export class PreviewDispatcher {
         }
       }
 
-      // 3. Apply Global Buttons
-      if (globalButtons.length > 0) {
+      // 3. Apply Global Buttons (OPT-IN ONLY)
+      if (options.enableButtons && globalButtons.length > 0) {
         if (!finalContent.nativeFlow) {
           finalContent.nativeFlow = { buttons: [] };
         }
@@ -228,7 +230,7 @@ export class PreviewDispatcher {
             finalContent.nativeFlow.buttons.push({
               name: 'cta_url',
               buttonParamsJson: JSON.stringify({
-                display_text: b.name, // Fixed: use 'name' as per MenuButton interface
+                display_text: b.name,
                 url: b.url,
                 merchant_url: b.url,
               }),
@@ -238,9 +240,6 @@ export class PreviewDispatcher {
       }
       return finalContent;
     };
-
-    // Step 1: Detect URL
-    const url = options.existingPreview?.url ?? UrlDetector.extractFirst(text);
 
     // ── Pipeline Stage: Poll Send ───────────────────────────
     if (options.poll) {
@@ -296,6 +295,9 @@ export class PreviewDispatcher {
         return { success: false };
       }
     }
+
+    // Step 1: Detect URL (only if not media/poll)
+    const url = options.existingPreview?.url ?? UrlDetector.extractFirst(text || '');
 
     if (!url || options.suppressPreview) {
       // No URL or suppressed — send plain text

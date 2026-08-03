@@ -51,17 +51,33 @@ export function errorCard(title: string, message: string, details?: string, modu
 // ── Premium Cards ─────────────────────────────────────────
 
 /** Rich ping card with latency and session status */
-export function pingCard(opts: { latency: number; sessionId: string; status: string }): string {
+export function pingCard(opts: { 
+  latency: number; 
+  sessionId: string; 
+  status: string;
+  runtime?: string;
+  ram?: string;
+  platform?: string;
+  version?: string;
+}): string {
   const statusEmoji = opts.status === 'FROZEN' ? '❄️' : opts.status === 'MEASURING' ? '🔄' : '🟢';
+  const rows: [string, string][] = [
+    ['Latency', opts.status === 'MEASURING' ? '…' : `${opts.latency}ms`],
+    ['Session', opts.sessionId],
+  ];
+
+  if (opts.runtime) rows.push(['Runtime', opts.runtime]);
+  if (opts.ram) rows.push(['RAM', opts.ram]);
+  if (opts.platform) rows.push(['Platform', opts.platform]);
+  if (opts.version) rows.push(['Version', opts.version]);
+  
+  rows.push(['Status', `${statusEmoji} ${opts.status}`]);
+
   return asciiBox({
     title: 'PONG',
     emoji: '🏓',
     moduleIdentity: 'CORE STATUS',
-    rows: [
-      ['Latency', opts.status === 'MEASURING' ? '…' : `${opts.latency}ms`],
-      ['Session', opts.sessionId],
-      ['Status', `${statusEmoji} ${opts.status}`],
-    ],
+    rows,
   });
 }
 
@@ -169,17 +185,36 @@ export function sessionBox(opts: {
   phone: string;
   status: string;
   groups: number;
+  connectedSessions?: number;
+  device?: string;
+  node?: string;
+  workspace?: string;
+  runtime?: string;
+  memory?: string;
+  version?: string;
+  lastReconnect?: string;
 }): string {
+  const rows: [string, string][] = [
+    ['ID', opts.sessionId],
+    ['Owner', opts.phone],
+    ['Status', opts.status.toUpperCase()],
+    ['Groups', String(opts.groups)],
+  ];
+
+  if (opts.connectedSessions !== undefined) rows.push(['Sessions', String(opts.connectedSessions)]);
+  if (opts.device) rows.push(['Device', opts.device]);
+  if (opts.node) rows.push(['Node', opts.node]);
+  if (opts.workspace) rows.push(['Workspace', opts.workspace]);
+  if (opts.runtime) rows.push(['Runtime', opts.runtime]);
+  if (opts.memory) rows.push(['Memory', opts.memory]);
+  if (opts.version) rows.push(['Version', opts.version]);
+  if (opts.lastReconnect) rows.push(['Last Reconnect', opts.lastReconnect]);
+
   return asciiBox({
-    title: 'SESSION INFO',
-    emoji: '📱',
+    title: 'SESSION INTERFACE',
+    emoji: '🖥️',
     moduleIdentity: 'SESSION MANAGER',
-    rows: [
-      ['ID', opts.sessionId],
-      ['Owner', opts.phone],
-      ['Status', opts.status.toUpperCase()],
-      ['Groups', String(opts.groups)],
-    ],
+    rows,
   });
 }
 
@@ -237,88 +272,58 @@ export function whatsappMenu(
 ): string {
   const cleanCommand = (cmd: string): string => cmd.trim().split(/\s+/u)[0] ?? cmd.trim();
 
-  // Header
+  // Gothic Header (Compact)
   const lines: string[] = [
-    '╔══ ✠ 𝕻𝕬𝕻𝕻𝖄 • 𝕺𝕸𝕰𝕲𝕬 ✠ ══╗',
-    '║',
-    '║  ⛧ 𝕮𝕳𝕽𝕺𝕹𝕴𝕮𝕷𝕰 𝕺𝕱 𝕿𝕳𝕰 𝕮𝕺𝕽𝕰 ⛧',
-    '║  𝕲𝖔𝖙𝖍𝖎𝖈 • 𝕮𝖞𝖇𝖊𝖗 • 𝕬𝖚𝖙𝖔',
-    '║',
-    DIVIDER,
-    '',
-    '  ⛧「 𝕮𝕺𝕽𝕰 𝕾𝕿𝕬𝕿𝕰 」⛧',
-    '',
-    ' ✦ Engine  ⟫  OMEGA CORE',
-    ' ✦ Status  ⟫  ONLINE',
-    ' ✦ Session ⟫  VERIFIED',
-    ' ✦ Prefix  ⟫  .',
-    ' ✦ Runtime ⟫  STABLE',
-    '',
-    DIVIDER,
+    '┏━━ ✠ 𝕺𝕸𝕰𝕲𝕬 • 𝕮𝕺𝕽𝕰 ✠ ━━┓',
+    '┃ 𝕾𝖙𝖆𝖙𝖚𝖘: 𝕺𝖓𝖑𝖎𝖓𝖊 • 𝕻𝖗𝖊𝖋𝖎𝖝: .',
+    '┗━━━━━━━━━━━━━━━━━━━━━━┛',
   ];
 
-  // Section boxes — compact layout
+  // Section rendering
   for (const section of sections) {
     lines.push('');
-    lines.push(`✠ ${section.heading.toUpperCase()}`);
+    // Heading in Gothic Unicode
+    const gothicHeading = section.heading
+      .replace(/MODERATION/g, '𝕸𝖔𝖉𝖊𝖗𝖆𝖙𝖎𝖔𝖓')
+      .replace(/UTILITY/g, '𝖀𝖙𝖎𝖑𝖎𝖙𝖞')
+      .replace(/CONFIGURATION/g, '𝕮𝖔𝖓𝖋𝖎𝖌𝖚𝖗𝖆𝖙𝖎𝖔𝖓')
+      .replace(/STICKER ENGINE/g, '𝕾𝖙𝖎𝖈𝖐𝖊𝖗 𝕰𝖓𝖌𝖎𝖓𝖊')
+      .replace(/ANTI SYSTEM/g, '𝕬𝖓𝖙𝖎 𝕾𝖞𝖘𝖙𝖊𝖒');
+    
+    lines.push(`⚔ ${gothicHeading}`);
 
-    // Check if section has many items — use compact grid for moderation/anti
-    const isCrowded = section.items.length > 4;
-    const maxCmdWidth = Math.max(...section.items.map(item => cleanCommand(item.cmd).length));
-
-    if (isCrowded) {
-      // Grid layout: pair items on same line for compact display
-      lines.push('╭─────────────────────╮');
-      const items = section.items;
-      for (let i = 0; i < items.length; i += 2) {
-        const item1 = items[i]!;
-        const cmd1 = cleanCommand(item1.cmd);
-        const line = `│ ☩ ${bold(cmd1)}`;
-        if (items[i + 1]) {
-          const item2 = items[i + 1]!;
-          const cmd2 = cleanCommand(item2.cmd);
-          lines.push(`${line} ☩ ${bold(cmd2)} │`);
-        } else {
-          // Pad single item to fill line
-          const padding = ' '.repeat(Math.max(0, 16 - cmd1.length));
-          lines.push(`${line}${padding} │`);
+    // Group commands by prefix similarity or just list them compactly
+    const items = section.items;
+    const groups: string[][] = [];
+    
+    // Simple grouping logic for common commands
+    const processed = new Set<number>();
+    for (let i = 0; i < items.length; i++) {
+      if (processed.has(i)) continue;
+      const cmd1 = cleanCommand(items[i]!.cmd);
+      const baseCmd = cmd1.replace(/all|x$/g, '');
+      const group = [cmd1];
+      processed.add(i);
+      
+      for (let j = i + 1; j < items.length; j++) {
+        if (processed.has(j)) continue;
+        const otherCmd = cleanCommand(items[j]!.cmd);
+        if (otherCmd.startsWith(baseCmd) || (cmd1 === '.tag' && otherCmd === '.mtag')) {
+          group.push(otherCmd);
+          processed.add(j);
         }
       }
-      lines.push('╰─────────────────────╯');
-    } else {
-      // Standard compact box
-      lines.push('╭─────────────────────╮');
-      for (const item of section.items) {
-        const cmd = cleanCommand(item.cmd);
-        lines.push(`│ ☩ ${bold(cmd)}`);
-        if (item.desc && item.desc !== '—') {
-          lines.push(`│   ╰─ ${item.desc}`);
-        }
-      }
-      lines.push('╰─────────────────────╯');
+      groups.push(group);
+    }
+
+    for (const group of groups) {
+      lines.push(group.join(' • '));
     }
   }
 
-  // Premium tip section
+  // Footer
   lines.push('');
-  lines.push(DIVIDER);
-  lines.push('');
-  lines.push('  ☩ SECURITY MATRIX ☩');
-  lines.push('');
-  lines.push('  ▰▰▰▰▰▰▰▰▰▰');
-  lines.push('  INTEGRITY : 100%');
-  lines.push('');
-  lines.push('  ◉ Encryption Active');
-  lines.push('  ◉ Defense Online');
-  lines.push('  ◉ Events Synced');
-  lines.push('  ◉ AI Core Operational');
-  lines.push('');
-  lines.push(DIVIDER);
-  lines.push('');
-  lines.push('  ⚜「 AWAITING OPERATOR 」⚜');
-  lines.push('   𝕰𝖝𝖊𝖈 • 𝕯𝖔𝖒 • 𝕽𝖊𝖕');
-  lines.push('');
-  lines.push('╚══ ✠ 𝕻𝕬𝕻𝕻𝖄 ×͜× ✠ ══════╝');
+  lines.push(`╰─ ${getPremiumTip()}`);
 
   return lines.join('\n');
 }

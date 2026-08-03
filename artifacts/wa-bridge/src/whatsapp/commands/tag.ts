@@ -160,13 +160,16 @@ export async function cmdMTag(
 
   try {
     for (const chunk of chunks) {
-      // Build visible @mention string — ONE per line
+      // Build visible @mention string — ONE per line with icon
       const mentionText = chunk
-        .map((jid) => `@${jid.split('@')[0]}`)
+        .map((jid) => `├ 👤 @${jid.split('@')[0]}`)
         .join('\n');
 
-      // Prepend optional custom text
-      const fullText = text ? `${text}\n\n${mentionText}` : mentionText;
+      // Prepend header and optional custom text
+      const header = '📢 *GROUP MENTION*';
+      const fullText = text 
+        ? `${header}\n\n${text}\n\n${mentionText}` 
+        : `${header}\n\n${mentionText}`;
 
       if (opts.mediaBuffer) {
         await PreviewManager.send(socket as any, groupJid, fullText, {
