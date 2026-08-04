@@ -266,6 +266,8 @@ export function loadSessionMeta(
       ...stored,
       status: status as SessionMeta['status'],
       sessionName: stored.sessionName ?? stored.label ?? 'Main',
+      // pairMethod is a required field; guard against sessions saved before it was added
+      pairMethod: stored.pairMethod ?? 'qr',
       linkCollectionEnabled: stored.linkCollectionEnabled ?? loadConfig(telegramId).defaultLinkCollection ?? false,
       linksCollected: stored.linksCollected ?? 0,
       notificationDelivered: stored.notificationDelivered ?? false,

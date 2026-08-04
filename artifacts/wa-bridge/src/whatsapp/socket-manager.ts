@@ -242,6 +242,10 @@ export async function initSocket(
   let pairingCodeRequested = false;
   let pairingCodeInFlight = false;
   let pairingRequestTimer: NodeJS.Timeout | undefined;
+  // pairingAbortTimer must be declared here (before connection.update handler)
+  // so it can be cleared when connection opens, preventing accidental purge of
+  // a successfully-paired session after the 5-minute window expires.
+  let pairingAbortTimer: NodeJS.Timeout | undefined;
   let credentialsRegistered = false;
   let closed = false;
   let normalizedPhone: string | undefined;
@@ -341,6 +345,8 @@ export async function initSocket(
     if (connection === 'open') {
       credentialsRegistered = true;
       if (pairingRequestTimer) clearTimeout(pairingRequestTimer);
+      // Cancel the pairing-abandonment timer — session connected successfully.
+      if (pairingAbortTimer) { clearTimeout(pairingAbortTimer); pairingAbortTimer = undefined; }
       reconnectWindows.delete(sessionId);
       log.info('Connection established');
       
@@ -514,16 +520,22 @@ export async function initSocket(
   // Set initial state to PAIRING if not already registered
   if (!socket.authState.creds.registered) {
     updateSessionMeta(telegramId, sessionId, { status: 'PAIRING' });
-    
-    // Auto-purge if pairing is abandoned (5 minute timeout)
-    const pairingTimeout = setTimeout(async () => {
+
+    // Auto-purge if pairing is abandoned (5 minute timeout).
+    // pairingAbortTimer is declared at the top of initSocket so the
+    // connection.update 'open' handler can clear it before it fires,
+    // preventing a race where a just-paired session gets purged.
+    pairingAbortTimer = setTimeout(async () => {
       const current = registry.get(sessionId);
-      if (current && !current.socket.authState.creds.registered) {
+      // Only purge if still unregistered — a late 'open' event won't
+      // have cleared the timer in time if the system is under heavy load,
+      // so double-check credentialsRegistered as an extra guard.
+      if (current && !credentialsRegistered && !current.socket.authState.creds.registered) {
         log.warn('Pairing abandoned (timeout), purging session');
         await purgeSession(telegramId, sessionId);
       }
     }, 5 * 60 * 1000);
-    pairingTimeout.unref();
+    pairingAbortTimer.unref();
   }
 
   return socket;

@@ -379,11 +379,11 @@ export async function handleFreezeSession(
   ctx: Context & { telegramId: string },
   sessionId: string
 ): Promise<void> {
-  freezeSession(sessionId);
+  await freezeSession(sessionId);
   await ctx.answerCbQuery('Session frozen ❄️').catch(() => {});
   await ctx.editMessageText(
     `${header('Session Frozen', '❄️')}\n\n${H.code(sessionId)}\n\nTraffic paused. Use Unfreeze to resume.`,
-    { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId, 'frozen') }
+    { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId, 'FROZEN') }
   ).catch(() => {});
 }
 
@@ -391,7 +391,7 @@ export async function handleUnfreezeSession(
   ctx: Context & { telegramId: string },
   sessionId: string
 ): Promise<void> {
-  unfreezeSession(sessionId);
+  await unfreezeSession(sessionId);
   await ctx.answerCbQuery('Session unfrozen 🔥').catch(() => {});
   await ctx.editMessageText(
     `${header('Session Active', '🟢')}\n\n${H.code(sessionId)}\n\nTraffic resumed.`,
@@ -470,7 +470,7 @@ export async function handlePurgeConfirm(
 ): Promise<void> {
   markPurged(sessionId);
   await closeSocket(sessionId);
-  wsPurgeSession(ctx.telegramId, sessionId);
+  await wsPurgeSession(ctx.telegramId, sessionId);
 
   await ctx.editMessageText(
     `${header('Session Purged', '🗑')}\n\n${H.code(sessionId)} has been permanently deleted.`,
