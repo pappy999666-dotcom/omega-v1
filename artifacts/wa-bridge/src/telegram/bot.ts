@@ -1267,6 +1267,7 @@ export function createBot(): Telegraf<BotContext> {
           telegramId: ctx.telegramId,
           autoJoinDone: false,
           errorCount: 0,
+          sessionName: onboarding.label,
         }),
         label: onboarding.label,
         phone,

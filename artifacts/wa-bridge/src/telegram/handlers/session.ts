@@ -395,7 +395,7 @@ export async function handleUnfreezeSession(
   await ctx.answerCbQuery('Session unfrozen 🔥').catch(() => {});
   await ctx.editMessageText(
     `${header('Session Active', '🟢')}\n\n${H.code(sessionId)}\n\nTraffic resumed.`,
-    { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId, 'open') }
+    { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId, 'ACTIVE') }
   ).catch(() => {});
 }
 
@@ -428,9 +428,10 @@ export async function handleReinitSession(
           phone: meta.phone,
           label: meta.label,
           method: 'Reinit',
-          replyMarkup: sessionMenuKeyboard(sessionId, 'open') as unknown as Record<string, unknown>,
+          replyMarkup: sessionMenuKeyboard(sessionId, 'ACTIVE') as unknown as Record<string, unknown>,
           progressMsgId: msg.message_id,
           ownerTelegramId: ctx.telegramId,
+          force: true,
         });
       },
     });

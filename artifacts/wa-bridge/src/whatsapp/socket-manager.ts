@@ -411,7 +411,6 @@ export async function initSocket(
       currentMeta.errorCount = (currentMeta.errorCount ?? 0) + 1;
 
       updateSessionMeta(telegramId, sessionId, {
-        status: 'error',
         errorCount: currentMeta.errorCount,
       });
 
