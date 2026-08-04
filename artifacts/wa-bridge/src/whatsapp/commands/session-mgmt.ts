@@ -95,7 +95,7 @@ export async function cmdDisconnectSession(telegramId: string, sessionId: string
   
   try {
     await closeSocket(sessionId);
-    updateSessionMeta(telegramId, sessionId, { status: 'closed' });
+    updateSessionMeta(telegramId, sessionId, { status: 'FROZEN' });
     return successCard('DISCONNECTED', `Session ${bold(sessionId)} has been closed.`, [], MODULE);
   } catch (err) {
     return errorCard('DISCONNECT FAILED', `Could not close ${sessionId}`, String(err), MODULE);

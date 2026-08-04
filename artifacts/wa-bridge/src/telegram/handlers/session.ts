@@ -169,7 +169,7 @@ export async function handleNewSession(
   const sessionId = makeSessionId(ctx.telegramId, phone);
   const existing = loadSessionMeta(ctx.telegramId, sessionId);
 
-  if (existing && existing.status === 'open') {
+  if (existing && existing.status === 'ACTIVE') {
     await ctx.reply(noticeCard('Session Already Active', `A connected session already exists for ${phone}.`, 'warning'), { parse_mode: 'HTML' });
     return;
   }
@@ -261,7 +261,7 @@ export async function handlePairingCode(
   }
 
   const existing = loadSessionMeta(ctx.telegramId, sessionId);
-  if (existing?.status === 'open') {
+  if (existing?.status === 'ACTIVE') {
     await ctx.reply(noticeCard('Session Already Connected', 'This WhatsApp owner already has an active session.', 'warning'), { parse_mode: 'HTML' });
     return;
   }
