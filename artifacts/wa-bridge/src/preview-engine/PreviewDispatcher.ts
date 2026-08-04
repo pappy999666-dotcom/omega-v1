@@ -274,7 +274,7 @@ export class PreviewDispatcher {
         if (type === 'image') content = { image: buffer, caption: caption ?? text };
         else if (type === 'video') content = { video: buffer, caption: caption ?? text, gifPlayback };
         else if (type === 'audio') content = { audio: buffer, mimetype: mimetype ?? 'audio/mp4', ptt };
-        else if (type === 'sticker') content = { sticker: buffer };
+        else if (type === 'sticker') content = { sticker: buffer, mimetype: mimetype ?? 'image/webp' };
         else if (type === 'document') content = { document: buffer, mimetype: mimetype ?? 'application/octet-stream', fileName, caption: caption ?? text };
         else content = { text, ...(options.extra ?? {}) };
 

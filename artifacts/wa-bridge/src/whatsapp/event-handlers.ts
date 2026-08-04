@@ -79,7 +79,7 @@ import {
   cmdSetModerationMsg,
   cmdEventStatus,
 } from './commands/group-moderation.js';
-import { setAutoblockConfig } from '../services/group-config.js';
+import { setAutoblockConfig, loadGroupEventConfig } from '../services/group-config.js';
 import { fetchGroupMeta, resolveRealJidFromMeta } from './utils/group-permissions.js';
 import { parseUrlButtons } from './utils/url-buttons.js';
 import fs from 'fs';
@@ -407,7 +407,7 @@ async function processMessageWithConfig(
 
   // ── Enriched WhatsApp reply ───────────────────────────────
   // Central URL button attachment for all normal bot responses.
-  const baseWhatsAppReply = async (replyText: string): Promise<void> => {
+  const baseWhatsAppReply = async (replyText: string, opts?: { suppressPreview?: boolean }): Promise<void> => {
     const mentions = await getGroupParticipants();
     
     // Formatting and Global Buttons are now handled by the Preview Pipeline.
@@ -417,6 +417,7 @@ async function processMessageWithConfig(
       extra: mentions.length > 0 ? { mentions } : undefined,
       sessionId,
       telegramId,
+      ...(opts?.suppressPreview ? { suppressPreview: true } : {}),
     });
   };
 
@@ -871,7 +872,7 @@ async function processMessageWithConfig(
     case 'sticker': {
       const media = await extractMedia();
       if (!media || (media.type !== 'image' && media.type !== 'video')) {
-        await reply(warningCard('REPLY TO MEDIA', `Reply to an image or video with ${config.prefix}sticker to convert it.`, [], 'STICKER ENGINE'));
+        await reply(warningCard('REPLY TO MEDIA', `Reply to an image or video with ${config.prefix}sticker to convert it.`, [], 'STICKER ENGINE'), { suppressPreview: true });
         break;
       }
       const { cmdSticker } = await import('./commands/sticker.js');
@@ -1826,7 +1827,12 @@ async function processMessageWithConfig(
     }
 
     case 'warn': {
-      await reply(await cmdWarn(args, msg, socket, telegramId, sessionId, groupJid, config.prefix));
+      const warnResult = await cmdWarn(args, msg, socket, telegramId, sessionId, groupJid, config.prefix);
+      // cmdWarn returns '' when it has already posted the group announcement via PreviewManager
+      // In that case, skip the handler's reply() to avoid a duplicate message.
+      if (warnResult) {
+        await reply(warnResult);
+      }
       break;
     }
 
@@ -1849,55 +1855,59 @@ async function processMessageWithConfig(
     // ── Welcome / Goodbye ──
     case 'setwelcome':
     case 'welcomemsg': {
-      await reply(cmdSetWelcome(args, msg, telegramId, sessionId, groupJid));
+      const prevWelcome = loadGroupEventConfig(telegramId, sessionId, groupJid).welcomeMessage;
+      await reply(cmdSetWelcome(args, msg, telegramId, sessionId, groupJid, prevWelcome), { suppressPreview: true });
       break;
     }
 
     case 'welcome': {
       const sub = args[0]?.toLowerCase();
-      if (sub === 'on') { await reply(cmdWelcomeToggle(true, telegramId, sessionId, groupJid)); break; }
-      if (sub === 'off') { await reply(cmdWelcomeToggle(false, telegramId, sessionId, groupJid)); break; }
-      await reply(cmdSetWelcome(args.slice(1), msg, telegramId, sessionId, groupJid));
+      if (sub === 'on') { await reply(cmdWelcomeToggle(true, telegramId, sessionId, groupJid), { suppressPreview: true }); break; }
+      if (sub === 'off') { await reply(cmdWelcomeToggle(false, telegramId, sessionId, groupJid), { suppressPreview: true }); break; }
+      const prevWelcome = loadGroupEventConfig(telegramId, sessionId, groupJid).welcomeMessage;
+      await reply(cmdSetWelcome(args.slice(1), msg, telegramId, sessionId, groupJid, prevWelcome), { suppressPreview: true });
       break;
     }
 
     case 'setgoodbye':
     case 'goodbyemsg': {
-      await reply(cmdSetGoodbye(args, msg, telegramId, sessionId, groupJid));
+      const prevGoodbye = loadGroupEventConfig(telegramId, sessionId, groupJid).goodbyeMessage;
+      await reply(cmdSetGoodbye(args, msg, telegramId, sessionId, groupJid, prevGoodbye), { suppressPreview: true });
       break;
     }
 
     case 'goodbye': {
       const sub = args[0]?.toLowerCase();
-      if (sub === 'on') { await reply(cmdGoodbyeToggle(true, telegramId, sessionId, groupJid)); break; }
-      if (sub === 'off') { await reply(cmdGoodbyeToggle(false, telegramId, sessionId, groupJid)); break; }
-      await reply(cmdSetGoodbye(args.slice(1), msg, telegramId, sessionId, groupJid));
+      if (sub === 'on') { await reply(cmdGoodbyeToggle(true, telegramId, sessionId, groupJid), { suppressPreview: true }); break; }
+      if (sub === 'off') { await reply(cmdGoodbyeToggle(false, telegramId, sessionId, groupJid), { suppressPreview: true }); break; }
+      const prevGoodbye = loadGroupEventConfig(telegramId, sessionId, groupJid).goodbyeMessage;
+      await reply(cmdSetGoodbye(args.slice(1), msg, telegramId, sessionId, groupJid, prevGoodbye), { suppressPreview: true });
       break;
     }
 
     // ── Moderation Response Templates ──
     case 'kickmsg': {
-      await reply(cmdSetModerationMsg('kick', 'Kick', args, msg, telegramId, sessionId, groupJid));
+      await reply(cmdSetModerationMsg('kick', 'Kick', args, msg, telegramId, sessionId, groupJid), { suppressPreview: true });
       break;
     }
 
     case 'warnmsg': {
-      await reply(cmdSetModerationMsg('warn', 'Warn', args, msg, telegramId, sessionId, groupJid));
+      await reply(cmdSetModerationMsg('warn', 'Warn', args, msg, telegramId, sessionId, groupJid), { suppressPreview: true });
       break;
     }
 
     case 'banmsg': {
-      await reply(cmdSetModerationMsg('ban', 'Ban', args, msg, telegramId, sessionId, groupJid));
+      await reply(cmdSetModerationMsg('ban', 'Ban', args, msg, telegramId, sessionId, groupJid), { suppressPreview: true });
       break;
     }
 
     case 'unbanmsg': {
-      await reply(cmdSetModerationMsg('unban', 'Unban', args, msg, telegramId, sessionId, groupJid));
+      await reply(cmdSetModerationMsg('unban', 'Unban', args, msg, telegramId, sessionId, groupJid), { suppressPreview: true });
       break;
     }
 
     case 'eventstatus': {
-      await reply(cmdEventStatus(telegramId, sessionId, groupJid));
+      await reply(cmdEventStatus(telegramId, sessionId, groupJid), { suppressPreview: true });
       break;
     }
 

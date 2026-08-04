@@ -425,18 +425,25 @@ export async function cmdWarn(
     return errorCard('Warn', 'This command must be used inside a WhatsApp group.');
   }
 
+  const permErr = await checkRequesterPermission(msg, socket, telegramId, sessionId, groupJid, 'Warn');
+  if (permErr) return permErr;
+
   const target = await resolveTarget(args, msg, socket, groupJid);
   if (!target) {
     return warningCard('Warn', `Provide a phone number, reply to a message, or @mention someone.\nUsage: ${prefix}warn @user`);
   }
 
-  // Refuse to warn admins
   const meta = await fetchGroupMeta(socket, groupJid);
-  if (meta && isAdminJid(meta.participants, target.jid)) {
-    return warningCard('Warn', `@${target.number} is a group admin. Admins cannot be warned.`);
+  if (!meta?.botIsAdmin) {
+    return errorCard('Warn', BOT_NOT_ADMIN_MSG);
   }
 
-  const gcName = meta?.subject ?? await getGroupName(socket, groupJid);
+  // Refuse to warn protected users (admins, bot, sudo)
+  if (isProtectedJid(meta, target.jid)) {
+    return warningCard('Warn', `@${target.number} is a protected user (admin/bot/sudo) and cannot be warned.`);
+  }
+
+  const gcName = meta.subject;
   const count = incrementWarn(sessionId, groupJid, target.number, 'manual');
   const threshold = 3;
 
@@ -452,15 +459,22 @@ export async function cmdWarn(
 
   if (count >= threshold) {
     resetWarn(sessionId, groupJid, target.number, 'manual');
-    // Delete the quoted message if this was a reply-warn
+
+    // Delete the offending message FIRST (before notification)
     const quotedKey = msg.message?.extendedTextMessage?.contextInfo?.stanzaId
       ? { remoteJid: groupJid, id: msg.message.extendedTextMessage.contextInfo.stanzaId, participant: msg.message.extendedTextMessage.contextInfo.participant, fromMe: false }
       : null;
-    if (quotedKey) await (socket as unknown as { sendMessage(j: string, c: Record<string, unknown>): Promise<unknown> }).sendMessage(groupJid, { delete: quotedKey }).catch(() => {});
-    // Only attempt kick if bot is admin
-    if (meta?.botIsAdmin) {
-      await participantUpdate(socket, groupJid, target.jid, 'remove'); // best-effort
+    if (quotedKey) {
+      try {
+        await (socket as unknown as { sendMessage(j: string, c: Record<string, unknown>): Promise<unknown> }).sendMessage(groupJid, { delete: quotedKey });
+      } catch (err) {
+        logger.warn('[Warn] Failed to delete offending message', { err: err instanceof Error ? err.message : String(err), groupJid });
+      }
     }
+
+    // Kick after delete
+    await participantUpdate(socket, groupJid, target.jid, 'remove');
+
     let pfpBuffer: Buffer | null = null;
     try {
       const { fetchProfilePicture } = await import('../socket-manager.js');
@@ -475,7 +489,19 @@ export async function cmdWarn(
       telegramId,
       ...(pfpBuffer ? { media: { buffer: pfpBuffer as any, type: 'image', caption: kickCaption } } : {}),
     });
-    return successCard('Warn → Kicked', `@${target.number} reached ${threshold} warnings and was removed.`);
+    return ''; // Pipeline already sent announcement — prevent duplicate
+  }
+
+  // Delete the offending message FIRST (before notification)
+  const quotedKey = msg.message?.extendedTextMessage?.contextInfo?.stanzaId
+    ? { remoteJid: groupJid, id: msg.message.extendedTextMessage.contextInfo.stanzaId, participant: msg.message.extendedTextMessage.contextInfo.participant, fromMe: false }
+    : null;
+  if (quotedKey) {
+    try {
+      await (socket as unknown as { sendMessage(j: string, c: Record<string, unknown>): Promise<unknown> }).sendMessage(groupJid, { delete: quotedKey });
+    } catch (err) {
+      logger.warn('[Warn] Failed to delete offending message', { err: err instanceof Error ? err.message : String(err), groupJid });
+    }
   }
 
   let pfpBuffer: Buffer | null = null;
@@ -492,7 +518,7 @@ export async function cmdWarn(
     telegramId,
     ...(pfpBuffer ? { media: { buffer: pfpBuffer as any, type: 'image', caption: warnCaption } } : {}),
   });
-  return successCard('Warned', `@${target.number} warned. (${count}/${threshold})`);
+  return ''; // Pipeline already sent announcement — prevent duplicate
 }
 
 // ── Unwarn (reset warn count) ─────────────────────────────
@@ -808,7 +834,8 @@ export function cmdSetWelcome(
   msg: WebMessageInfo,
   telegramId: string,
   sessionId: string,
-  groupJid: string
+  groupJid: string,
+  previousMessage?: string
 ): string {
   if (!groupJid.endsWith('@g.us')) {
     return errorCard('Welcome', 'This command must be used inside a WhatsApp group.');
@@ -833,7 +860,13 @@ export function cmdSetWelcome(
   }
 
   setWelcomeConfig(telegramId, sessionId, groupJid, true, message);
-  return successCard('Welcome Set', `Welcome message saved and enabled.\n${italic('Variables: @mention, &gcname, &desc, &membercount, &admincount, &date, &time')}`, [['Preview', message.slice(0, 60)]]);
+  const rows: [string, string][] = [
+    ['New Template', message.slice(0, 60)],
+  ];
+  if (previousMessage) {
+    rows.unshift(['Previous', previousMessage.slice(0, 60)]);
+  }
+  return successCard('Welcome Set', `Welcome message saved and enabled.\n${italic('Variables: @mention, &gcname, &desc, &membercount, &admincount, &date, &time')}`, rows);
 }
 
 export function cmdWelcomeToggle(
@@ -856,7 +889,8 @@ export function cmdSetGoodbye(
   msg: WebMessageInfo,
   telegramId: string,
   sessionId: string,
-  groupJid: string
+  groupJid: string,
+  previousMessage?: string
 ): string {
   if (!groupJid.endsWith('@g.us')) {
     return errorCard('Goodbye', 'This command must be used inside a WhatsApp group.');
@@ -881,7 +915,13 @@ export function cmdSetGoodbye(
   }
 
   setGoodbyeConfig(telegramId, sessionId, groupJid, true, message);
-  return successCard('Goodbye Set', `Goodbye message saved and enabled.\n${italic('Variables: @mention, &gcname, &desc, &membercount, &admincount, &date, &time')}`, [['Preview', message.slice(0, 60)]]);
+  const rows: [string, string][] = [
+    ['New Template', message.slice(0, 60)],
+  ];
+  if (previousMessage) {
+    rows.unshift(['Previous', previousMessage.slice(0, 60)]);
+  }
+  return successCard('Goodbye Set', `Goodbye message saved and enabled.\n${italic('Variables: @mention, &gcname, &desc, &membercount, &admincount, &date, &time')}`, rows);
 }
 
 export function cmdGoodbyeToggle(
@@ -928,8 +968,19 @@ export function cmdSetModerationMsg(
     });
   }
 
+  // Capture previous value before overwriting
+  const previous = getGroupMessage(telegramId, sessionId, groupJid, key);
   setGroupMessage(telegramId, sessionId, groupJid, key, message);
-  return successCard(`${label} Template Saved`, `Custom response will be used for ${label} actions.\n${italic('Variables: @mention, &gcname, &desc, &membercount, &admincount, &date, &time')}`, [['Preview', message.slice(0, 60)]]);
+
+  const rows: [string, string][] = [];
+  if (previous) {
+    rows.push(['Previous', previous.slice(0, 60)]);
+  } else {
+    rows.push(['Previous', 'Default (not customised)']);
+  }
+  rows.push(['New Template', message.slice(0, 60)]);
+
+  return successCard(`${label} Template Saved`, `Custom response will be used for ${label} actions.\n${italic('Variables: @mention, &gcname, &desc, &membercount, &admincount, &date, &time')}`, rows);
 }
 
 // ── Mute / Unmute ────────────────────────────────────────
