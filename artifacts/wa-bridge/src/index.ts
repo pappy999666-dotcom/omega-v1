@@ -253,8 +253,11 @@ async function restoreSessions(): Promise<void> {
       const { sessionId, status } = meta;
 
       // 1. Abandoned Pairings
-      // If a session was left in PAIRING state during a crash/shutdown, it's stale.
-      if (status === 'PAIRING' || !meta.pairedAt) {
+      // Only purge sessions explicitly in PAIRING state — these were left mid-pair
+      // during a crash/shutdown and have no valid credentials.
+      // Do NOT purge based on !meta.pairedAt alone: an ACTIVE session with a missing
+      // pairedAt timestamp (e.g. from an older code version) must not be silently wiped.
+      if (status === 'PAIRING') {
         logger.warn(`[Boot] Purging stale pairing session: ${sessionId}`);
         await purgeSession(telegramId, sessionId);
         purged++;
@@ -279,17 +282,24 @@ async function restoreSessions(): Promise<void> {
 
       // 4. Active Sessions
       // Attempt to restore and validate authentication.
+      // NOTE: If creds.json is missing, do NOT purge — let Baileys attempt
+      // to connect; it will emit a 401/disconnect which the error-recovery
+      // path handles. Purging here would destroy a session that may simply
+      // be on a slow file-system or was interrupted mid-write.
       try {
         registerSessionOwner(sessionId, telegramId);
-        
-        // We use initSocket which will attempt connection.
-        // If the credentials are dead, the Baileys engine will emit a disconnect.
-        // However, we can also do a quick check on the auth folder here.
+
         const authDir = sessionAuthDir(telegramId, sessionId);
         if (!fs.existsSync(path.join(authDir, 'creds.json'))) {
-          logger.error(`[Boot] Auth credentials missing for ${sessionId}. Purging.`);
-          await purgeSession(telegramId, sessionId);
-          purged++;
+          logger.warn(
+            `[Boot] Auth credentials missing for ${sessionId}. ` +
+            `Session preserved as FROZEN — user must manually reconnect.`
+          );
+          // Freeze instead of purge: the session data is kept, the user can
+          // re-pair or manually delete it. Baileys cannot connect without creds.
+          const { updateSessionMeta } = await import('./services/workspace.js');
+          updateSessionMeta(telegramId, sessionId, { status: 'FROZEN' });
+          registerSessionOwner(sessionId, telegramId);
           continue;
         }
 
@@ -299,11 +309,16 @@ async function restoreSessions(): Promise<void> {
         // Throttle reconnection to avoid WhatsApp rate limits on startup
         await sleep(2000);
       } catch (err) {
-        logger.error(`[Boot] Critical failure restoring ${sessionId}. Purging to prevent zombie loops.`, {
+        logger.error(`[Boot] Failed to restore ${sessionId}. Freezing to preserve auth data.`, {
           err: String(err),
         });
-        await purgeSession(telegramId, sessionId);
-        purged++;
+        // Freeze instead of purge: keeps auth data intact so the user can
+        // manually reinitialize. Avoids accidentally losing a valid session
+        // due to a transient startup error.
+        try {
+          const { updateSessionMeta } = await import('./services/workspace.js');
+          updateSessionMeta(telegramId, sessionId, { status: 'FROZEN' });
+        } catch { /* ignore secondary error */ }
       }
     }
   }

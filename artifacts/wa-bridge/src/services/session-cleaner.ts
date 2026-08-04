@@ -1,10 +1,22 @@
 // ============================================================
 // WA-Bridge — Automatic Session Cleaner (Purge Engine)
 // Periodically scans for dead, stale, or orphaned sessions.
+//
+// STATE MACHINE CONTRACT:
+//   Only terminal/stale states are eligible for automatic cleanup.
+//   ACTIVE sessions must NEVER be purged automatically — only via
+//   explicit user action or a hard auth error from Baileys itself.
+//
+// States eligible for automatic cleanup:
+//   PAIRING  — only after timeout (no successful auth in time)
+//   PURGED   — file-system cleanup of already-purged entries
+//
+// States that are NEVER touched by the cleaner:
+//   ACTIVE, CONNECTING, FROZEN, FAILED, LOGGED_OUT
 // ============================================================
 
 import { logger } from '../utils/logger.js';
-import { getAllUserIds, loadAllSessions, purgeSession } from './workspace.js';
+import { getAllUserIds, loadAllSessions, purgeSession, sessionAuthDir } from './workspace.js';
 import { getAllSockets, closeSocket, markPurged } from '../whatsapp/socket-manager.js';
 import fs from 'fs';
 import path from 'path';
@@ -17,6 +29,9 @@ let cleanerTimer: NodeJS.Timeout | null = null;
 /**
  * The core Session Cleaner / Purge Engine.
  * Implements the "Session Cleaner" requirements.
+ *
+ * ACTIVE sessions are NEVER purged here — they are only managed
+ * by explicit user action or Baileys auth-error recovery.
  */
 export async function runSessionCleanup(): Promise<void> {
   logger.info('[SessionCleaner] Starting periodic cleanup scan...');
@@ -34,7 +49,7 @@ export async function runSessionCleanup(): Promise<void> {
       let shouldPurge = false;
       let reason = '';
 
-      // Check for stale pairing
+      // Check for stale pairing (no successful auth within the timeout window)
       if (status === 'PAIRING' && !pairedAt) {
         const age = Date.now() - (meta.lastSeen || Date.now());
         if (age > PAIRING_TIMEOUT_MS) {
@@ -43,19 +58,25 @@ export async function runSessionCleanup(): Promise<void> {
         }
       }
 
-      // Check for invalid status
+      // Clean up file-system remnants of already-purged entries
       if (status === 'PURGED') {
         shouldPurge = true;
         reason = 'Marked as purged';
       }
 
-      // Check for missing auth files for ACTIVE sessions
+      // ── SAFETY: ACTIVE sessions are NEVER purged by the cleaner ──
+      // If creds are missing for an ACTIVE session, only warn.
+      // Recovery is handled by Baileys (it will emit a 401/disconnect
+      // which then triggers the proper classifyBaileysError → purge path).
       if (status === 'ACTIVE') {
-        const authDir = path.join(process.cwd(), 'workspaces', telegramId, 'sessions', sessionId, 'auth');
+        const authDir = sessionAuthDir(telegramId, sessionId);
         if (!fs.existsSync(path.join(authDir, 'creds.json'))) {
-          shouldPurge = true;
-          reason = 'Missing authentication credentials';
+          logger.warn(
+            `[SessionCleaner] ACTIVE session ${sessionId} is missing creds.json — ` +
+            `NOT purging (Baileys will handle this via auth error). Investigate if this persists.`
+          );
         }
+        // Do NOT set shouldPurge for ACTIVE sessions.
       }
 
       if (shouldPurge) {

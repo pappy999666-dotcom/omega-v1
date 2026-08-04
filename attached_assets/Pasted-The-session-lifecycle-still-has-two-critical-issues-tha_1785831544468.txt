@@ -1,0 +1,154 @@
+The session lifecycle still has two critical issues that must be fixed properly. Do NOT apply temporary workarounds. Perform a complete audit of the session lifecycle, connection manager, and notification pipeline.
+
+════════════════════════════════════
+1. ACTIVE SESSIONS ARE BEING CLEARED
+════════════════════════════════════
+
+Current issue:
+
+• User pairs successfully.
+• WhatsApp connects successfully.
+• Session becomes ACTIVE.
+• After a few minutes the ACTIVE session disappears or is cleared.
+• User must pair again.
+
+This should NEVER happen.
+
+Perform a complete audit of the session lifecycle.
+
+Audit every stage:
+
+• Pairing flow
+• QR/Pair Code authentication
+• Baileys auth state
+• Connection update events
+• Runtime session manager
+• Redis
+• Mongo/Database
+• Session registry
+• Ownership registry
+• Isolation manager
+• Cleanup scheduler
+• Purge scheduler
+• Frozen session manager
+• Disconnect handler
+• Reconnect handler
+• Heartbeat/keepalive
+• Startup restoration
+
+Determine exactly why ACTIVE sessions are being removed.
+
+Verify that ACTIVE sessions are NEVER deleted by:
+
+• timeout cleanup
+• pairing timeout cleanup
+• stale cleanup
+• orphan cleanup
+• dead-session cleanup
+• purge jobs
+• frozen-session logic
+
+Only sessions in a terminal state should be eligible for deletion.
+
+Valid states should be:
+
+PAIRING
+CONNECTING
+ACTIVE
+FROZEN
+PURGED
+LOGGED_OUT
+FAILED
+
+ACTIVE sessions must NEVER transition to PURGED automatically.
+
+Implement a proper state machine with valid transitions only.
+
+════════════════════════════════════
+2. CONNECTED MESSAGE DOES NOT SEND
+════════════════════════════════════
+
+When a user successfully connects their WhatsApp account, they should immediately receive confirmation.
+
+Current issue:
+
+• Session connects successfully.
+• No DM is sent on WhatsApp.
+• No Telegram notification is sent.
+• Sometimes nothing happens.
+
+Audit the connection event pipeline.
+
+Find where the connected event is being lost.
+
+Verify:
+
+• connection.update
+• open event
+• first successful login
+• auth persistence
+• runtime registration
+• notification dispatcher
+
+The connected notification must only fire AFTER:
+
+✓ Authentication is complete
+✓ Session is registered
+✓ Database write succeeds
+✓ Runtime manager marks ACTIVE
+
+Then send notifications.
+
+════════════════════════════════════
+WHATSAPP CONNECTED MESSAGE
+════════════════════════════════════
+
+Immediately send a DM to the paired WhatsApp account.
+
+Example:
+
+━━━━━━━━━━━━━━━━━━
+✅ SESSION CONNECTED
+
+Your WhatsApp has been connected successfully.
+
+Session:
+<session_name>
+
+Status:
+🟢 ACTIVE
+
+Commands:
+.prefix menu
+
+Engine:
+OMEGA CORE
+━━━━━━━━━━━━━━━━━━
+
+This should only send ONCE per successful connection.
+
+Never duplicate it during reconnects.
+
+════════════════════════════════════
+TELEGRAM CONNECTED MESSAGE
+════════════════════════════════════
+
+Immediately notify the Telegram owner.
+
+Include:
+
+• Session name
+• WhatsApp number
+• Connected time
+• Runtime status
+• ACTIVE state
+• Device information (if available)
+
+The session should instantly appear in:
+
+• Session list
+• Dashboard
+• Telegram panel
+
+════════════════════════════════════
+RECONNECT LOG

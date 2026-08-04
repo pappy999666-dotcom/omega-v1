@@ -113,25 +113,23 @@ function buildWhatsAppText(opts: {
   sessionName: string;
 }): string {
   return [
-    `╭━━━〔 ✅ SESSION CONNECTED 〕━━━╮`,
-    `┃`,
-    `┃ 🎉 Your session is now online.`,
-    `┃`,
-    `┃ 📱 Number:`,
-    `┃ ${opts.phone}`,
-    `┃`,
-    `┃ 🆔 Session:`,
-    `┃ ${opts.sessionName}`,
-    `┃`,
-    `┃ ⚡ Status:`,
-    `┃ ACTIVE`,
-    `┃`,
-    `┃ 🤖 Engine:`,
-    `┃ OMEGA CORE`,
-    `┃`,
-    `┃ You can now use all WhatsApp commands.`,
-    `┃`,
-    `╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯`
+    `━━━━━━━━━━━━━━━━━━`,
+    `✅ SESSION CONNECTED`,
+    ``,
+    `Your WhatsApp has been connected successfully.`,
+    ``,
+    `Session:`,
+    opts.sessionName,
+    ``,
+    `Status:`,
+    `🟢 ACTIVE`,
+    ``,
+    `Commands:`,
+    `.prefix menu`,
+    ``,
+    `Engine:`,
+    `OMEGA CORE`,
+    `━━━━━━━━━━━━━━━━━━`,
   ].join('\n');
 }
 
@@ -176,17 +174,25 @@ export async function notifySessionConnected(opts: ConnectedNotification): Promi
     }
 
     // B. WhatsApp Notification (Self-DM)
-    // We await this to ensure it's sent
+    // Baileys sets socket.user after the 'open' event but the assignment is
+    // synchronous — a brief wait ensures it is populated before we read it,
+    // especially when the IIFE fires right at the moment connection opens.
     if (opts.socket) {
       try {
-        const ownJid = (opts.socket as any).user?.id;
+        // Retry up to 5 times (3s apart) waiting for socket.user to be set.
+        let ownJid: string | undefined;
+        for (let attempt = 0; attempt < 5; attempt++) {
+          ownJid = (opts.socket as any).user?.id;
+          if (ownJid) break;
+          await new Promise<void>((r) => setTimeout(r, 3_000));
+        }
+
         if (ownJid) {
           const waText = buildWhatsAppText({ name, phone: opts.phone, sessionName });
-          // Baileys: sendMessage(jid, content)
           await opts.socket.sendMessage(ownJid, { text: waText });
           logger.info('[ConnectedNotify] WhatsApp DM delivered', { sessionId });
         } else {
-          logger.warn('[ConnectedNotify] No ownJid found for WhatsApp DM', { sessionId });
+          logger.warn('[ConnectedNotify] socket.user.id not available after retries — WhatsApp DM skipped', { sessionId });
         }
       } catch (err) {
         logger.warn('[ConnectedNotify] WhatsApp DM failed', { err: String(err), sessionId });

@@ -517,8 +517,16 @@ export async function initSocket(
   // Store in registry
   registry.set(sessionId, { socket, meta, frozen: false });
   
-  // Set initial state to PAIRING if not already registered
-  if (!socket.authState.creds.registered) {
+  // Set initial state to PAIRING only for genuinely new (unregistered) sessions.
+  //
+  // Guard: if meta.pairedAt is set, this is a RESTORATION call, not a new pairing.
+  // Do NOT reset to PAIRING and do NOT start the abandonment timer — the session
+  // already has credentials on disk and Baileys will reconnect automatically.
+  // Setting a pairingAbortTimer here would purge a perfectly valid ACTIVE session
+  // after 5 minutes if the reconnect happens to succeed before the timer fires but
+  // Baileys' socket.authState.creds.registered is briefly false during startup.
+  const isRestoredSession = Boolean(meta.pairedAt);
+  if (!socket.authState.creds.registered && !isRestoredSession) {
     updateSessionMeta(telegramId, sessionId, { status: 'PAIRING' });
 
     // Auto-purge if pairing is abandoned (5 minute timeout).
