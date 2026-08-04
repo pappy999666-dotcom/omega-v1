@@ -169,20 +169,61 @@ export async function runSetupWizard() {
     if (await qm.confirm('Launch bot under PM2 now?', true)) {
         // Detect entry point
         const distPath = path.join(workspaceInfo.botPackagePath, 'dist/index.js');
-        
-        if (!fs.existsSync(distPath)) {
-            console.log('\n\x1b[33mBuild output not found. Running build...\x1b[0m');
+        let distReady = fs.existsSync(distPath);
+
+        if (!distReady) {
+            console.log('\n\x1b[33m[Deploy] dist/index.js not found — building now...\x1b[0m');
+
+            // ── Step 1 of 3: TypeScript type-check ──────────────────────────
+            // Run typecheck as a SEPARATE step so TypeScript errors are shown
+            // as the root cause.  If we skipped this and only ran "pnpm build",
+            // the PM2 "Entry point not found" message would appear after the TS
+            // errors and could mislead the user about what actually went wrong.
+            console.log('\x1b[36m[Deploy 1/3] Type-checking...\x1b[0m');
+            let typecheckPassed = false;
             try {
-                execSync('pnpm run build', { cwd: workspaceInfo.botPackagePath, stdio: 'inherit' });
-            } catch (e) {
-                console.log('\x1b[31mBuild failed. Please check the errors above.\x1b[0m');
+                execSync('pnpm run typecheck', { cwd: workspaceInfo.botPackagePath, stdio: 'inherit' });
+                typecheckPassed = true;
+                console.log('\x1b[32m✓ Typecheck passed\x1b[0m');
+            } catch {
+                console.error('\x1b[31m❌ TypeScript errors found (see above).\x1b[0m');
+                console.error('\x1b[31m   Fix the errors and re-run setup.\x1b[0m');
+                console.error('\x1b[31m   PM2 startup aborted — no build was attempted.\x1b[0m');
+            }
+
+            // ── Step 2 of 3: Compile (only if typecheck passed) ──────────────
+            if (typecheckPassed) {
+                console.log('\x1b[36m[Deploy 2/3] Compiling...\x1b[0m');
+                try {
+                    execSync('node build.mjs', { cwd: workspaceInfo.botPackagePath, stdio: 'inherit' });
+                    console.log('\x1b[32m✓ Compilation done\x1b[0m');
+                } catch {
+                    console.error('\x1b[31m❌ Build (esbuild) failed (see above).\x1b[0m');
+                    console.error('\x1b[31m   PM2 startup aborted — dist/index.js was not produced.\x1b[0m');
+                }
+            }
+
+            // ── Step 3 of 3: Verify dist/index.js was actually produced ──────
+            distReady = fs.existsSync(distPath);
+            if (typecheckPassed && !distReady) {
+                console.error('\x1b[31m❌ Build exited successfully but dist/index.js is missing.\x1b[0m');
+                console.error('\x1b[31m   PM2 startup aborted.\x1b[0m');
+            }
+            if (distReady) {
+                console.log('\x1b[32m✓ dist/index.js verified\x1b[0m');
             }
         }
 
-        await DeploymentManager.configurePM2('wa-bridge', distPath);
-        
-        if (config.enableWebDashboard && config.web.domain !== 'localhost') {
-            await DeploymentManager.configureNginx(config.web.domain, config.web.port, config.web.httpsEmail);
+        // ── Configure PM2 only when dist/index.js is confirmed present ───────
+        if (!distReady) {
+            console.error('\x1b[31m\n⚠️  Skipping PM2 configuration — build did not produce dist/index.js.\x1b[0m');
+            console.error('\x1b[33m   Run "pnpm run typecheck" inside artifacts/wa-bridge to see all errors.\x1b[0m');
+        } else {
+            await DeploymentManager.configurePM2('wa-bridge', distPath);
+
+            if (config.enableWebDashboard && config.web.domain !== 'localhost') {
+                await DeploymentManager.configureNginx(config.web.domain, config.web.port, config.web.httpsEmail);
+            }
         }
     }
 

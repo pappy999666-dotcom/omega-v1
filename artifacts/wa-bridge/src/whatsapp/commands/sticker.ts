@@ -56,7 +56,12 @@ export async function cmdSticker(
       }
     }
 
-    let stickerBuffer = fs.readFileSync(outputPath);
+    // Buffer.from() copies the raw bytes into a fresh ArrayBuffer-backed Buffer
+    // (Buffer<ArrayBuffer> = NonSharedBuffer).  This is necessary because
+    // fs.readFileSync() is typed as Buffer<ArrayBufferLike> in Node 22, which
+    // is not directly assignable to the Buffer / NonSharedBuffer parameter of
+    // addStickerMetadata().  No casts — just a proper safe conversion.
+    let stickerBuffer: Buffer = Buffer.from(fs.readFileSync(outputPath));
     
     // Add metadata if provided
     if (config.packname || config.author) {
