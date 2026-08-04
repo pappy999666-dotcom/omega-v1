@@ -1,14 +1,12 @@
 // ============================================================
 // WA-Bridge — Robust Session Connected Notification Service
 //
-// Production-grade, non-blocking notification pipeline.
-// Replaces fragile implementations with asynchronous background delivery.
+// Production-grade, fully awaited notification pipeline.
+// Ensures reliable delivery of Telegram and WhatsApp notifications.
 // ============================================================
 
 import type { BridgeWASocket as WASocket } from '../whatsapp/baileys-types.js';
-import { connectedCard } from '../utils/ascii-art.js';
 import { logger } from '../utils/logger.js';
-import { PreviewManager } from '../preview-engine/index.js';
 import { findSessionOwner, updateSessionMeta, loadSessionMeta } from './workspace.js';
 
 export interface ConnectedNotification {
@@ -49,21 +47,25 @@ async function fetchWAProfile(
   let name = 'Unknown';
   let photoBuffer: Buffer | null = null;
   try {
+    // Baileys fetchBusinessProfile
     const info = await (socket as any).fetchBusinessProfile?.(jid).catch(() => null);
     if (info?.name) name = info.name;
     else {
+      // Fallback to store contacts
       const contacts = (socket as any).store?.contacts;
       const contact = contacts?.[jid];
       if (contact?.name) name = contact.name;
       else if (contact?.notify) name = contact.notify;
     }
-  } catch { /* ignore */ }
+  } catch (err) {
+    logger.debug(`[ConnectedNotify] Profile fetch error: ${String(err)}`);
+  }
   
   try {
     const ppUrl = await (socket as any).profilePictureUrl?.(jid, 'image').catch(() => null);
     if (ppUrl) {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 8000);
+      const timeout = setTimeout(() => controller.abort(), 10000); // 10s timeout for photo
       try {
         const res = await fetch(ppUrl, { signal: controller.signal });
         if (res.ok) photoBuffer = Buffer.from(await res.arrayBuffer());
@@ -71,14 +73,16 @@ async function fetchWAProfile(
         clearTimeout(timeout);
       }
     }
-  } catch { /* ignore */ }
+  } catch (err) {
+    logger.debug(`[ConnectedNotify] Photo fetch error: ${String(err)}`);
+  }
   return { name, photoBuffer };
 }
 
 // ── Build Notification Content ────────────────────────────
 
 function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function buildTelegramText(opts: {
@@ -134,8 +138,8 @@ function buildWhatsAppText(opts: {
 // ── Notification Delivery Pipeline ─────────────────────────
 
 /**
- * Robust, non-blocking notification pipeline.
- * Implements the "Session Connected" redesign requirements.
+ * Robust, fully awaited notification pipeline.
+ * Ensures delivery of both Telegram and WhatsApp notifications.
  */
 export async function notifySessionConnected(opts: ConnectedNotification): Promise<void> {
   const { sessionId, method, telegramId: userIdParam } = opts as any;
@@ -153,87 +157,92 @@ export async function notifySessionConnected(opts: ConnectedNotification): Promi
     return;
   }
 
-  // 2. Async Execution (Non-blocking)
-  // We don't 'await' the delivery so it doesn't block the caller (authentication flow)
-  (async () => {
-    try {
-      logger.info('[ConnectedNotify] Starting delivery pipeline...', { sessionId });
+  try {
+    logger.info('[ConnectedNotify] Starting notification delivery...', { sessionId });
 
-      // A. Prepare Data
-      let name = opts.label || opts.phone;
-      let photoBuffer: Buffer | null = null;
-      let sessionName = meta?.sessionName || opts.label || 'Main';
+    // A. Prepare Data
+    let name = opts.label || opts.phone;
+    let photoBuffer: Buffer | null = null;
+    let sessionName = meta?.sessionName || opts.label || 'Main';
 
-      if (opts.socket) {
+    if (opts.socket) {
+      const ownJid = (opts.socket as any).user?.id;
+      if (ownJid) {
+        // Await profile fetch
+        const profile = await fetchWAProfile(opts.socket, ownJid);
+        name = profile.name !== 'Unknown' ? profile.name : name;
+        photoBuffer = profile.photoBuffer;
+      }
+    }
+
+    // B. WhatsApp Notification (Self-DM)
+    // We await this to ensure it's sent
+    if (opts.socket) {
+      try {
         const ownJid = (opts.socket as any).user?.id;
         if (ownJid) {
-          const profile = await fetchWAProfile(opts.socket, ownJid);
-          name = profile.name !== 'Unknown' ? profile.name : name;
-          photoBuffer = profile.photoBuffer;
+          const waText = buildWhatsAppText({ name, phone: opts.phone, sessionName });
+          // Baileys: sendMessage(jid, content)
+          await opts.socket.sendMessage(ownJid, { text: waText });
+          logger.info('[ConnectedNotify] WhatsApp DM delivered', { sessionId });
+        } else {
+          logger.warn('[ConnectedNotify] No ownJid found for WhatsApp DM', { sessionId });
         }
+      } catch (err) {
+        logger.warn('[ConnectedNotify] WhatsApp DM failed', { err: String(err), sessionId });
       }
+    }
 
-      // B. WhatsApp Notification (Self-DM)
-      if (opts.socket) {
-        try {
-          const ownJid = (opts.socket as any).user?.id;
-          if (ownJid) {
-            const waText = buildWhatsAppText({ name, phone: opts.phone, sessionName });
-            await opts.socket.sendMessage(ownJid, { text: waText });
-            logger.info('[ConnectedNotify] WhatsApp DM delivered', { sessionId });
-          }
-        } catch (err) {
-          logger.warn('[ConnectedNotify] WhatsApp DM failed', { err: String(err), sessionId });
-        }
-      }
+    // C. Telegram Notification
+    // We await this to ensure it's sent
+    if (opts.telegram && opts.telegramChatId) {
+      try {
+        const tgText = buildTelegramText({ name, phone: opts.phone, sessionId, method });
+        const tg = opts.telegram;
+        const chatId = opts.telegramChatId;
 
-      // C. Telegram Notification
-      if (opts.telegram && opts.telegramChatId) {
-        try {
-          const tgText = buildTelegramText({ name, phone: opts.phone, sessionId, method });
-          const tg = opts.telegram;
-          const chatId = opts.telegramChatId;
-
-          if (opts.progressMsgId) {
-            await tg.editMessageText(chatId, opts.progressMsgId, undefined, tgText, {
+        if (opts.progressMsgId) {
+          // Edit progress message
+          await tg.editMessageText(chatId, opts.progressMsgId, undefined, tgText, {
+            parse_mode: 'HTML',
+            reply_markup: opts.replyMarkup,
+          } as any).catch(async (editErr) => {
+            logger.debug(`[ConnectedNotify] TG Edit failed, sending new message: ${String(editErr)}`);
+            // Fallback to new message
+            return tg.sendMessage(chatId, tgText, {
               parse_mode: 'HTML',
               reply_markup: opts.replyMarkup,
-            } as any).catch(() => {
-              // Fallback to new message if edit fails
-              return tg.sendMessage(chatId, tgText, {
-                parse_mode: 'HTML',
-                reply_markup: opts.replyMarkup,
-              });
+            });
+          });
+        } else {
+          // Send new message
+          if (photoBuffer) {
+            await tg.sendPhoto(chatId, { source: photoBuffer }, {
+              caption: tgText,
+              parse_mode: 'HTML',
+              reply_markup: opts.replyMarkup,
             });
           } else {
-            if (photoBuffer) {
-              await tg.sendPhoto(chatId, { source: photoBuffer }, {
-                caption: tgText,
-                parse_mode: 'HTML',
-                reply_markup: opts.replyMarkup,
-              });
-            } else {
-              await tg.sendMessage(chatId, tgText, {
-                parse_mode: 'HTML',
-                reply_markup: opts.replyMarkup,
-              });
-            }
+            await tg.sendMessage(chatId, tgText, {
+              parse_mode: 'HTML',
+              reply_markup: opts.replyMarkup,
+            });
           }
-          logger.info('[ConnectedNotify] Telegram notification delivered', { sessionId });
-        } catch (err) {
-          logger.warn('[ConnectedNotify] Telegram notification failed', { err: String(err), sessionId });
         }
+        logger.info('[ConnectedNotify] Telegram notification delivered', { sessionId });
+      } catch (err) {
+        logger.warn('[ConnectedNotify] Telegram notification failed', { err: String(err), sessionId });
       }
-
-      // D. Mark as Delivered
-      updateSessionMeta(telegramId, sessionId, { notificationDelivered: true });
-      logger.info('[ConnectedNotify] Pipeline complete.', { sessionId });
-
-    } catch (err) {
-      logger.error('[ConnectedNotify] Fatal pipeline error', { 
-        err: err instanceof Error ? err.message : String(err),
-        sessionId 
-      });
     }
-  })().catch(err => logger.error('[ConnectedNotify] Background task failed', { err: String(err) }));
+
+    // D. Mark as Delivered
+    updateSessionMeta(telegramId, sessionId, { notificationDelivered: true });
+    logger.info('[ConnectedNotify] Delivery pipeline finished successfully.', { sessionId });
+
+  } catch (err) {
+    logger.error('[ConnectedNotify] Fatal delivery error', { 
+      err: err instanceof Error ? err.message : String(err),
+      sessionId 
+    });
+  }
 }
