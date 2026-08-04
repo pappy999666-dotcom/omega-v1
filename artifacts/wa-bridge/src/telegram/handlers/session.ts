@@ -225,9 +225,10 @@ export async function handleNewSession(
           phone: meta.phone,
           label: meta.label,
           method: 'QR Code',
-          replyMarkup: sessionMenuKeyboard(sid, 'open') as unknown as Record<string, unknown>,
+          replyMarkup: sessionMenuKeyboard(sid, 'ACTIVE') as unknown as Record<string, unknown>,
           progressMsgId: progressMsg.message_id,
           ownerTelegramId: ctx.telegramId,
+          force: true, // New pairing always sends notification
         });
       },
     });
@@ -319,9 +320,10 @@ export async function handlePairingCode(
           phone: normalizedPhone,
           label: meta.label,
           method: 'Pairing Code',
-          replyMarkup: sessionMenuKeyboard(sessionId, 'open') as unknown as Record<string, unknown>,
+          replyMarkup: sessionMenuKeyboard(sessionId, 'ACTIVE') as unknown as Record<string, unknown>,
           progressMsgId: progress.message_id,
           ownerTelegramId: ctx.telegramId,
+          force: true, // New pairing always sends notification
         });
       },
     });

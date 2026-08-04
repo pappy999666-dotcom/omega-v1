@@ -268,6 +268,7 @@ export function loadSessionMeta(
       sessionName: stored.sessionName ?? stored.label ?? 'Main',
       linkCollectionEnabled: stored.linkCollectionEnabled ?? loadConfig(telegramId).defaultLinkCollection ?? false,
       linksCollected: stored.linksCollected ?? 0,
+      notificationDelivered: stored.notificationDelivered ?? false,
     };
   } catch {
     return null;
@@ -361,6 +362,10 @@ export async function purgeSession(telegramId: string, sessionId: string): Promi
     markPurged(sessionId);
     await closeSocket(sessionId);
   } catch {}
+
+  // Reset notification delivered flag if session metadata exists before deletion
+  // This is implicit since we delete the directory, but for clarity:
+  logger.info(`[PurgeEngine] Resetting delivery flags for ${sessionId}`);
 
   // 6. Session Files (Auth + Logs + Meta)
   if (fs.existsSync(dir)) {

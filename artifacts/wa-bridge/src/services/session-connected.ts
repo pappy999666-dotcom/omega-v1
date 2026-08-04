@@ -1,22 +1,15 @@
 // ============================================================
-// WA-Bridge — Centralized Session Connected Notification Service
+// WA-Bridge — Robust Session Connected Notification Service
 //
-// Single source of truth for "session connected" notifications.
-// Replaces the three duplicated onConnected blocks in:
-//   - telegram/handlers/session.ts (QR, pairing-code, reinit)
-//   - whatsapp/event-handlers.ts (pair command)
-//
-// Responsibilities:
-//   1. Fetch WA profile (name + photo)
-//   2. Send Telegram notification (with optional photo)
-//   3. Send WhatsApp self-DM with connectedCard
+// Production-grade, non-blocking notification pipeline.
+// Replaces fragile implementations with asynchronous background delivery.
 // ============================================================
 
 import type { BridgeWASocket as WASocket } from '../whatsapp/baileys-types.js';
 import { connectedCard } from '../utils/ascii-art.js';
 import { logger } from '../utils/logger.js';
 import { PreviewManager } from '../preview-engine/index.js';
-import { findSessionOwner } from './workspace.js';
+import { findSessionOwner, updateSessionMeta, loadSessionMeta } from './workspace.js';
 
 export interface ConnectedNotification {
   /** Telegram chat ID to notify */
@@ -43,6 +36,8 @@ export interface ConnectedNotification {
   progressMsgId?: number;
   /** Session owner Telegram ID (for fallback messaging) */
   ownerTelegramId?: string;
+  /** Force notification even if already delivered (e.g. manual reinit) */
+  force?: boolean;
 }
 
 // ── Fetch WA Profile ──────────────────────────────────────
@@ -54,24 +49,21 @@ async function fetchWAProfile(
   let name = 'Unknown';
   let photoBuffer: Buffer | null = null;
   try {
-    const info = await (socket as unknown as {
-      fetchBusinessProfile(jid: string): Promise<{ name?: string } | null>;
-    }).fetchBusinessProfile(jid).catch(() => null);
+    const info = await (socket as any).fetchBusinessProfile?.(jid).catch(() => null);
     if (info?.name) name = info.name;
     else {
-      const contacts = (socket as unknown as { store?: { contacts?: Record<string, { name?: string; notify?: string }> } }).store?.contacts;
+      const contacts = (socket as any).store?.contacts;
       const contact = contacts?.[jid];
       if (contact?.name) name = contact.name;
       else if (contact?.notify) name = contact.notify;
     }
   } catch { /* ignore */ }
+  
   try {
-    const ppUrl = await (socket as unknown as {
-      profilePictureUrl(jid: string, type: string): Promise<string | null>;
-    }).profilePictureUrl(jid, 'image').catch(() => null);
+    const ppUrl = await (socket as any).profilePictureUrl?.(jid, 'image').catch(() => null);
     if (ppUrl) {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
+      const timeout = setTimeout(() => controller.abort(), 8000);
       try {
         const res = await fetch(ppUrl, { signal: controller.signal });
         if (res.ok) photoBuffer = Buffer.from(await res.arrayBuffer());
@@ -83,173 +75,165 @@ async function fetchWAProfile(
   return { name, photoBuffer };
 }
 
-// ── Build Connected Text ──────────────────────────────────
+// ── Build Notification Content ────────────────────────────
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function buildConnectedText(opts: {
+function buildTelegramText(opts: {
   name: string;
   phone: string;
   sessionId: string;
   method: string;
-  isReinit?: boolean;
 }): string {
-  const { name, phone, sessionId, method, isReinit } = opts;
-  const title = isReinit ? 'Session Reconnected!' : 'Session Connected!';
-  const emoji = isReinit ? '🔄' : '🟢';
+  const { name, phone, sessionId, method } = opts;
   return [
-    `${emoji} <b>${title}</b>`,
-    '',
+    `🟢 <b>Session Connected!</b>`,
+    ``,
     `👤 <b>Name:</b> ${escapeHtml(name)}`,
     `📱 <b>Number:</b> <code>${escapeHtml(phone)}</code>`,
-    `🔑 <b>Session:</b> <code>${escapeHtml(sessionId)}</code>`,
+    `🔑 <b>Session ID:</b> <code>${escapeHtml(sessionId)}</code>`,
     `🔗 <b>Method:</b> ${escapeHtml(method)}`,
-    `⏰ <b>Paired:</b> ${new Date().toLocaleString()}`,
-    '',
+    `⏰ <b>Time:</b> ${new Date().toLocaleString()}`,
+    `⚡ <b>Status:</b> ACTIVE`,
+    `🤖 <b>Engine:</b> OMEGA CORE`,
+    ``,
     `<blockquote>Ready for WhatsApp commands. Use the menu below to manage this session.</blockquote>`,
   ].join('\n');
 }
 
-// ── Send Telegram Notification ────────────────────────────
-
-async function sendTelegramNotification(opts: ConnectedNotification, { name, photoBuffer }: { name: string; photoBuffer: Buffer | null }): Promise<void> {
-  if (!opts.telegram || !opts.telegramChatId) return;
-  const tg = opts.telegram;
-  const chatId = opts.telegramChatId;
-  const isReinit = opts.method === 'Reinit';
-  const text = buildConnectedText({
-    name,
-    phone: opts.phone,
-    sessionId: opts.sessionId,
-    method: opts.method,
-    isReinit,
-  });
-
-  if (opts.progressMsgId) {
-    // Edit existing progress message
-    try {
-      await tg.editMessageText(chatId, opts.progressMsgId, undefined, text, {
-        parse_mode: 'HTML',
-        reply_markup: opts.replyMarkup,
-      } as any);
-    } catch {
-      // If edit fails, fall through to new message
-    }
-  }
-
-  if (!opts.progressMsgId) {
-    try {
-      if (photoBuffer) {
-        await tg.sendPhoto(chatId, { source: photoBuffer }, {
-          caption: text,
-          parse_mode: 'HTML',
-          reply_markup: opts.replyMarkup,
-        });
-      } else {
-        await tg.sendMessage(chatId, text, {
-          parse_mode: 'HTML',
-          reply_markup: opts.replyMarkup,
-        });
-      }
-    } catch (err) {
-      logger.warn('[ConnectedNotify] Telegram send failed', { err: String(err) });
-    }
-  }
-
-  // Also send to owner's Telegram ID if different from chat
-  if (opts.ownerTelegramId && opts.ownerTelegramId !== String(opts.telegramChatId)) {
-    try {
-      const ownerId = parseInt(opts.ownerTelegramId, 10);
-      if (photoBuffer) {
-        await tg.sendPhoto(ownerId, { source: photoBuffer }, {
-          caption: text,
-          parse_mode: 'HTML',
-          reply_markup: opts.replyMarkup,
-        });
-      } else {
-        await tg.sendMessage(ownerId, text, {
-          parse_mode: 'HTML',
-          reply_markup: opts.replyMarkup,
-        });
-      }
-    } catch { /* ignore — same chat or blocked */ }
-  }
+function buildWhatsAppText(opts: {
+  name: string;
+  phone: string;
+  sessionName: string;
+}): string {
+  return [
+    `╭━━━〔 ✅ SESSION CONNECTED 〕━━━╮`,
+    `┃`,
+    `┃ 🎉 Your session is now online.`,
+    `┃`,
+    `┃ 📱 Number:`,
+    `┃ ${opts.phone}`,
+    `┃`,
+    `┃ 🆔 Session:`,
+    `┃ ${opts.sessionName}`,
+    `┃`,
+    `┃ ⚡ Status:`,
+    `┃ ACTIVE`,
+    `┃`,
+    `┃ 🤖 Engine:`,
+    `┃ OMEGA CORE`,
+    `┃`,
+    `┃ You can now use all WhatsApp commands.`,
+    `┃`,
+    `╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯`
+  ].join('\n');
 }
 
-// ── Send WhatsApp Self-DM ─────────────────────────────────
+// ── Notification Delivery Pipeline ─────────────────────────
 
-async function sendWhatsAppSelfDM(opts: ConnectedNotification, name: string): Promise<void> {
-  if (!opts.socket) return;
-  try {
-    const ownJid = (opts.socket as unknown as { user?: { id?: string } })?.user?.id;
-    if (!ownJid) return;
-    
-    const telegramId = opts.ownerTelegramId || findSessionOwner(opts.sessionId);
-    if (!telegramId) return;
-
-    await PreviewManager.send(opts.socket as any, ownJid, connectedCard({ 
-      name, 
-      phone: opts.phone, 
-      sessionId: opts.sessionId, 
-      method: opts.method 
-    }), {
-      sessionId: opts.sessionId,
-      telegramId,
-    });
-  } catch (err) {
-    logger.warn('[ConnectedNotify] WhatsApp self-DM failed', { err: String(err) });
-  }
-}
-
-// ── Main Entry Point ──────────────────────────────────────
-
-// In-memory cache for recent notifications to prevent race condition duplicates
-const recentNotifications = new Set<string>();
-
+/**
+ * Robust, non-blocking notification pipeline.
+ * Implements the "Session Connected" redesign requirements.
+ */
 export async function notifySessionConnected(opts: ConnectedNotification): Promise<void> {
-  const { sessionId, method } = opts;
-  const isReinit = method === 'Reinit';
+  const { sessionId, method, telegramId: userIdParam } = opts as any;
+  const telegramId = opts.ownerTelegramId || userIdParam || findSessionOwner(sessionId);
   
-  // 1. Deduplication
-  const cacheKey = `${sessionId}:${isReinit ? 'reinit' : 'connect'}`;
-  if (recentNotifications.has(cacheKey)) {
-    logger.info('[ConnectedNotify] Skipping duplicate notification', { sessionId, method });
+  if (!telegramId) {
+    logger.warn('[ConnectedNotify] Could not find owner for session', { sessionId });
     return;
   }
-  recentNotifications.add(cacheKey);
-  setTimeout(() => recentNotifications.delete(cacheKey), 30_000); // 30s cooldown
 
-  try {
-    // 2. Fetch profile
-    let name = opts.label || opts.phone;
-    let photoBuffer: Buffer | null = null;
-
-    if (opts.socket) {
-      const ownJid = (opts.socket as unknown as { user?: { id?: string } })?.user?.id;
-      if (ownJid) {
-        const profile = await fetchWAProfile(opts.socket, ownJid);
-        name = profile.name !== 'Unknown' ? profile.name : (opts.label || opts.phone);
-        photoBuffer = profile.photoBuffer;
-      }
-    }
-
-    // 3. Send Telegram notification (if applicable)
-    if (opts.telegram && opts.telegramChatId) {
-      await sendTelegramNotification(opts, { name, photoBuffer });
-    }
-
-    // 4. Send WhatsApp self-DM (if applicable)
-    // Only send DM for first-time pairing or if explicitly requested (Reinit)
-    // Reconnects (silent) should not send DMs.
-    await sendWhatsAppSelfDM(opts, name);
-    
-    logger.info('[ConnectedNotify] Success notification sent', { sessionId, method });
-  } catch (err) {
-    logger.error('[ConnectedNotify] Failed to send connected notification', {
-      err: err instanceof Error ? err.message : String(err),
-      sessionId: opts.sessionId,
-    });
+  // 1. Delivery Tracking
+  const meta = loadSessionMeta(telegramId, sessionId);
+  if (meta?.notificationDelivered && !opts.force) {
+    logger.info('[ConnectedNotify] Already delivered. Skipping.', { sessionId });
+    return;
   }
+
+  // 2. Async Execution (Non-blocking)
+  // We don't 'await' the delivery so it doesn't block the caller (authentication flow)
+  (async () => {
+    try {
+      logger.info('[ConnectedNotify] Starting delivery pipeline...', { sessionId });
+
+      // A. Prepare Data
+      let name = opts.label || opts.phone;
+      let photoBuffer: Buffer | null = null;
+      let sessionName = meta?.sessionName || opts.label || 'Main';
+
+      if (opts.socket) {
+        const ownJid = (opts.socket as any).user?.id;
+        if (ownJid) {
+          const profile = await fetchWAProfile(opts.socket, ownJid);
+          name = profile.name !== 'Unknown' ? profile.name : name;
+          photoBuffer = profile.photoBuffer;
+        }
+      }
+
+      // B. WhatsApp Notification (Self-DM)
+      if (opts.socket) {
+        try {
+          const ownJid = (opts.socket as any).user?.id;
+          if (ownJid) {
+            const waText = buildWhatsAppText({ name, phone: opts.phone, sessionName });
+            await opts.socket.sendMessage(ownJid, { text: waText });
+            logger.info('[ConnectedNotify] WhatsApp DM delivered', { sessionId });
+          }
+        } catch (err) {
+          logger.warn('[ConnectedNotify] WhatsApp DM failed', { err: String(err), sessionId });
+        }
+      }
+
+      // C. Telegram Notification
+      if (opts.telegram && opts.telegramChatId) {
+        try {
+          const tgText = buildTelegramText({ name, phone: opts.phone, sessionId, method });
+          const tg = opts.telegram;
+          const chatId = opts.telegramChatId;
+
+          if (opts.progressMsgId) {
+            await tg.editMessageText(chatId, opts.progressMsgId, undefined, tgText, {
+              parse_mode: 'HTML',
+              reply_markup: opts.replyMarkup,
+            } as any).catch(() => {
+              // Fallback to new message if edit fails
+              return tg.sendMessage(chatId, tgText, {
+                parse_mode: 'HTML',
+                reply_markup: opts.replyMarkup,
+              });
+            });
+          } else {
+            if (photoBuffer) {
+              await tg.sendPhoto(chatId, { source: photoBuffer }, {
+                caption: tgText,
+                parse_mode: 'HTML',
+                reply_markup: opts.replyMarkup,
+              });
+            } else {
+              await tg.sendMessage(chatId, tgText, {
+                parse_mode: 'HTML',
+                reply_markup: opts.replyMarkup,
+              });
+            }
+          }
+          logger.info('[ConnectedNotify] Telegram notification delivered', { sessionId });
+        } catch (err) {
+          logger.warn('[ConnectedNotify] Telegram notification failed', { err: String(err), sessionId });
+        }
+      }
+
+      // D. Mark as Delivered
+      updateSessionMeta(telegramId, sessionId, { notificationDelivered: true });
+      logger.info('[ConnectedNotify] Pipeline complete.', { sessionId });
+
+    } catch (err) {
+      logger.error('[ConnectedNotify] Fatal pipeline error', { 
+        err: err instanceof Error ? err.message : String(err),
+        sessionId 
+      });
+    }
+  })().catch(err => logger.error('[ConnectedNotify] Background task failed', { err: String(err) }));
 }

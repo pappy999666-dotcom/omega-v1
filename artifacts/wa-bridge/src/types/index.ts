@@ -67,6 +67,7 @@ export interface SessionMeta {
   lastSeen?: number;
   errorCount: number;
   autoJoinDone: boolean;
+  notificationDelivered?: boolean;
   linkCollectionEnabled?: boolean;
   linksCollected?: number;
   joinManager?: JoinManagerState;
