@@ -1,0 +1,125 @@
+The Sticker Engine is still broken. Do NOT apply another quick fix. Perform a complete forensic audit of the entire sticker generation pipeline until the generated stickers are identical to native WhatsApp stickers.
+
+Current symptoms:
+
+• The bot replies "Sticker generated and sent."
+• The sticker is delivered.
+• WhatsApp shows "Can't view sticker information."
+• The sticker metadata is invalid or incomplete.
+
+This indicates the generated WebP file or metadata does not fully comply with WhatsApp's sticker specification.
+
+═══════════════════════════════
+FULL STICKER ENGINE AUDIT
+═══════════════════════════════
+
+Audit every stage:
+
+1. Media download
+2. Image preprocessing
+3. Video preprocessing
+4. ffmpeg conversion
+5. WebP conversion
+6. Image scaling
+7. Transparency handling
+8. EXIF metadata generation
+9. Sticker pack metadata
+10. Sticker author metadata
+11. webpmux injection
+12. MIME type
+13. Baileys upload
+14. sendMessage payload
+
+Verify that NO stage corrupts the output.
+
+═══════════════════════════════
+VERIFY DEPENDENCIES
+═══════════════════════════════
+
+Automatically detect and install if missing:
+
+• ffmpeg
+• ffprobe
+• webpmux
+• libwebp
+• imagemagick (if used)
+• sharp native dependencies
+
+The update script must verify these tools exist before enabling the sticker module.
+
+═══════════════════════════════
+VERIFY WEBP OUTPUT
+═══════════════════════════════
+
+After conversion, verify:
+
+✓ RIFF header
+✓ WEBP VP8/VP8X format
+✓ Valid dimensions
+✓ Proper alpha channel
+✓ Correct MIME type
+✓ Readable by webpmux
+✓ Readable by WhatsApp
+✓ Opens normally in external WebP viewers
+
+If validation fails, regenerate instead of sending.
+
+═══════════════════════════════
+VERIFY EXIF
+═══════════════════════════════
+
+Audit EXIF generation.
+
+Ensure the metadata follows WhatsApp's expected sticker format.
+
+Verify:
+
+• sticker-pack-id
+• sticker-pack-name
+• sticker-pack-publisher
+• emojis
+• JSON structure
+• EXIF binary length
+
+Use a known working implementation as the reference.
+
+═══════════════════════════════
+VERIFY BAILEYS SEND PAYLOAD
+═══════════════════════════════
+
+Inspect the sendMessage() call.
+
+Ensure it sends a proper sticker payload, not a generic document or media message.
+
+Verify:
+
+• sticker field
+• mimetype
+• file length
+• upload pipeline
+• media encryption
+
+═══════════════════════════════
+VALIDATION
+═══════════════════════════════
+
+After generating a sticker, automatically verify:
+
+✓ Sticker opens normally.
+✓ Sticker information is viewable.
+✓ Sticker can be forwarded.
+✓ Sticker can be favourited.
+✓ Sticker can be added to a sticker pack.
+✓ Sticker works on Android.
+✓ Sticker works on iPhone.
+✓ Sticker works on WhatsApp Desktop.
+
+If any validation fails, do not send the sticker. Log the exact stage that failed.
+
+═══════════════════════════════
+FINAL REQUIREMENT
+═══════════════════════════════
+
+Do not stop after removing the TypeScript error.
+
+The Sticker Engine is only considered fixed when the generated stickers are indistinguishable from stickers created by the official WhatsApp client, with complete metadata, proper rendering, and fully working sticker information.

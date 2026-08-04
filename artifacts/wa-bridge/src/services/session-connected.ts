@@ -158,92 +158,124 @@ export async function notifySessionConnected(opts: ConnectedNotification): Promi
   try {
     logger.info('[ConnectedNotify] Starting notification delivery...', { sessionId });
 
-    // A. Prepare Data
+    // A. Prepare shared data (name, sessionName) — profile fetch runs here so both
+    //    channels can use the result, but we don't wait for socket.user before
+    //    starting the Telegram send (see parallel section below).
     let name = opts.label || opts.phone;
-    let photoBuffer: Buffer | null = null;
     let sessionName = meta?.sessionName || opts.label || 'Main';
 
-    if (opts.socket) {
-      const ownJid = (opts.socket as any).user?.id;
-      if (ownJid) {
-        // Await profile fetch
-        const profile = await fetchWAProfile(opts.socket, ownJid);
-        name = profile.name !== 'Unknown' ? profile.name : name;
-        photoBuffer = profile.photoBuffer;
-      }
-    }
+    // B. WhatsApp self-DM + Telegram run in parallel.
+    //
+    //    WA self-DM: socket.user.id may not be populated the instant 'open' fires.
+    //    We retry up to 5 × 3 s = 15 s max, but this runs CONCURRENTLY with the
+    //    Telegram send so Telegram is never blocked behind this wait.
+    //
+    //    Telegram delivery is the authoritative success signal.  We only set
+    //    notificationDelivered after a successful Telegram send (or when Telegram
+    //    is not configured, after WA DM succeeds) to prevent a transient failure
+    //    from permanently suppressing future notifications.
 
-    // B. WhatsApp Notification (Self-DM)
-    // Baileys sets socket.user after the 'open' event but the assignment is
-    // synchronous — a brief wait ensures it is populated before we read it,
-    // especially when the IIFE fires right at the moment connection opens.
-    if (opts.socket) {
-      try {
-        // Retry up to 5 times (3s apart) waiting for socket.user to be set.
-        let ownJid: string | undefined;
-        for (let attempt = 0; attempt < 5; attempt++) {
-          ownJid = (opts.socket as any).user?.id;
-          if (ownJid) break;
-          await new Promise<void>((r) => setTimeout(r, 3_000));
-        }
+    const waPromise: Promise<void> = opts.socket
+      ? (async () => {
+          try {
+            // Resolve socket.user.id with retries
+            let ownJid: string | undefined;
+            for (let attempt = 0; attempt < 5; attempt++) {
+              ownJid = (opts.socket as any)?.user?.id;
+              if (ownJid) break;
+              await new Promise<void>((r) => setTimeout(r, 3_000));
+            }
+            if (!ownJid) {
+              logger.warn('[ConnectedNotify] socket.user.id not available after retries — WhatsApp DM skipped', { sessionId });
+              return;
+            }
+            // Fetch profile once we have the JID
+            const profile = await fetchWAProfile(opts.socket!, ownJid);
+            const resolvedName = profile.name !== 'Unknown' ? profile.name : name;
+            const waText = buildWhatsAppText({ name: resolvedName, phone: opts.phone, sessionName });
+            await opts.socket!.sendMessage(ownJid, { text: waText });
+            logger.info('[ConnectedNotify] WhatsApp DM delivered', { sessionId });
+          } catch (err) {
+            logger.warn('[ConnectedNotify] WhatsApp DM failed', { err: String(err), sessionId });
+          }
+        })()
+      : Promise.resolve();
 
-        if (ownJid) {
-          const waText = buildWhatsAppText({ name, phone: opts.phone, sessionName });
-          await opts.socket.sendMessage(ownJid, { text: waText });
-          logger.info('[ConnectedNotify] WhatsApp DM delivered', { sessionId });
-        } else {
-          logger.warn('[ConnectedNotify] socket.user.id not available after retries — WhatsApp DM skipped', { sessionId });
-        }
-      } catch (err) {
-        logger.warn('[ConnectedNotify] WhatsApp DM failed', { err: String(err), sessionId });
-      }
-    }
-
-    // C. Telegram Notification
-    // We await this to ensure it's sent
+    // Telegram send with bounded retry (3 attempts, exponential backoff)
+    let telegramDelivered = false;
     if (opts.telegram && opts.telegramChatId) {
-      try {
-        const tgText = buildTelegramText({ name, phone: opts.phone, sessionId, method });
-        const tg = opts.telegram;
-        const chatId = opts.telegramChatId;
+      const tgText = buildTelegramText({ name, phone: opts.phone, sessionId, method });
+      const tg = opts.telegram;
+      const chatId = opts.telegramChatId;
 
-        if (opts.progressMsgId) {
-          // Edit progress message
-          await tg.editMessageText(chatId, opts.progressMsgId, undefined, tgText, {
-            parse_mode: 'HTML',
-            reply_markup: opts.replyMarkup,
-          } as any).catch(async (editErr) => {
-            logger.debug(`[ConnectedNotify] TG Edit failed, sending new message: ${String(editErr)}`);
-            // Fallback to new message
-            return tg.sendMessage(chatId, tgText, {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          if (attempt > 0) {
+            await new Promise<void>((r) => setTimeout(r, Math.min(5_000 * attempt, 10_000)));
+          }
+
+          if (opts.progressMsgId) {
+            await tg.editMessageText(chatId, opts.progressMsgId, undefined, tgText, {
               parse_mode: 'HTML',
               reply_markup: opts.replyMarkup,
-            });
-          });
-        } else {
-          // Send new message
-          if (photoBuffer) {
-            await tg.sendPhoto(chatId, { source: photoBuffer }, {
-              caption: tgText,
-              parse_mode: 'HTML',
-              reply_markup: opts.replyMarkup,
+            } as any).catch(async (editErr: unknown) => {
+              logger.debug(`[ConnectedNotify] TG Edit failed, sending new message: ${String(editErr)}`);
+              return tg.sendMessage(chatId, tgText, {
+                parse_mode: 'HTML',
+                reply_markup: opts.replyMarkup,
+              });
             });
           } else {
-            await tg.sendMessage(chatId, tgText, {
-              parse_mode: 'HTML',
-              reply_markup: opts.replyMarkup,
-            });
+            // Fetch photo for first attempt only (avoid redundant fetches on retry)
+            let photoBuffer: Buffer | null = null;
+            if (attempt === 0 && opts.socket) {
+              const ownJid = (opts.socket as any)?.user?.id;
+              if (ownJid) {
+                try {
+                  const profile = await fetchWAProfile(opts.socket, ownJid);
+                  name = profile.name !== 'Unknown' ? profile.name : name;
+                  photoBuffer = profile.photoBuffer;
+                } catch { /* ignore — use text-only fallback */ }
+              }
+            }
+
+            if (photoBuffer) {
+              await tg.sendPhoto(chatId, { source: photoBuffer }, {
+                caption: tgText,
+                parse_mode: 'HTML',
+                reply_markup: opts.replyMarkup,
+              });
+            } else {
+              await tg.sendMessage(chatId, tgText, {
+                parse_mode: 'HTML',
+                reply_markup: opts.replyMarkup,
+              });
+            }
           }
+
+          telegramDelivered = true;
+          logger.info('[ConnectedNotify] Telegram notification delivered', { sessionId, attempt });
+          break; // success
+        } catch (err) {
+          logger.warn(`[ConnectedNotify] Telegram attempt ${attempt + 1} failed`, { err: String(err), sessionId });
         }
-        logger.info('[ConnectedNotify] Telegram notification delivered', { sessionId });
-      } catch (err) {
-        logger.warn('[ConnectedNotify] Telegram notification failed', { err: String(err), sessionId });
+      }
+
+      if (!telegramDelivered) {
+        logger.warn('[ConnectedNotify] All Telegram attempts failed — notificationDelivered will NOT be set', { sessionId });
       }
     }
 
-    // D. Mark as Delivered
-    updateSessionMeta(telegramId, sessionId, { notificationDelivered: true });
-    logger.info('[ConnectedNotify] Delivery pipeline finished successfully.', { sessionId });
+    // Wait for the WA DM to finish (it may still be in the retry loop)
+    await waPromise;
+
+    // C. Mark as delivered ONLY after successful Telegram send.
+    //    If Telegram is not configured (WA-only mode), mark after WA DM completes.
+    const shouldMark = telegramDelivered || (!opts.telegram && opts.socket);
+    if (shouldMark) {
+      updateSessionMeta(telegramId, sessionId, { notificationDelivered: true });
+      logger.info('[ConnectedNotify] Delivery pipeline finished successfully.', { sessionId });
+    }
 
   } catch (err) {
     logger.error('[ConnectedNotify] Fatal delivery error', { 

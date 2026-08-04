@@ -519,13 +519,17 @@ export async function initSocket(
   
   // Set initial state to PAIRING only for genuinely new (unregistered) sessions.
   //
-  // Guard: if meta.pairedAt is set, this is a RESTORATION call, not a new pairing.
-  // Do NOT reset to PAIRING and do NOT start the abandonment timer — the session
-  // already has credentials on disk and Baileys will reconnect automatically.
-  // Setting a pairingAbortTimer here would purge a perfectly valid ACTIVE session
-  // after 5 minutes if the reconnect happens to succeed before the timer fires but
-  // Baileys' socket.authState.creds.registered is briefly false during startup.
-  const isRestoredSession = Boolean(meta.pairedAt);
+  // Durably determine whether this is a brand-new pairing or a session restoration:
+  //   - A new pairing always arrives with meta.status === 'PAIRING' (set by the handler
+  //     before calling initSocket) and no prior credentials on disk.
+  //   - A restoration call has meta.status === 'ACTIVE' | 'FROZEN' | etc.
+  //   - An internal reconnect triggered by the close handler also arrives with a meta
+  //     snapshot copied from the session at the time it was ACTIVE (pairedAt is set).
+  //
+  // Using meta.status !== 'PAIRING' as the primary guard covers all non-new-pairing
+  // cases — including ACTIVE sessions that happen to have no pairedAt for legacy
+  // reasons — without relying solely on pairedAt which may be absent in older records.
+  const isRestoredSession = meta.status !== 'PAIRING' || Boolean(meta.pairedAt);
   if (!socket.authState.creds.registered && !isRestoredSession) {
     updateSessionMeta(telegramId, sessionId, { status: 'PAIRING' });
 
