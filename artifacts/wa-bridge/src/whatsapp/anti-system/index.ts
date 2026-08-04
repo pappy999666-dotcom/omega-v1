@@ -308,6 +308,18 @@ export async function handleParticipantUpdate(
   const { id: groupJid, participants, action, author } = update;
   if (!groupJid.endsWith('@g.us')) return;
 
+  // For 'remove' events the goodbye handler needs a metadata snapshot that still
+  // contains the leaving participants so it can resolve LID → real JID.
+  // Fetch it BEFORE patchGroupMetaCache strips them from the Baileys store cache.
+  let preRemoveSnapshot: { subject?: string; participants?: { id: string; phoneNumber?: string }[] } | null = null;
+  if (action === 'remove') {
+    try {
+      preRemoveSnapshot = await (socket as unknown as {
+        groupMetadata(jid: string): Promise<{ subject?: string; participants: { id: string; phoneNumber?: string }[] }>;
+      }).groupMetadata(groupJid);
+    } catch { /* non-critical — goodbye still sends with raw JID */ }
+  }
+
   // Surgically patch the in-memory metadata cache for this action.
   // promote/demote flip admin flags instantly — no network round-trip on
   // the next anti-check.  add/remove keep the participant list in sync.
@@ -428,13 +440,11 @@ export async function handleParticipantUpdate(
     const eventConfig = loadGroupEventConfig(telegramId, sessionId, groupJid);
     if (eventConfig.goodbyeEnabled && eventConfig.goodbyeMessage) {
       let gcName = groupJid.split('@')[0] ?? 'Group';
-      let goodbyeMeta: { subject?: string; participants?: { id: string; phoneNumber?: string }[] } | null = null;
-      try {
-        goodbyeMeta = await (socket as unknown as {
-          groupMetadata(jid: string): Promise<{ subject?: string; participants: { id: string; phoneNumber?: string }[] }>;
-        }).groupMetadata(groupJid);
-        gcName = goodbyeMeta?.subject ?? gcName;
-      } catch { /* non-critical */ }
+      // Use the pre-remove snapshot captured above so LID resolution can still
+      // find the leaving participants (patchGroupMetaCache already removed them
+      // from the Baileys store, so a fresh groupMetadata() call would miss them).
+      const goodbyeMeta = preRemoveSnapshot;
+      if (goodbyeMeta?.subject) gcName = goodbyeMeta.subject;
 
       for (const participantJid of participants) {
         try {

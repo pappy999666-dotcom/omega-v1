@@ -349,6 +349,11 @@ async function processMessageWithConfig(
     msg.message?.extendedTextMessage?.contextInfo
     ?? msg.message?.imageMessage?.contextInfo
     ?? msg.message?.videoMessage?.contextInfo
+    // Baileys proto typedefs omit contextInfo on sticker/audio/document but the
+    // runtime wire-format includes it — cast through `any` to access it safely.
+    ?? (msg.message?.stickerMessage as any)?.contextInfo
+    ?? (msg.message as any)?.audioMessage?.contextInfo
+    ?? (msg.message?.documentMessage as any)?.contextInfo
   )?.quotedMessage;
   const quotedText = extractMessageText(quotedMessage);
   // Stage 1: Extract existing preview from quoted message via PreviewManager
@@ -423,8 +428,8 @@ async function processMessageWithConfig(
 
   const reply = replyOverride ?? baseWhatsAppReply;
 
-  type MediaKind = 'image' | 'video' | 'audio';
-  type ExtractedMedia = { buffer: Buffer; type: MediaKind; mimeType: string; ptt?: boolean; caption?: string };
+  type MediaKind = 'image' | 'video' | 'audio' | 'sticker';
+  type ExtractedMedia = { buffer: Buffer; type: MediaKind; mimeType: string; animated?: boolean; ptt?: boolean; caption?: string };
   const anyMessage = (msg.message ?? {}) as Record<string, any>;
   const getContextInfo = (): any => anyMessage.extendedTextMessage?.contextInfo
     ?? anyMessage.imageMessage?.contextInfo
@@ -472,16 +477,23 @@ async function processMessageWithConfig(
     const mediaNode = m?.imageMessage ? { type: 'image' as const, node: m.imageMessage }
       : m?.videoMessage ? { type: 'video' as const, node: m.videoMessage }
       : m?.audioMessage ? { type: 'audio' as const, node: m.audioMessage }
+      : m?.stickerMessage ? { type: 'sticker' as const, node: m.stickerMessage }
       : null;
     if (!mediaNode) return null;
     const buffer = await downloadMessageMedia(sourceMessage);
     if (!buffer) return null;
+    const mimeType = mediaNode.node?.mimetype
+      ?? (mediaNode.type === 'audio' ? 'audio/mp4'
+        : mediaNode.type === 'video' ? 'video/mp4'
+        : mediaNode.type === 'sticker' ? 'image/webp'
+        : 'image/jpeg');
     return {
       buffer,
       type: mediaNode.type,
-      mimeType: mediaNode.node?.mimetype ?? (mediaNode.type === 'audio' ? 'audio/mp4' : mediaNode.type === 'video' ? 'video/mp4' : 'image/jpeg'),
-      ptt: Boolean(mediaNode.node?.ptt),
-      caption: mediaNode.node?.caption,
+      mimeType,
+      animated: mediaNode.type === 'sticker' ? Boolean((mediaNode.node as any)?.isAnimated) : undefined,
+      ptt: Boolean((mediaNode.node as any)?.ptt),
+      caption: (mediaNode.node as any)?.caption,
     };
   };
   const sendMenuResponse = async (title: string, body: string): Promise<void> => {

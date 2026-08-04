@@ -201,6 +201,11 @@ export class PreviewDispatcher {
             });
           }
         }
+        // Remove the top-level `buttons` key that was spread from options.extra into
+        // the initial content object.  Leaving it alongside nativeFlow confuses Baileys
+        // into treating the message as a buttonsMessage instead of a nativeFlowMessage,
+        // which prevents the cta_copy / cta_url buttons from functioning.
+        delete finalContent.buttons;
       }
 
       // 3. Apply Global Buttons (OPT-IN ONLY)

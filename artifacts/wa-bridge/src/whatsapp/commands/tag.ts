@@ -68,7 +68,15 @@ export async function cmdTag(
   }
 
   try {
-    if (opts.mediaBuffer) {
+    if (opts.mediaBuffer && opts.mediaType === 'sticker') {
+      // Stickers must be sent via sendMessage directly — PreviewManager's media
+      // pipeline does not support the sticker message type for mentions-tagged sends.
+      await (socket as any).sendMessage(groupJid, {
+        sticker: opts.mediaBuffer,
+        mimetype: 'image/webp',
+        mentions: participants,
+      });
+    } else if (opts.mediaBuffer) {
       await PreviewManager.send(socket as any, groupJid, text || '', {
         media: {
           buffer: opts.mediaBuffer,
@@ -171,7 +179,13 @@ export async function cmdMTag(
         ? `${header}\n\n${text}\n\n${mentionText}` 
         : `${header}\n\n${mentionText}`;
 
-      if (opts.mediaBuffer) {
+      if (opts.mediaBuffer && opts.mediaType === 'sticker') {
+        await (socket as any).sendMessage(groupJid, {
+          sticker: opts.mediaBuffer,
+          mimetype: 'image/webp',
+          mentions: chunk,
+        });
+      } else if (opts.mediaBuffer) {
         await PreviewManager.send(socket as any, groupJid, fullText, {
           media: {
             buffer: opts.mediaBuffer,
