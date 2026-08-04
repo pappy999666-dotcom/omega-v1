@@ -51,8 +51,10 @@ import {
 } from '../../utils/formatter.js';
 // ── Session ID Generator ──────────────────────────────────
 
-function makeSessionId(telegramId: string, phone: string): string {
-  return `1_${telegramId}_${phone.replace(/\D/g, '')}`;
+function makeSessionId(telegramId: string, sessionName: string): string {
+  const safeName = sessionName.toLowerCase().replace(/\W/g, '_');
+  const shortId = uuid().slice(0, 8);
+  return `${telegramId}_${safeName}_${shortId}`;
 }
 import {
   getJoinManagerState,
@@ -107,7 +109,7 @@ export async function handleSessionsList(
   // Show open sessions + sessions the user explicitly froze this runtime
   // (frozen = socket is live but paused). Stale frozen from previous boot are excluded.
   const sessions = Object.values(loadAllSessions(ctx.telegramId))
-    .filter((s) => s.status === 'open' || (s.status === 'frozen' && isFrozen(s.sessionId)));
+    .filter((s) => s.status !== 'PURGED');
 
   if (sessions.length === 0) {
     await ctx.editMessageText?.(
@@ -173,16 +175,14 @@ export async function handleNewSession(
   }
 
   const meta: SessionMeta = {
-    ...(existing ?? {
-      sessionId,
-      telegramId: ctx.telegramId,
-      phone,
-      errorCount: 0,
-      autoJoinDone: false,
-    }),
-    label: label ?? existing?.label,
+    sessionId,
+    telegramId: ctx.telegramId,
+    sessionName: label || 'Main',
     phone,
-    status: 'connecting',
+    errorCount: 0,
+    autoJoinDone: false,
+    label: label,
+    status: 'PAIRING',
     pairMethod: 'qr',
   };
 
@@ -266,16 +266,14 @@ export async function handlePairingCode(
   }
 
   const meta: SessionMeta = {
-    ...(existing ?? {
-      sessionId,
-      telegramId: ctx.telegramId,
-      phone: normalizedPhone,
-      autoJoinDone: false,
-    }),
+    sessionId,
+    telegramId: ctx.telegramId,
+    sessionName: 'Main', // Default name for pairing code flow if not specified
     phone: normalizedPhone,
-    status: 'connecting',
-    pairMethod: 'code',
     errorCount: 0,
+    autoJoinDone: false,
+    status: 'PAIRING',
+    pairMethod: 'code',
   };
 
   saveSessionMeta(meta);
@@ -360,15 +358,15 @@ export async function handleSessionInfo(
   }
 
   await ctx.editMessageText(
-    sessionCard({
-      sessionId,
-      label: meta.label,
-      phone: meta.phone,
-      status: meta.status,
-      paired: meta.status === 'open',
-      groups: groupCount,
-      frozen: meta.status === 'frozen',
-    }),
+      sessionCard({
+        sessionId,
+        label: meta.sessionName,
+        phone: meta.phone,
+        status: meta.status,
+        paired: meta.status === 'ACTIVE',
+        groups: groupCount,
+        frozen: meta.status === 'FROZEN',
+      }),
     { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId) }
   ).catch(() => {});
 }

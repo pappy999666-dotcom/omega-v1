@@ -56,11 +56,12 @@ export interface SessionMenuMedia {
 }
 
 export interface SessionMeta {
-  sessionId: string;            // e.g. "1_{tg_id}_{phone}"
-  telegramId: string;
+  sessionId: string;            // Unique ID
+  telegramId: string;           // Workspace ID
+  sessionName: string;          // User-defined name
   phone: string;
   label?: string;
-  status: 'connecting' | 'open' | 'frozen' | 'dead' | 'purged' | 'banned' | 'error' | 'closed';
+  status: 'ACTIVE' | 'PAIRING' | 'PURGED' | 'FROZEN';
   pairMethod: 'qr' | 'code';
   pairedAt?: number;
   lastSeen?: number;

@@ -8,6 +8,7 @@ import 'dotenv/config';
 
 import { runSetupWizard } from './setup/index.js';
 import fs from 'fs';
+import path from 'path';
 import { startWebServer, setBotReference } from './web/server.js';
 import { logger } from './utils/logger.js';
 import { getRedis, shutdownQueues } from './services/queue.js';
@@ -15,10 +16,11 @@ import { startOutreachWorker } from './services/workers/outreach-worker.js';
 import { startValidatorWorker } from './services/workers/validator-worker.js';
 import { startLifecycleWorker } from './services/workers/lifecycle-worker.js';
 import { startOmniWorker } from './services/workers/omni-worker.js';
+import { startSessionCleaner } from './services/session-cleaner.js';
 import { setAlertCallback, setEventCallback, getUserSockets, getSocket, closeAllSockets } from './whatsapp/socket-manager.js';
 import { handleWAEvent, registerSessionOwner } from './whatsapp/event-handlers.js';
 import { createBot, createAlertSender } from './telegram/bot.js';
-import { getAllUserIds, loadAllSessions } from './services/workspace.js';
+import { getAllUserIds, loadAllSessions, purgeSession } from './services/workspace.js';
 import { setOutreachBotRef } from './services/workers/outreach-worker.js';
 import { setValidatorBotRef } from './services/workers/validator-worker.js';
 import { setLifecycleBotRef } from './services/workers/lifecycle-worker.js';
@@ -167,6 +169,9 @@ async function bootstrap(): Promise<void> {
 
   // Start auto-promote scheduler (7 AM + 6 PM WAT daily)
   startAutoPromoteScheduler();
+
+  // Start automatic session cleaner (Purge Engine)
+  startSessionCleaner();
   healthResults.push({ component: 'Schedulers', status: 'ok' });
 
   // 8. Launch web dashboard
@@ -232,37 +237,78 @@ async function bootstrap(): Promise<void> {
 
 // ── Session Restoration ───────────────────────────────────
 
+/**
+ * Startup Validation: Restores and validates every saved session.
+ * Implements the "Startup Validation" requirements.
+ */
 async function restoreSessions(): Promise<void> {
   const userIds = getAllUserIds();
   let restored = 0;
+  let purged = 0;
 
   for (const telegramId of userIds) {
     const sessions = loadAllSessions(telegramId);
 
     for (const meta of Object.values(sessions)) {
-      // Restore open sessions.
-      // FROZEN sessions must survive restart but NOT be reinitialized.
-      if (!meta.pairedAt) continue;
-      if (meta.status === 'frozen') {
-        logger.info(`[Boot] Session ${meta.sessionId} is FROZEN. Skipping restoration.`);
+      const { sessionId, status } = meta;
+
+      // 1. Abandoned Pairings
+      // If a session was left in PAIRING state during a crash/shutdown, it's stale.
+      if (status === 'PAIRING' || !meta.pairedAt) {
+        logger.warn(`[Boot] Purging stale pairing session: ${sessionId}`);
+        await purgeSession(telegramId, sessionId);
+        purged++;
         continue;
       }
-      if (meta.status !== 'open') continue;
 
+      // 2. Frozen Sessions
+      // Frozen sessions survive restart but are NOT reconnected.
+      if (status === 'FROZEN') {
+        logger.info(`[Boot] Session ${sessionId} is FROZEN. Preserving state.`);
+        registerSessionOwner(sessionId, telegramId);
+        continue;
+      }
+
+      // 3. Purged Sessions
+      // Already marked for deletion.
+      if (status === 'PURGED') {
+        logger.info(`[Boot] Session ${sessionId} is already PURGED. Cleaning up files...`);
+        await purgeSession(telegramId, sessionId);
+        continue;
+      }
+
+      // 4. Active Sessions
+      // Attempt to restore and validate authentication.
       try {
-        registerSessionOwner(meta.sessionId, telegramId);
+        registerSessionOwner(sessionId, telegramId);
+        
+        // We use initSocket which will attempt connection.
+        // If the credentials are dead, the Baileys engine will emit a disconnect.
+        // However, we can also do a quick check on the auth folder here.
+        const authDir = path.join(WORKSPACE_ROOT, telegramId, 'sessions', sessionId, 'auth');
+        if (!fs.existsSync(path.join(authDir, 'creds.json'))) {
+          logger.error(`[Boot] Auth credentials missing for ${sessionId}. Purging.`);
+          await purgeSession(telegramId, sessionId);
+          purged++;
+          continue;
+        }
+
         await initSocket(meta, {});
         restored++;
-        await sleep(1500);
+        
+        // Throttle reconnection to avoid WhatsApp rate limits on startup
+        await sleep(2000);
       } catch (err) {
-        logger.warn(`[Boot] Failed to restore session ${meta.sessionId}`, {
+        logger.error(`[Boot] Critical failure restoring ${sessionId}. Purging to prevent zombie loops.`, {
           err: String(err),
         });
+        await purgeSession(telegramId, sessionId);
+        purged++;
       }
     }
   }
 
-  logger.info(`[Boot] Restored ${restored} session(s)`);
+  logger.info(`[Boot] Restoration complete: ${restored} active, ${purged} purged.`);
 }
 
 // ── Run ───────────────────────────────────────────────────

@@ -254,8 +254,18 @@ export function loadSessionMeta(
   if (!fs.existsSync(p)) return null;
   try {
     const stored = JSON.parse(fs.readFileSync(p, 'utf8')) as SessionMeta;
+    
+    // Compatibility mapping for old statuses
+    let status = stored.status;
+    if (['connecting', 'error'].includes(status)) status = 'PAIRING' as any;
+    if (['open', 'closed'].includes(status)) status = 'ACTIVE' as any;
+    if (['dead', 'purged', 'banned'].includes(status)) status = 'PURGED' as any;
+    if (status === 'frozen') status = 'FROZEN' as any;
+
     return {
       ...stored,
+      status: status as SessionMeta['status'],
+      sessionName: stored.sessionName ?? stored.label ?? 'Main',
       linkCollectionEnabled: stored.linkCollectionEnabled ?? loadConfig(telegramId).defaultLinkCollection ?? false,
       linksCollected: stored.linksCollected ?? 0,
     };
@@ -295,48 +305,74 @@ export function updateSessionMeta(
  * Purge a session completely — removes auth state, meta, and database records.
  * Called on 401/Bad MAC errors or manual deletion.
  */
+/**
+ * Purge a session completely — removes auth state, meta, and database records.
+ * Called on 401/Bad MAC errors or manual deletion.
+ * Implements the "Purge Engine" requirements.
+ */
 export async function purgeSession(telegramId: string, sessionId: string): Promise<void> {
   const dir = sessionDir(telegramId, sessionId);
   
-  // 1. Cancel Active Jobs & Unregister
+  logger.warn(`[PurgeEngine] Starting purge for session ${sessionId}...`);
+
+  // 1. Unregister from runtime first to stop events
+  try {
+    const { unregisterSessionOwner } = await import('../whatsapp/event-handlers.js');
+    unregisterSessionOwner(sessionId);
+  } catch {}
+
+  // 2. Cancel Active Jobs & Queues
   try {
     const { cancelSessionJobs } = await import('./queue.js');
     await cancelSessionJobs(sessionId);
-    
-    const { unregisterSessionOwner } = await import('../whatsapp/event-handlers.js');
-    unregisterSessionOwner(sessionId);
   } catch (err) {
-    logger.warn(`[Workspace] Cleanup failed for ${sessionId}`, { err: String(err) });
+    logger.warn(`[PurgeEngine] Queue cleanup failed for ${sessionId}`, { err: String(err) });
   }
 
-  // 2. Session Files
-  if (fs.existsSync(dir)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-
-  // 3. Redis Cleanup (Queues, Cache, Circuit Breakers)
+  // 3. Redis Cleanup (Queues, Cache, Circuit Breakers, State)
   try {
     const { getRedis } = await import('./queue.js');
     const redis = getRedis();
+    // Pattern match all keys related to this session
     const keys = await redis.keys(`*${sessionId}*`);
     if (keys.length > 0) {
       await redis.del(...keys);
+      logger.info(`[PurgeEngine] Deleted ${keys.length} Redis keys`);
     }
   } catch (err) {
-    logger.warn(`[Workspace] Redis purge failed for ${sessionId}`, { err: String(err) });
+    logger.warn(`[PurgeEngine] Redis purge failed for ${sessionId}`, { err: String(err) });
   }
 
-  // 3. Mongo Cleanup (if configured)
+  // 4. Mongo Cleanup
   if (process.env.MONGO_URI) {
     try {
       const { execSync } = await import('child_process');
-      execSync(`mongosh "${process.env.MONGO_URI}" --eval "db.sessions.deleteMany({ sessionId: '${sessionId}' })"`, { stdio: 'ignore' });
+      // Delete session records, logs, and any associated data
+      execSync(`mongosh "${process.env.MONGO_URI}" --eval "db.sessions.deleteMany({ sessionId: '${sessionId}' }); db.logs.deleteMany({ sessionId: '${sessionId}' });"`, { stdio: 'ignore' });
+      logger.info(`[PurgeEngine] Mongo records cleared`);
     } catch (err) {
       // Non-critical
     }
   }
 
-  logger.warn(`[Workspace] Purged session ${sessionId} for ${telegramId} (Files + DB)`);
+  // 5. Memory Cache & Registry Cleanup
+  try {
+    const { markPurged, closeSocket } = await import('../whatsapp/socket-manager.js');
+    markPurged(sessionId);
+    await closeSocket(sessionId);
+  } catch {}
+
+  // 6. Session Files (Auth + Logs + Meta)
+  if (fs.existsSync(dir)) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      logger.info(`[PurgeEngine] Session directory removed: ${dir}`);
+    } catch (err) {
+      logger.error(`[PurgeEngine] Failed to remove directory ${dir}`, { err: String(err) });
+    }
+  }
+
+  logger.warn(`[PurgeEngine] Session ${sessionId} fully purged.`);
 }
 
 /**

@@ -149,11 +149,21 @@ export function createWebApp(): express.Express {
       const phone = normalizePairingPhone(String(req.body.phone ?? ''));
       const label = String(req.body.label ?? 'Workspace').slice(0, 64);
       const pairMethod = req.body.method === 'code' ? 'code' : 'qr';
-      const sessionId = `web_${userId}_${phone}`;
-      const current = pairing.get(sessionId);
-      if (current?.isPairing && current.method === pairMethod) { res.json({ sessionId, reused: true }); return; }
+      const safeName = label.toLowerCase().replace(/\W/g, '_');
+      const sessionId = `web_${userId}_${safeName}_${Math.random().toString(36).slice(2, 10)}`;
+      
       pairing.set(sessionId, { isPairing: true, method: pairMethod });
-      const meta: SessionMeta = { sessionId, telegramId: userId, phone, label, pairMethod, status: 'connecting', errorCount: 0, autoJoinDone: false };
+      const meta: SessionMeta = { 
+        sessionId, 
+        telegramId: userId, 
+        sessionName: label,
+        phone, 
+        label, 
+        pairMethod, 
+        status: 'PAIRING', 
+        errorCount: 0, 
+        autoJoinDone: false 
+      };
       saveSessionMeta(meta); registerSessionOwner(sessionId, userId);
       emit(userId, `Starting ${pairMethod.toUpperCase()} pairing for ${label}`);
       initSocket(meta, {

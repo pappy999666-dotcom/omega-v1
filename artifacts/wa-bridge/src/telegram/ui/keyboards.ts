@@ -107,12 +107,10 @@ export function sessionsListKeyboard(
 
   const rows: IKB[][] = slice.map((s) => {
     const statusIcon = {
-      open: '🟢',
-      frozen: '🔵',
-      error: '🔴',
-      connecting: '🟡',
-      closed: '⚫',
-      banned: '💀',
+      ACTIVE: '🟢',
+      FROZEN: '❄️',
+      PAIRING: '🟡',
+      PURGED: '🔴',
     }[s.status] ?? '⚪';
 
     return [btn(`${statusIcon} ${s.label || s.phone}`, `session:${s.id}:menu`, 'primary')];
@@ -130,14 +128,16 @@ export function sessionsListKeyboard(
 }
 
 export function sessionMenuKeyboard(sessionId: string, status?: string): InlineKeyboardMarkup {
-  const isFrozen = status === 'frozen';
+  const isFrozen = status === 'FROZEN';
+  const isActive = status === 'ACTIVE';
+  
   return {
     inline_keyboard: [
       [btn('📊 Info', `session:${sessionId}:info`, 'primary'), btn('📋 Groups', `session:${sessionId}:groups`, 'primary')],
       isFrozen
-        ? [btn('🔥 Unfreeze', `session:${sessionId}:unfreeze`, 'success')]
-        : [btn('❄️ Freeze', `session:${sessionId}:freeze`, 'danger'), btn('🔄 Re-Init', `session:${sessionId}:reinit`, 'primary')],
-      [btn('🗑 Purge', `session:${sessionId}:purge`, 'danger')],
+        ? [btn('🔥 Resume', `session:${sessionId}:unfreeze`, 'success')]
+        : [btn('❄️ Freeze', `session:${sessionId}:freeze`, 'danger'), btn('🔄 Force Reconnect', `session:${sessionId}:reinit`, 'primary')],
+      [btn('🗑 Purge', `session:${sessionId}:purge`, 'danger'), btn('🔄 Refresh Status', `session:${sessionId}:info`, 'primary')],
       [btn('🔗 Link Collection', `session:${sessionId}:collect`, 'primary'), btn('🚪 Join Manager', `session:${sessionId}:joinmgr`, 'primary')],
       [btn('🖼 Set PFP', `session:${sessionId}:pfp:set`, 'primary'), btn('📸 Get PFP', `session:${sessionId}:pfp:get`, 'primary'), btn('🗑 Remove PFP', `session:${sessionId}:pfp:remove`, 'danger')],
       [btn('✏️ Set Name', `session:${sessionId}:setname`, 'primary'), btn('📝 Set Bio', `session:${sessionId}:setbio`, 'primary')],

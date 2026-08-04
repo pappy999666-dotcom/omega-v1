@@ -88,12 +88,10 @@ export function sessionCard(opts: {
   frozen?: boolean;
 }): string {
   const statusEmoji = {
-    open: '🟢',
-    connecting: '🟡',
-    frozen: '🔵',
-    error: '🔴',
-    banned: '💀',
-    closed: '⚫',
+    ACTIVE: '🟢',
+    PAIRING: '🟡',
+    FROZEN: '❄️',
+    PURGED: '🔴',
   }[opts.status] ?? '⚪';
 
   const lines = [

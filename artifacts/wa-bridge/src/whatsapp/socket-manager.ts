@@ -164,7 +164,7 @@ export async function freezeSession(sessionId: string): Promise<void> {
   const h = registry.get(sessionId);
   if (h) {
     h.frozen = true;
-    updateSessionMeta(h.meta.telegramId, sessionId, { status: 'frozen' });
+    updateSessionMeta(h.meta.telegramId, sessionId, { status: 'FROZEN' });
     // When freezing, we should also close the active connection to save resources
     await closeSocket(sessionId);
     logger.info(`[SocketManager] Frozen: ${sessionId} (Connection closed)`);
@@ -175,7 +175,7 @@ export async function unfreezeSession(sessionId: string): Promise<void> {
   const h = registry.get(sessionId);
   if (h) {
     h.frozen = false;
-    updateSessionMeta(h.meta.telegramId, sessionId, { status: 'open' });
+    updateSessionMeta(h.meta.telegramId, sessionId, { status: 'ACTIVE' });
     logger.info(`[SocketManager] Unfrozen: ${sessionId}`);
     // Auto-reconnect on unfreeze
     await initSocket(h.meta, {});
@@ -186,7 +186,7 @@ export async function unfreezeSession(sessionId: string): Promise<void> {
     if (ownerId) {
       const meta = loadSessionMeta(ownerId, sessionId);
       if (meta) {
-        meta.status = 'open';
+        meta.status = 'ACTIVE';
         saveSessionMeta(meta);
         await initSocket(meta, {});
       }
@@ -348,7 +348,7 @@ export async function initSocket(
       
       const openMeta: SessionMeta = {
         ...meta,
-        status: 'open',
+        status: 'ACTIVE',
         pairedAt: meta.pairedAt ?? Date.now(),
         lastSeen: Date.now(),
         errorCount: 0,
@@ -511,7 +511,21 @@ export async function initSocket(
 
   // Store in registry
   registry.set(sessionId, { socket, meta, frozen: false });
-  updateSessionMeta(telegramId, sessionId, { status: 'connecting' });
+  
+  // Set initial state to PAIRING if not already registered
+  if (!socket.authState.creds.registered) {
+    updateSessionMeta(telegramId, sessionId, { status: 'PAIRING' });
+    
+    // Auto-purge if pairing is abandoned (5 minute timeout)
+    const pairingTimeout = setTimeout(async () => {
+      const current = registry.get(sessionId);
+      if (current && !current.socket.authState.creds.registered) {
+        log.warn('Pairing abandoned (timeout), purging session');
+        await purgeSession(telegramId, sessionId);
+      }
+    }, 5 * 60 * 1000);
+    pairingTimeout.unref();
+  }
 
   return socket;
 }

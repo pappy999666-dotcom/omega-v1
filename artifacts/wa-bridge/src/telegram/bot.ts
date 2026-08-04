@@ -3022,9 +3022,9 @@ async function routeCallback(
       const page = parseInt(params[1] ?? '0', 10);
       const PAGE_SIZE = 10;
       const all = loadPlatformSessions().filter((s: { status: string; sessionId: string }) =>
-        s.status === 'open' || (s.status === 'frozen' && isFrozen(s.sessionId))
+        s.status !== 'PURGED'
       );
-      const statusIcons: Record<string, string> = { open: '🟢', frozen: '🔵', error: '🔴', connecting: '🟡', closed: '⚫', banned: '💣' };
+      const statusIcons: Record<string, string> = { ACTIVE: '🟢', FROZEN: '❄️', PAIRING: '🟡', PURGED: '🔴' };
       const slice = all.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
       const sessionButtons = slice.map((s: { sessionId: string; label?: string; phone: string; telegramId: string; status: string }) => [
         btn(
@@ -3064,6 +3064,15 @@ async function routeCallback(
     if (sub === 'pause') { await handleGlobalPause(ctx, params[1] !== 'off'); return; }
     if (sub === 'maintenance') { await handleMaintenanceToggle(ctx, params[1] !== 'off'); return; }
     if (sub === 'stats') { await handlePlatformStats(ctx); return; }
+    if (sub === 'clear') {
+      const op = params[1];
+      if (op === 'dead') { await handleClearDeadSessions(ctx as BotContext); return; }
+      if (op === 'all') {
+        const stage = params[2];
+        if (stage === 'confirm') { await handleClearAllSessionsConfirm(ctx as BotContext); return; }
+        if (stage === 'execute') { await handleClearAllSessionsExecute(ctx as BotContext); return; }
+      }
+    }
     if (sub === 'update') { await handleUpdateBot(ctx); return; }
     if (sub === 'restart') { await handleRestartBot(ctx); return; }
     if (sub === 'logs' && params[1] === 'stop') { stopLogStream(ctx.telegramId); await ctx.answerCbQuery('Stream stopped').catch(() => {}); return; }

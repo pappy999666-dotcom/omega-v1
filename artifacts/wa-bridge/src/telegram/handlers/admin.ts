@@ -336,31 +336,98 @@ export async function handleMaintenanceToggle(ctx: Context, enabled: boolean): P
 // ── Platform Stats ────────────────────────────────────────
 
 export async function handlePlatformStats(ctx: Context): Promise<void> {
-  const sockets = getAllSockets();
   const userIds = getAllUserIds();
   const master = getMasterActiveBucket(userIds);
+  const { loadAllSessions } = await import('../../services/workspace.js');
 
-  let totalActive = 0;
-  let totalFrozen = 0;
-  for (const [, h] of sockets.entries()) {
-    if (h.frozen) totalFrozen++;
-    else totalActive++;
+  let active = 0;
+  let pairing = 0;
+  let frozen = 0;
+  let purged = 0;
+
+  for (const id of userIds) {
+    const sessions = Object.values(loadAllSessions(id));
+    for (const s of sessions) {
+      if (s.status === 'ACTIVE') active++;
+      else if (s.status === 'PAIRING') pairing++;
+      else if (s.status === 'FROZEN') frozen++;
+      else if (s.status === 'PURGED') purged++;
+    }
   }
 
   const text = [
     header('Platform Statistics', '📊'),
     '',
     kv('Total Users:', String(userIds.length)),
-    kv('Active Sessions:', String(totalActive)),
-    kv('Frozen Sessions:', String(totalFrozen)),
+    '',
+    kv('🟢 Active:', String(active)),
+    kv('🟡 Pairing:', String(pairing)),
+    kv('❄️ Frozen:', String(frozen)),
+    kv('🔴 Purged:', String(purged)),
+    '',
     kv('Master Active Links:', String(master.length)),
     kv('Uptime:', humanUptime()),
   ].join('\n');
 
   await ctx.editMessageText(text, {
     parse_mode: 'HTML',
-    reply_markup: backKeyboard('admin:panel'),
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '🗑 Clear Dead Sessions', callback_data: 'admin:clear:dead' }],
+        [{ text: '🧨 Clear All Sessions', callback_data: 'admin:clear:all:confirm' }],
+        [{ text: '🔙 Back', callback_data: 'admin:panel' }],
+      ],
+    },
   }).catch(() => {});
+}
+
+export async function handleClearDeadSessions(ctx: Context): Promise<void> {
+  const userIds = getAllUserIds();
+  const { loadAllSessions, purgeSession } = await import('../../services/workspace.js');
+  let count = 0;
+
+  for (const id of userIds) {
+    const sessions = Object.values(loadAllSessions(id));
+    for (const s of sessions) {
+      if (s.status === 'PURGED') {
+        await purgeSession(id, s.sessionId);
+        count++;
+      }
+    }
+  }
+
+  await ctx.answerCbQuery(`Cleared ${count} dead sessions`).catch(() => {});
+  await handlePlatformStats(ctx);
+}
+
+export async function handleClearAllSessionsConfirm(ctx: Context): Promise<void> {
+  await ctx.editMessageText(
+    `${header('Confirm: Clear ALL Sessions', '⚠️')}\n\nThis will delete EVERY session on the entire platform. This cannot be undone.`,
+    {
+      parse_mode: 'HTML',
+      reply_markup: confirmKeyboard(
+        'admin:clear:all:execute',
+        'admin:stats'
+      ),
+    }
+  ).catch(() => {});
+}
+
+export async function handleClearAllSessionsExecute(ctx: Context): Promise<void> {
+  const userIds = getAllUserIds();
+  const { loadAllSessions, purgeSession } = await import('../../services/workspace.js');
+  let count = 0;
+
+  for (const id of userIds) {
+    const sessions = Object.values(loadAllSessions(id));
+    for (const s of sessions) {
+      await purgeSession(id, s.sessionId);
+      count++;
+    }
+  }
+
+  await ctx.answerCbQuery(`Cleared ${count} sessions`).catch(() => {});
+  await handlePlatformStats(ctx);
 }
 
 function humanUptime(): string {
