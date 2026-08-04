@@ -1252,7 +1252,7 @@ export function createBot(): Telegraf<BotContext> {
 
       const sessionId = makeDraftSessionId(ctx.telegramId, phone);
       const existing = loadSessionMeta(ctx.telegramId, sessionId);
-      if (existing?.status === 'open') {
+      if (existing?.status === 'ACTIVE') {
         resetOnboarding(ctx);
         await ctx.reply(noticeCard('Session Already Connected', `${onboarding.label} is already active for ${phone}.`, 'warning'), {
           parse_mode: 'HTML',
@@ -1270,7 +1270,7 @@ export function createBot(): Telegraf<BotContext> {
         }),
         label: onboarding.label,
         phone,
-        status: 'closed',
+        status: 'PAIRING',
         pairMethod: existing?.pairMethod ?? 'qr',
       });
       ctx.session.onboarding = { stage: 'method', label: onboarding.label, phone, sessionId };
@@ -1855,7 +1855,7 @@ async function routeCallback(
   if (action === 'session') {
     if (params[0] === 'new' && params[1] === 'cancel') {
       const draftSessionId = ctx.session.onboarding?.sessionId;
-      if (draftSessionId && loadSessionMeta(ctx.telegramId, draftSessionId)?.status === 'closed') {
+      if (draftSessionId && loadSessionMeta(ctx.telegramId, draftSessionId)?.status === 'PAIRING') {
         purgeSession(ctx.telegramId, draftSessionId);
       }
       resetOnboarding(ctx);
@@ -1884,7 +1884,7 @@ async function routeCallback(
       if (!meta) { await ctx.answerCbQuery('Session not found'); return; }
       const { sessionCard } = await import('../utils/formatter.js');
       await ctx.editMessageText(
-        sessionCard({ sessionId, label: meta.label, phone: meta.phone, status: meta.status, paired: meta.status === 'open' }),
+        sessionCard({ sessionId, label: meta.label, phone: meta.phone, status: meta.status, paired: meta.status === 'ACTIVE' }),
         { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId, meta.status) }
       ).catch(() => {});
       return;
@@ -1907,7 +1907,7 @@ async function routeCallback(
           waName = c?.name ?? c?.notify ?? '';
         } catch { /* ignore */ }
       }
-      const statusEmoji = { open: '🟢', connecting: '🟡', frozen: '🔵', dead: '💀', purged: '🗑️', error: '🔴', banned: '💀', closed: '⚫' }[meta.status] ?? '⚪';
+      const statusEmoji = { ACTIVE: '🟢', PAIRING: '🟡', FROZEN: '❄️', PURGED: '🔴' }[meta.status as string] ?? '⚪';
       const text = [
         `${statusEmoji} <b>Session Info</b>`,
         `<code>------------------------------</code>`,
@@ -1916,7 +1916,7 @@ async function routeCallback(
         waName ? `👤 <b>WA Name:</b> ${escape(waName)}` : '',
         waBio ? `📝 <b>Bio:</b> ${escape(waBio)}` : '',
         `📊 <b>Status:</b> ${statusEmoji} ${meta.status.toUpperCase()}`,
-        `🔗 <b>Paired:</b> ${meta.status === 'open' ? '✅ Yes' : '❌ No'}`,
+        `🔗 <b>Paired:</b> ${meta.status === 'ACTIVE' ? '✅ Yes' : '❌ No'}`,
         meta.pairedAt ? `⏰ <b>Since:</b> ${new Date(meta.pairedAt).toLocaleString()}` : '',
         ``,
         `<blockquote expandable>🔑 Session ID\n<code>${escape(sessionId)}</code></blockquote>`,

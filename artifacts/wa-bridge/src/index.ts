@@ -20,7 +20,7 @@ import { startSessionCleaner } from './services/session-cleaner.js';
 import { setAlertCallback, setEventCallback, getUserSockets, getSocket, closeAllSockets } from './whatsapp/socket-manager.js';
 import { handleWAEvent, registerSessionOwner } from './whatsapp/event-handlers.js';
 import { createBot, createAlertSender } from './telegram/bot.js';
-import { getAllUserIds, loadAllSessions, purgeSession } from './services/workspace.js';
+import { getAllUserIds, loadAllSessions, purgeSession, sessionAuthDir } from './services/workspace.js';
 import { setOutreachBotRef } from './services/workers/outreach-worker.js';
 import { setValidatorBotRef } from './services/workers/validator-worker.js';
 import { setLifecycleBotRef } from './services/workers/lifecycle-worker.js';
@@ -285,7 +285,7 @@ async function restoreSessions(): Promise<void> {
         // We use initSocket which will attempt connection.
         // If the credentials are dead, the Baileys engine will emit a disconnect.
         // However, we can also do a quick check on the auth folder here.
-        const authDir = path.join(WORKSPACE_ROOT, telegramId, 'sessions', sessionId, 'auth');
+        const authDir = sessionAuthDir(telegramId, sessionId);
         if (!fs.existsSync(path.join(authDir, 'creds.json'))) {
           logger.error(`[Boot] Auth credentials missing for ${sessionId}. Purging.`);
           await purgeSession(telegramId, sessionId);

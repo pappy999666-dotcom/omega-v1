@@ -78,7 +78,7 @@ export async function runSessionCleanup(): Promise<void> {
     }
 
     // Check for dead sockets (Baileys might leave them hanging)
-    if (handle.socket.ws?.readyState === 3) { // CLOSED
+    if ((handle.socket as any).ws?.readyState === 3) { // CLOSED
       logger.warn(`[SessionCleaner] Detected dead socket: ${sessionId}`);
       await closeSocket(sessionId);
       cleanedCount++;

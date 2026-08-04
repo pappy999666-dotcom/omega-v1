@@ -260,7 +260,7 @@ export function loadSessionMeta(
     if (['connecting', 'error'].includes(status)) status = 'PAIRING' as any;
     if (['open', 'closed'].includes(status)) status = 'ACTIVE' as any;
     if (['dead', 'purged', 'banned'].includes(status)) status = 'PURGED' as any;
-    if (status === 'frozen') status = 'FROZEN' as any;
+    if ((status as string) === 'frozen') status = 'FROZEN' as any;
 
     return {
       ...stored,
