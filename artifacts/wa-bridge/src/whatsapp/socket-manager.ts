@@ -437,7 +437,7 @@ export async function initSocket(
 
       if (action.action === 'freeze') {
         registry.delete(sessionId);
-        updateSessionMeta(telegramId, sessionId, { status: 'frozen' });
+        updateSessionMeta(telegramId, sessionId, { status: 'FROZEN' });
         await alertCallback?.(
           telegramId,
           `⚠️ Session <code>${sessionId}</code> frozen.\n` +
@@ -449,7 +449,7 @@ export async function initSocket(
       if (action.action === 'reconnect' || action.action === 'backoff') {
         if (!allowReconnect(sessionId)) {
           registry.delete(sessionId);
-          updateSessionMeta(telegramId, sessionId, { status: 'frozen' });
+          updateSessionMeta(telegramId, sessionId, { status: 'FROZEN' });
           log.warn('Reconnect cooldown activated after repeated failures');
           await alertCallback?.(
             telegramId,

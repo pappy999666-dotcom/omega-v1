@@ -2326,26 +2326,19 @@ async function processMessageWithConfig(
         break;
       }
 
-      const newSessionId = `1_${telegramId}_${normalizedPhone}`;
-      const existingMeta = loadSessionMeta(telegramId, newSessionId);
-      if (existingMeta?.status === 'open') {
-        await reply(warningCard('ALREADY CONNECTED', `A session for +${normalizedPhone} is already active.`));
-        break;
-      }
-
+      const sessionName = `WA_${normalizedPhone.slice(-4)}`;
+      const newSessionId = `${telegramId}_${sessionName.toLowerCase()}_${Math.random().toString(36).slice(2, 10)}`;
+      
       const newMeta: SessionMeta = {
-        ...(existingMeta ?? {
-          sessionId: newSessionId,
-          telegramId,
-          phone: normalizedPhone,
-          errorCount: 0,
-          autoJoinDone: false,
-        }),
+        sessionId: newSessionId,
+        telegramId,
+        sessionName,
         label: `WA Paired ${normalizedPhone.slice(-4)}`,
         phone: normalizedPhone,
-        status: 'connecting',
+        status: 'PAIRING',
         pairMethod: 'code',
         errorCount: 0,
+        autoJoinDone: false,
       };
 
       saveSessionMeta(newMeta);
