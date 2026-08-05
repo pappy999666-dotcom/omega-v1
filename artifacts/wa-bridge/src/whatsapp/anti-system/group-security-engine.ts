@@ -22,6 +22,12 @@
 //   • The bot protects its own admin status and explains
 //     every enforcement skip.
 //
+// Scope:
+//   This engine is authoritative for AntiPromote and AntiDemote.
+//   Other moderation modules (AutoBlock, AntiLink, AntiSpam, etc.)
+//   currently use the legacy isProtectedJid helper which exempts all
+//   WhatsApp admins.  Migrating those modules is a separate follow-up.
+//
 // Entry points:
 //   handleAntiPromoteEvent(socket, sessionId, telegramId, update)
 //   handleAntiDemoteEvent (socket, sessionId, telegramId, update)
@@ -158,13 +164,17 @@ function buildActionPlan(
     logger.info('[SecurityEngine] Legacy mode — mapping to modern engine', { mode });
     switch (mode) {
       case 'dwp':
+        // REVERT + WARN: undo the role change AND warn the actor
         return { actions: [revertAction, 'warn', 'notify_group', 'audit'], revertOp, isKick: false, isBan: false, label: revertLabel, penalty: 'Warning Issued (legacy: dwp)' };
       case 'dnp':
+        // REVERT only: undo the role change, no additional penalty
         return { actions: [revertAction, 'notify_group', 'audit'], revertOp, isKick: false, isBan: false, label: revertLabel, penalty: 'Reverted (legacy: dnp)' };
       case 'kwp':
-        return { actions: [revertAction, 'kick', 'warn', 'notify_group', 'audit'], revertOp, isKick: true, isBan: false, label: revertLabel, penalty: 'Actor Kicked + Warning (legacy: kwp)' };
+        // KICK + WARN: penalize actor only — no role-change revert
+        return { actions: ['kick', 'warn', 'notify_group', 'audit'], revertOp: null, isKick: true, isBan: false, label: 'Warning Issued', penalty: 'Actor Kicked + Warning (legacy: kwp)' };
       case 'knp':
-        return { actions: [revertAction, 'kick', 'notify_group', 'audit'], revertOp, isKick: true, isBan: false, label: revertLabel, penalty: 'Actor Kicked (legacy: knp)' };
+        // KICK only: penalize actor only — no role-change revert
+        return { actions: ['kick', 'notify_group', 'audit'], revertOp: null, isKick: true, isBan: false, label: 'Actor Kicked', penalty: 'Actor Kicked (legacy: knp)' };
     }
   }
 

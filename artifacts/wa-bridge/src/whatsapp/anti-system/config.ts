@@ -335,19 +335,25 @@ export function setDemoteMode(
   saveSessionAntiConfig(telegramId, sessionId, all);
 }
 
-/** @deprecated kept for migration; new code uses setDemoteMode with GroupSecurityMode */
+/**
+ * Store a legacy mode string directly in the config so the security engine
+ * can apply the exact correct action chain:
+ *   dwp → REVERT + WARN
+ *   dnp → REVERT
+ *   kwp → KICK + WARN  (no revert)
+ *   knp → KICK         (no revert)
+ *
+ * @deprecated Use setDemoteMode with a GroupSecurityMode value for new configs.
+ *   This function must remain so that existing/migrated legacy configs preserve
+ *   their behaviour end-to-end rather than silently converting to the wrong mode.
+ */
 export function setDemotelLegacyMode(
   telegramId: string,
   sessionId: string,
   groupJid: string,
   legacyMode: AntiDemoteMode
 ): void {
-  // Map legacy → new mode
-  const modeMap: Record<AntiDemoteMode, GroupSecurityMode> = {
-    dwp: 'warn',   // demote, no restore
-    dnp: 'revert', // demote, restore victim
-    kwp: 'kick',   // kick, no restore
-    knp: 'kick',   // kick, restore victim
-  };
-  setDemoteMode(telegramId, sessionId, groupJid, modeMap[legacyMode] ?? 'revert');
+  // Store the legacy mode string as-is — the security engine's compat layer
+  // maps it to the correct action chain at enforcement time.
+  setDemoteMode(telegramId, sessionId, groupJid, legacyMode);
 }

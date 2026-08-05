@@ -264,7 +264,11 @@ export function handleAntiWordList(
 // ── Security module mode parser ───────────────────────────────
 
 function parseSecurityMode(arg: string): GroupSecurityMode | null {
-  const valid: GroupSecurityMode[] = ['off', 'warn', 'revert', 'kick', 'ban'];
+  const valid: GroupSecurityMode[] = [
+    'off', 'warn', 'revert', 'kick', 'ban',
+    // Legacy modes — mapped internally by the security engine:
+    'dwp', 'dnp', 'kwp', 'knp',
+  ];
   if (valid.includes(arg as GroupSecurityMode)) return arg as GroupSecurityMode;
   return null;
 }
@@ -273,7 +277,8 @@ const SECURITY_MODE_USAGE =
   `${bold('warn')}   — warn actor, no role change\n` +
   `${bold('revert')} — undo the role change\n` +
   `${bold('kick')}   — revert + kick actor\n` +
-  `${bold('ban')}    — revert + kick + block actor`;
+  `${bold('ban')}    — revert + kick + block actor\n` +
+  `${italic('Legacy:')} dwp (revert+warn) · dnp (revert) · kwp (kick+warn) · knp (kick)`;
 
 // ── AntiPromote command handler ───────────────────────────────
 

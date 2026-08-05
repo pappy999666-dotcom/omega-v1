@@ -86,25 +86,29 @@ function getTrustedAdminNumbers(sessionCfg: import('../../types/index.js').UserC
 }
 
 // ── Core Classification ────────────────────────────────────
+//
+// Current scope: AntiPromote and AntiDemote.
+// Other moderation modules (AutoBlock, AntiLink, AntiSpam, etc.) still
+// use the legacy isProtectedJid helper, which exempts all WhatsApp admins.
+// Migrating those modules to classifyActor is a separate follow-up task.
 
 /**
  * Classify an actor by permission level and determine whether enforcement
  * should proceed.
  *
  * Checks (in priority order):
- *  1. Bot cannot be its own actor target
- *  2. Group metadata must be fetchable
- *  3. Bot must be admin (otherwise enforcement is impossible)
- *  4. Actor is the bot itself → skip (own action)
- *  5. Actor number in ownerWaNumbers → SESSION_OWNER / WORKSPACE_OWNER
- *  6. Actor number in trustedAdminNumbers → TRUSTED_ADMIN
- *  7. Actor number in sudoNumbers → SUDO_USER
- *  8. Actor number in per-module permit list → TEMPORARY_PERMIT
- *  9. Actor is a WhatsApp admin → WA_ADMIN  (NOT exempt; enforcement proceeds)
- * 10. Everyone else → NONE  (enforcement proceeds)
+ *  1. Group metadata must be fetchable
+ *  2. Bot must be admin (otherwise enforcement is impossible)
+ *  3. Actor is the bot itself → skip (own action)
+ *  4. Actor number in ownerWaNumbers → GLOBAL_OWNER or SESSION_OWNER
+ *  5. Actor number in trustedAdminNumbers → TRUSTED_ADMIN
+ *  6. Actor number in sudoNumbers → SUDO_USER
+ *  7. Actor number in per-module permit list → TEMPORARY_PERMIT
+ *  8. Actor is a WhatsApp admin (regular or superadmin) → WA_ADMIN (enforced)
+ *  9. Everyone else → NONE (enforced)
  *
- * The WA group owner (superadmin) is treated as WA_ADMIN for enforcement
- * purposes unless they appear in a higher-trust list.
+ * The WA group owner (superadmin) is treated as WA_ADMIN unless they appear
+ * in a higher-trust list.  Group admin status alone never grants exemption.
  */
 export async function classifyActor(
   socket: WASocket,
