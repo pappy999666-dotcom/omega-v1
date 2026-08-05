@@ -10,7 +10,9 @@ export interface UserConfig {
   prefix: string;               // Custom command prefix
   nullPrefix: boolean;          // Always-listen mode
   stickerMacros: Record<string, string>; // sticker hash → command
-  sudoNumbers?: string[];        // normalized WhatsApp numbers allowed to run commands
+  sudoNumbers?: string[];           // normalized WhatsApp numbers allowed to run commands
+  ownerWaNumbers?: string[];        // WA numbers classified as Session/Workspace Owner by security engine
+  trustedAdminNumbers?: string[];   // WA numbers classified as Trusted Admin by security engine
   defaultLinkCollection?: boolean;
   notificationsEnabled?: boolean;
   autoValidationEnabled?: boolean;

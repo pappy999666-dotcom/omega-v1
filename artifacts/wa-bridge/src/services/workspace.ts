@@ -61,6 +61,8 @@ function defaultConfig(telegramId: string): UserConfig {
     nullPrefix: false,
     stickerMacros: {},
     sudoNumbers: [],
+    ownerWaNumbers: [],
+    trustedAdminNumbers: [],
     defaultLinkCollection: false,
     notificationsEnabled: true,
     autoValidationEnabled: false,
@@ -151,7 +153,7 @@ export function loadConfig(telegramId: string): UserConfig {
   if (!fs.existsSync(p)) return defaultConfig(telegramId);
   try {
     const stored = JSON.parse(fs.readFileSync(p, 'utf8')) as Partial<UserConfig>;
-    return { ...defaultConfig(telegramId), ...stored, sudoNumbers: stored.sudoNumbers ?? [], forceJoinTargets: stored.forceJoinTargets ?? [] };
+    return { ...defaultConfig(telegramId), ...stored, sudoNumbers: stored.sudoNumbers ?? [], forceJoinTargets: stored.forceJoinTargets ?? [], ownerWaNumbers: stored.ownerWaNumbers ?? [], trustedAdminNumbers: stored.trustedAdminNumbers ?? [] };
   } catch {
     return defaultConfig(telegramId);
   }
@@ -214,6 +216,8 @@ export function loadSessionConfig(telegramId: string, sessionId: string): UserCo
       stickerMacros: { ...(base.stickerMacros ?? {}), ...(stored.stickerMacros ?? {}) },
       sudoNumbers: stored.sudoNumbers ?? base.sudoNumbers ?? [],
       forceJoinTargets: stored.forceJoinTargets ?? base.forceJoinTargets ?? [],
+      ownerWaNumbers: stored.ownerWaNumbers ?? base.ownerWaNumbers ?? [],
+      trustedAdminNumbers: stored.trustedAdminNumbers ?? base.trustedAdminNumbers ?? [],
       statusDesignStickyThemes: { ...(base.statusDesignStickyThemes ?? {}), ...(stored.statusDesignStickyThemes ?? {}) },
     };
   } catch {

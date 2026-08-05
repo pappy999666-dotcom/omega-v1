@@ -68,25 +68,19 @@ export function getSkipReason(level: PermissionLevel): SkipReason | undefined {
  * Resolve all WhatsApp numbers that should be treated as Session Owner /
  * Workspace Owner for the given workspace.
  *
- * The owner can register their personal WA numbers in the workspace config
- * under `ownerWaNumbers` (string[]).  This is an optional extension field;
- * if absent, only the sudoNumbers list is used (SUDO_USER level).
+ * Stored in `ownerWaNumbers` (string[]) in UserConfig.
+ * If absent, only the sudoNumbers list is used (SUDO_USER level).
  */
-function getOwnerWaNumbers(
-  sessionCfg: { ownerWaNumbers?: string[]; isOwner?: boolean } | null
-): string[] {
+function getOwnerWaNumbers(sessionCfg: import('../../types/index.js').UserConfig | null): string[] {
   if (!sessionCfg) return [];
   return (sessionCfg.ownerWaNumbers ?? []).map((n) => n.replace(/\D/g, ''));
 }
 
 /**
  * Resolve all numbers explicitly configured as Trusted Admins.
- * Stored in `trustedAdminNumbers` (string[]) in session config.
- * This is an extension point — currently defaults to empty.
+ * Stored in `trustedAdminNumbers` (string[]) in UserConfig.
  */
-function getTrustedAdminNumbers(
-  sessionCfg: { trustedAdminNumbers?: string[] } | null
-): string[] {
+function getTrustedAdminNumbers(sessionCfg: import('../../types/index.js').UserConfig | null): string[] {
   if (!sessionCfg) return [];
   return (sessionCfg.trustedAdminNumbers ?? []).map((n) => n.replace(/\D/g, ''));
 }
@@ -176,13 +170,10 @@ export async function classifyActor(
   ).catch(() => null);
 
   // 5. Global Owner / Session Owner / Workspace Owner
-  //    (configurable ownerWaNumbers field in session config)
-  const ownerNums = getOwnerWaNumbers(sessionCfg as { ownerWaNumbers?: string[]; isOwner?: boolean } | null);
+  //    (ownerWaNumbers field in UserConfig, persisted in workspace config)
+  const ownerNums = getOwnerWaNumbers(sessionCfg);
   if (ownerNums.includes(actorNum)) {
-    const level: PermissionLevel =
-      (sessionCfg as { isOwner?: boolean } | null)?.isOwner
-        ? 'GLOBAL_OWNER'
-        : 'SESSION_OWNER';
+    const level: PermissionLevel = sessionCfg?.isOwner ? 'GLOBAL_OWNER' : 'SESSION_OWNER';
     logger.info('[SecurityAuth] Actor classified', {
       level, actorNum, sessionId, groupJid,
     });
@@ -194,10 +185,8 @@ export async function classifyActor(
     };
   }
 
-  // 6. Trusted Admin
-  const trustedNums = getTrustedAdminNumbers(
-    sessionCfg as { trustedAdminNumbers?: string[] } | null
-  );
+  // 6. Trusted Admin (trustedAdminNumbers field in UserConfig)
+  const trustedNums = getTrustedAdminNumbers(sessionCfg);
   if (trustedNums.includes(actorNum)) {
     logger.info('[SecurityAuth] Actor classified', {
       level: 'TRUSTED_ADMIN', actorNum, sessionId, groupJid,
