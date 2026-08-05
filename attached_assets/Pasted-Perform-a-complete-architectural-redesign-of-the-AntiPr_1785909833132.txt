@@ -1,0 +1,335 @@
+Perform a complete architectural redesign of the AntiPromote and AntiDemote engine. This is a security subsystem, not just another command. Do NOT patch the existing implementation. Audit the entire enforcement pipeline and rebuild it into a production-grade security engine.
+
+════════════════════════════════════
+1. REDESIGN THE AUTHORIZATION ENGINE
+════════════════════════════════════
+
+The current permission logic is fundamentally flawed.
+
+The engine currently assumes that because someone is a WhatsApp admin, they are automatically trusted.
+
+That assumption is wrong.
+
+Being a WhatsApp admin only means they have administrative privileges inside that group. It must NEVER mean they are exempt from security enforcement.
+
+Completely separate these concepts.
+
+Create distinct permission levels:
+
+• WhatsApp Admin
+• Trusted Admin
+• Workspace Owner
+• Session Owner
+• Global Owner
+• Sudo User
+• Temporary Permit
+• Protected Identity
+
+These are NOT the same thing.
+
+The authorization engine must determine exactly which level an actor belongs to before deciding whether enforcement should occur.
+
+Never use group-admin status alone to bypass AntiPromote or AntiDemote.
+
+════════════════════════════════════
+2. ANTIPROMOTE / ANTIDEMOTE MUST ENFORCE AGAINST EVERY ADMIN
+════════════════════════════════════
+
+The system must be capable of taking action against ANY administrator who is not explicitly protected.
+
+This includes:
+
+✓ Newly promoted admins
+
+✓ Existing admins
+
+✓ Senior admins
+
+✓ Group creators (where WhatsApp allows enforcement)
+
+✓ Every administrator except explicitly protected identities.
+
+The bot must inspect WHO performed the action instead of simply checking whether they are an admin.
+
+Group admin status alone must never bypass enforcement.
+
+════════════════════════════════════
+3. OWNER IS NOT ABOVE DETECTION
+════════════════════════════════════
+
+The owner must still be monitored.
+
+If the Global Owner, Session Owner, or another explicitly trusted identity performs a promotion or demotion:
+
+• Detect the event.
+• Record it.
+• Log it.
+• Audit it.
+
+Do NOT ignore it.
+
+However:
+
+Protected identities should not receive punishment.
+
+Instead log:
+
+Owner action detected.
+
+Workspace Owner action detected.
+
+Trusted Admin action detected.
+
+Every security event must still appear in the audit trail.
+
+════════════════════════════════════
+4. BOT SELF-PROTECTION ENGINE
+════════════════════════════════════
+
+Add a dedicated Bot Protection layer.
+
+If someone attempts to demote the bot:
+
+Immediately detect the action.
+
+If the bot still has sufficient privileges:
+
+• Restore its own admin status if possible.
+• Reapply required permissions.
+• Continue enforcement.
+
+If restoration is impossible:
+
+Notify the group.
+
+Example:
+
+❌ Security Alert
+
+Bot administrative privileges were removed.
+
+Automatic enforcement has been suspended.
+
+Please promote the bot again to restore security.
+
+Do NOT silently fail.
+
+════════════════════════════════════
+5. FAILED ENFORCEMENT RECOVERY
+════════════════════════════════════
+
+Whenever enforcement cannot be completed, explain exactly why.
+
+Examples:
+
+Skipped:
+Reason: Global Owner
+
+Skipped:
+Reason: Session Owner
+
+Skipped:
+Reason: Trusted Admin
+
+Skipped:
+Reason: Temporary Permit
+
+Skipped:
+Reason: Bot is no longer Admin
+
+Skipped:
+Reason: Missing WhatsApp Permission
+
+Skipped:
+Reason: Invalid Actor
+
+Skipped:
+Reason: Unknown Group State
+
+Silent exits are forbidden.
+
+════════════════════════════════════
+6. LEGACY MODE SUPPORT
+════════════════════════════════════
+
+The following legacy enforcement modes must remain fully functional:
+
+dwp
+
+dnp
+
+kwp
+
+knp
+
+Implement a compatibility layer.
+
+Map them internally to the modern engine.
+
+Example:
+
+dwp → REVERT + WARN
+
+dnp → REVERT
+
+kwp → KICK + WARN
+
+knp → KICK
+
+Unknown modes must:
+
+• Produce structured logs.
+• Fall back safely.
+• Never silently do nothing.
+
+════════════════════════════════════
+7. ACTION EXECUTION ENGINE
+════════════════════════════════════
+
+AntiPromote and AntiDemote must support configurable actions.
+
+Available actions include:
+
+• Revert promotion
+
+• Revert demotion
+
+• Warn actor
+
+• Kick actor
+
+• Ban actor
+
+• Delete offending event message if available
+
+• Notify group
+
+• Notify session owner
+
+• Notify Telegram
+
+• Write security audit log
+
+Actions should be chainable.
+
+Example:
+
+REVERT → WARN → LOG
+
+or
+
+REVERT → KICK → LOG
+
+or
+
+WARN → TELEGRAM → AUDIT
+
+Do not hardcode behavior.
+
+════════════════════════════════════
+8. CENTRAL SECURITY SERVICE
+════════════════════════════════════
+
+Move all authorization and enforcement into one centralized Security Engine.
+
+It must be shared by:
+
+• AntiPromote
+
+• AntiDemote
+
+• Kick
+
+• Ban
+
+• Warn
+
+• AutoBlock
+
+• AntiLink
+
+• AntiSpam
+
+• AntiBot
+
+• Future moderation modules
+
+No duplicated permission logic.
+
+No duplicated protection checks.
+
+One authoritative security service.
+
+════════════════════════════════════
+9. STRUCTURED SECURITY LOGGING
+════════════════════════════════════
+
+Every enforcement decision must generate structured logs.
+
+Include:
+
+• Timestamp
+
+• Workspace ID
+
+• Session ID
+
+• Group ID
+
+• Actor JID
+
+• Target JID
+
+• Event Type
+
+• Enforcement Mode
+
+• Executed Actions
+
+• Skip Reason (if any)
+
+• Success / Failure
+
+Logs must be searchable and suitable for production debugging.
+
+════════════════════════════════════
+10. VALIDATION MATRIX
+════════════════════════════════════
+
+Verify all scenarios:
+
+✓ Global Owner promotes someone → detected, logged, no punishment
+
+✓ Global Owner demotes someone → detected, logged, no punishment
+
+✓ Session Owner promotes → detected, logged, no punishment
+
+✓ Trusted Admin promotes → detected, logged, no punishment
+
+✓ Trusted Admin demotes → detected, logged, no punishment
+
+✓ Normal Admin promotes → AntiPromote executes
+
+✓ Normal Admin demotes → AntiDemote executes
+
+✓ Bot is demoted → Self-Protection Engine triggers
+
+✓ Bot cannot recover → Group receives recovery message
+
+✓ Legacy mode dwp executes correctly
+
+✓ Legacy mode dnp executes correctly
+
+✓ Legacy mode kwp executes correctly
+
+✓ Legacy mode knp executes correctly
+
+✓ Invalid mode logs an error and safely falls back
+
+✓ Every branch produces either an action or a logged reason
+
+════════════════════════════════════
+FINAL REQUIREMENT
+════════════════════════════════════
+
+Rebuild AntiPromote and AntiDemote into a production-grade security subsystem. Monitor every administrative action regardless of who performs it, distinguish detection from punishment, and only exempt explicitly trusted identities from penalties—not from auditing. Ensure the bot can protect itself, explain every skipped enforcement, preserve backward compatibility with legacy modes, centralize all authorization logic, eliminate silent failures, and guarantee that every promotion or demotion event results in either a security action or a recorded audit entry.
