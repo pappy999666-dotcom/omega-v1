@@ -52,6 +52,7 @@ import {
   handleAntiRemoveWord,
   handleAntiWordList,
   handleAntiDemote,
+  handleAntiPromoteCmd,
   handleAntiStatus,
 } from './anti-system/commands.js';
 // ── Group Moderation Commands ─────────────────────────────
@@ -1775,7 +1776,7 @@ async function processMessageWithConfig(
 
     // ── AntiPromote ──
     case 'antipromote': {
-      await reply(handleAntiCommand('antipromote', 'antipromote', args, telegramId, sessionId, groupJid, config.prefix));
+      await reply(handleAntiPromoteCmd(args, telegramId, sessionId, groupJid, config.prefix));
       break;
     }
 

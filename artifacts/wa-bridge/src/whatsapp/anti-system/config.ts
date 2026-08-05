@@ -14,8 +14,10 @@ import type {
   AntiSpamConfig,
   AntiWordsConfig,
   AntiDemoteConfig,
+  AntiPromoteConfig,
   AntiAction,
   AntiDemoteMode,
+  GroupSecurityMode,
 } from './types.js';
 
 // ── Defaults ──────────────────────────────────────────────
@@ -44,10 +46,17 @@ export function defaultWordsConfig(): AntiWordsConfig {
   };
 }
 
+export function defaultPromoteConfig(): AntiPromoteConfig {
+  return {
+    ...defaultModuleConfig('kick'),
+    mode: 'revert',
+  };
+}
+
 export function defaultDemoteConfig(): AntiDemoteConfig {
   return {
     ...defaultModuleConfig('kick'),
-    mode: 'dwp',
+    mode: 'revert',
   };
 }
 
@@ -296,17 +305,49 @@ export function removeWord(
   saveSessionAntiConfig(telegramId, sessionId, all);
 }
 
+// ── AntiPromote mode update ────────────────────────────────
+
+export function setPromoteMode(
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  mode: GroupSecurityMode
+): void {
+  const all = loadSessionAntiConfig(telegramId, sessionId);
+  if (!all[groupJid]) all[groupJid] = { groupJid };
+  const existing = (all[groupJid].antipromote ?? defaultPromoteConfig()) as AntiPromoteConfig;
+  all[groupJid].antipromote = { ...existing, enabled: true, mode };
+  saveSessionAntiConfig(telegramId, sessionId, all);
+}
+
 // ── AntiDemote mode update ────────────────────────────────
 
 export function setDemoteMode(
   telegramId: string,
   sessionId: string,
   groupJid: string,
-  mode: AntiDemoteMode
+  mode: GroupSecurityMode
 ): void {
   const all = loadSessionAntiConfig(telegramId, sessionId);
   if (!all[groupJid]) all[groupJid] = { groupJid };
   const existing = (all[groupJid].antidemote ?? defaultDemoteConfig()) as AntiDemoteConfig;
   all[groupJid].antidemote = { ...existing, enabled: true, mode };
   saveSessionAntiConfig(telegramId, sessionId, all);
+}
+
+/** @deprecated kept for migration; new code uses setDemoteMode with GroupSecurityMode */
+export function setDemotelLegacyMode(
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  legacyMode: AntiDemoteMode
+): void {
+  // Map legacy → new mode
+  const modeMap: Record<AntiDemoteMode, GroupSecurityMode> = {
+    dwp: 'warn',   // demote, no restore
+    dnp: 'revert', // demote, restore victim
+    kwp: 'kick',   // kick, no restore
+    knp: 'kick',   // kick, restore victim
+  };
+  setDemoteMode(telegramId, sessionId, groupJid, modeMap[legacyMode] ?? 'revert');
 }

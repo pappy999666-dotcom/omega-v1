@@ -3,7 +3,20 @@
 // ============================================================
 
 export type AntiAction = 'kick' | 'warn' | 'delete';
+
+/** @deprecated Legacy mode kept for migration only */
 export type AntiDemoteMode = 'dwp' | 'dnp' | 'kwp' | 'knp';
+
+/**
+ * Unified mode for AntiPromote and AntiDemote.
+ *
+ *  off    — module disabled
+ *  warn   — send a warning card, no role change
+ *  revert — undo the role change (demote promoted / re-promote demoted)
+ *  kick   — revert + kick the actor
+ *  ban    — revert + kick + block the actor
+ */
+export type GroupSecurityMode = 'off' | 'warn' | 'revert' | 'kick' | 'ban';
 
 /** Base config shared by every anti module */
 export interface AntiModuleConfig {
@@ -25,9 +38,20 @@ export interface AntiWordsConfig extends AntiModuleConfig {
   words: string[];         // lowercase blocked words/phrases
 }
 
-/** AntiDemote has a mode flag */
+/**
+ * AntiPromote module config.
+ * Uses GroupSecurityMode instead of legacy AntiAction.
+ */
+export interface AntiPromoteConfig extends AntiModuleConfig {
+  mode: GroupSecurityMode;  // off | warn | revert | kick | ban
+}
+
+/** AntiDemote module config — unified mode system */
 export interface AntiDemoteConfig extends AntiModuleConfig {
-  mode: AntiDemoteMode;    // dwp | dnp | kwp | knp
+  /** New unified mode (off | warn | revert | kick | ban) */
+  mode: GroupSecurityMode;
+  /** @deprecated kept for migration; ignored in new engine */
+  legacyMode?: AntiDemoteMode;
 }
 
 /** Full anti config for a single group */
@@ -51,7 +75,7 @@ export interface GroupAntiConfig {
   antipoll?: AntiModuleConfig;
   antiforward?: AntiModuleConfig;
   antichannel?: AntiModuleConfig;
-  antipromote?: AntiModuleConfig;
+  antipromote?: AntiPromoteConfig;
   antidemote?: AntiDemoteConfig;
   // Per-module custom response overrides
   messages?: Record<string, string>;

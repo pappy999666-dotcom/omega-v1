@@ -28,6 +28,7 @@ import {
   bustGroupMetaCache,
   patchGroupMetaCache,
 } from '../utils/group-permissions.js';
+import { handleAntiPromoteEvent, handleAntiDemoteEvent } from './group-security-engine.js';
 
 // Modules
 import { messageContainsLink } from './modules/anti-link.js';
@@ -333,35 +334,17 @@ export async function handleParticipantUpdate(
   const gc = loadGroupAntiConfig(telegramId, sessionId, groupJid);
 
   // ── AntiPromote ──────────────────────────────────────────
-  if (action === 'promote' && gc.antipromote?.enabled && author) {
-    const authorNumber = normalizeWhatsAppNumber(author);
-    const mod = gc.antipromote;
-    if (!isPermitted(mod, authorNumber)) {
-      logger.info('[AntiSystem] AntiPromote triggered', { sessionId, groupJid, author });
-      const ops: Promise<unknown>[] = [];
-
-      if (mod.action === 'kick') {
-        ops.push(
-          (socket as unknown as {
-            groupParticipantsUpdate(jid: string, p: string[], a: string): Promise<unknown>;
-          }).groupParticipantsUpdate(groupJid, [author], 'remove')
-        );
-      } else {
-        ops.push(
-          (socket as unknown as {
-            groupParticipantsUpdate(jid: string, p: string[], a: string): Promise<unknown>;
-          }).groupParticipantsUpdate(groupJid, [author], 'demote')
-        );
-      }
-
-      const msg = mod.customMessage ?? `⚠️ @${authorNumber} performed an unauthorized promotion and has been actioned.`;
-      ops.push(PreviewManager.send(socket as any, groupJid, msg, {
-        extra: { mentions: [author] },
-        sessionId,
-        telegramId,
-      }));
-      await Promise.allSettled(ops);
-    }
+  // Delegated to Group Security Engine (full permission gate +
+  // bot-admin check + retry restore + structured audit log).
+  if (action === 'promote') {
+    await handleAntiPromoteEvent(socket, sessionId, telegramId, {
+      id: groupJid,
+      participants,
+      action: 'promote',
+      author,
+    }).catch((err) => {
+      logger.error('[AntiSystem] handleAntiPromoteEvent threw', { err: String(err), sessionId, groupJid });
+    });
   }
 
   // ── Welcome Message ──────────────────────────────────────
@@ -475,39 +458,16 @@ export async function handleParticipantUpdate(
   }
 
   // ── AntiDemote ───────────────────────────────────────────
-  if (action === 'demote' && gc.antidemote?.enabled && author) {
-    const authorNumber = normalizeWhatsAppNumber(author);
-    const mod = gc.antidemote;
-    if (!isPermitted(mod, authorNumber)) {
-      logger.info('[AntiSystem] AntiDemote triggered', { sessionId, groupJid, author, mode: mod.mode });
-      const ops: Promise<unknown>[] = [];
-
-      const sock = socket as unknown as {
-        groupParticipantsUpdate(jid: string, p: string[], a: string): Promise<unknown>;
-      };
-
-      if (mod.mode === 'dwp' || mod.mode === 'dnp') {
-        ops.push(sock.groupParticipantsUpdate(groupJid, [author], 'demote'));
-      } else if (mod.mode === 'kwp' || mod.mode === 'knp') {
-        ops.push(sock.groupParticipantsUpdate(groupJid, [author], 'remove'));
-      }
-
-      if ((mod.mode === 'dnp' || mod.mode === 'knp') && participants.length > 0) {
-        ops.push(sock.groupParticipantsUpdate(groupJid, participants, 'promote'));
-      }
-
-      const actionWord = (mod.mode === 'dwp' || mod.mode === 'dnp') ? 'demoted' : 'kicked';
-      const restoreNote = (mod.mode === 'dnp' || mod.mode === 'knp') ? ' Victim admin rights have been restored.' : '';
-      const msg =
-        mod.customMessage ??
-        `🛡️ AntiDemote: @${authorNumber} has been ${actionWord} for unauthorized demotion.${restoreNote}`;
-      ops.push(PreviewManager.send(socket as any, groupJid, msg, {
-        extra: { mentions: [author, ...participants] },
-        sessionId,
-        telegramId,
-      }));
-
-      await Promise.allSettled(ops);
-    }
+  // Delegated to Group Security Engine (full permission gate +
+  // bot-admin check + retry restore + structured audit log).
+  if (action === 'demote') {
+    await handleAntiDemoteEvent(socket, sessionId, telegramId, {
+      id: groupJid,
+      participants,
+      action: 'demote',
+      author,
+    }).catch((err) => {
+      logger.error('[AntiSystem] handleAntiDemoteEvent threw', { err: String(err), sessionId, groupJid });
+    });
   }
 }

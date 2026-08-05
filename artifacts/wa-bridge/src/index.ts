@@ -21,6 +21,7 @@ import { setAlertCallback, setEventCallback, getUserSockets, getSocket, closeAll
 import { handleWAEvent, registerSessionOwner } from './whatsapp/event-handlers.js';
 import { createBot, createAlertSender } from './telegram/bot.js';
 import { getAllUserIds, loadAllSessions, purgeSession, sessionAuthDir } from './services/workspace.js';
+import { drainPendingRestores } from './whatsapp/anti-system/group-security-engine.js';
 import { setOutreachBotRef } from './services/workers/outreach-worker.js';
 import { setValidatorBotRef } from './services/workers/validator-worker.js';
 import { setLifecycleBotRef } from './services/workers/lifecycle-worker.js';
@@ -303,7 +304,18 @@ async function restoreSessions(): Promise<void> {
           continue;
         }
 
-        await initSocket(meta, {});
+        await initSocket(meta, {
+          onConnected: async (sid, _isFirst) => {
+            // Drain any pending Group Security restores (AntiPromote/AntiDemote
+            // reverts that failed during the previous run) now that the socket is live.
+            const socket = (await import('./whatsapp/socket-manager.js')).getSocket(sid);
+            if (socket) {
+              await drainPendingRestores(socket, sid, telegramId).catch((err) => {
+                logger.warn('[Boot] drainPendingRestores failed', { err: String(err), sid });
+              });
+            }
+          },
+        });
         restored++;
         
         // Throttle reconnection to avoid WhatsApp rate limits on startup
