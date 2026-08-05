@@ -18,6 +18,8 @@ import {
   removeWord,
   setDemoteMode,
   setPromoteMode,
+  setDemoteTargetMode,
+  setPromoteTargetMode,
   defaultModuleConfig,
   defaultSpamConfig,
   defaultWordsConfig,
@@ -34,6 +36,7 @@ import type {
   GroupSecurityMode,
   AntiPromoteConfig,
   AntiDemoteConfig,
+  TargetMode,
 } from './types.js';
 
 // ── Utilities ────────────────────────────────────────────────
@@ -261,11 +264,15 @@ export function handleAntiWordList(
   });
 }
 
-// ── Security module mode parser ───────────────────────────────
+// ── Security module parsers ───────────────────────────────────
 
 function parseSecurityMode(arg: string): GroupSecurityMode | null {
   const valid: GroupSecurityMode[] = [
-    'off', 'warn', 'revert', 'kick', 'ban',
+    'off',
+    // Canonical v3 modes:
+    'restore', 'restorewarn', 'restorekick', 'restoreban',
+    // Backward-compat aliases:
+    'revert', 'warn', 'kick', 'ban',
     // Legacy modes — mapped internally by the security engine:
     'dwp', 'dnp', 'kwp', 'knp',
   ];
@@ -273,23 +280,35 @@ function parseSecurityMode(arg: string): GroupSecurityMode | null {
   return null;
 }
 
+function parseTargetMode(arg: string): TargetMode | null {
+  if (arg === 'protected' || arg === 'admins') return arg as TargetMode;
+  return null;
+}
+
 const SECURITY_MODE_USAGE =
-  `${bold('warn')}   — warn actor, no role change\n` +
-  `${bold('revert')} — undo the role change\n` +
-  `${bold('kick')}   — revert + kick actor\n` +
-  `${bold('ban')}    — revert + kick + block actor\n` +
-  `${italic('Legacy:')} dwp (revert+warn) · dnp (revert) · kwp (kick+warn) · knp (kick)`;
+  `${bold('restore')}      — restore victim, no actor punishment\n` +
+  `${bold('restorewarn')}  — restore victim + warn actor\n` +
+  `${bold('restorekick')}  — restore victim + kick actor\n` +
+  `${bold('restoreban')}   — restore victim + kick + block actor\n` +
+  `${italic('Legacy:')} dwp (restore+warn) · dnp (restore) · kwp (kick+warn, no restore) · knp (kick, no restore)\n` +
+  `${italic('Aliases:')} revert=restore · warn=restorewarn · kick=restorekick · ban=restoreban`;
+
+const TARGET_MODE_USAGE =
+  `${bold('protected')} (default) — only the bot is protected\n` +
+  `${bold('admins')}              — every administrator is protected`;
 
 // ── AntiPromote command handler ───────────────────────────────
 
 /**
- * Handles: .antipromote on|off|mode <warn|revert|kick|ban>|status
+ * Handles: .antipromote on|off|mode <mode>|target <protected|admins>|status
  *
  * Examples:
- *   .antipromote on           → enable with current/default mode (revert)
- *   .antipromote off          → disable
- *   .antipromote mode revert  → set mode
- *   .antipromote status       → show config
+ *   .antipromote on                    → enable with current/default mode
+ *   .antipromote off                   → disable
+ *   .antipromote mode restorekick      → set punishment mode
+ *   .antipromote target admins         → protect all admins from unauthorized promotions
+ *   .antipromote target protected      → default: only monitor bot-targeting events
+ *   .antipromote status                → show config
  */
 export function handleAntiPromoteCmd(
   args: string[],
@@ -309,7 +328,12 @@ export function handleAntiPromoteCmd(
     const gc  = loadGroupAntiConfig(telegramId, sessionId, groupJid);
     const mod = gc.antipromote as AntiPromoteConfig | undefined;
     if (!mod?.enabled) return warningCard('AntiPromote', 'Disabled in this group.');
-    return successCard('AntiPromote', `Enabled\nMode: ${bold(mod.mode)}\nPermits: ${mod.permitList.length}`);
+    return successCard('AntiPromote',
+      `Enabled\n` +
+      `Mode: ${bold(mod.mode)}\n` +
+      `Target: ${bold(mod.targetMode ?? 'protected')}\n` +
+      `Permits: ${mod.permitList.length}`
+    );
   }
 
   // Off
@@ -331,30 +355,48 @@ export function handleAntiPromoteCmd(
     return successCard(
       'AntiPromote Enabled',
       `Mode: ${bold(existing.mode)}\n` +
-      `To change mode: ${italic(`${prefix}antipromote mode <warn|revert|kick|ban>`)}\n` +
+      `Target: ${bold(existing.targetMode ?? 'protected')}\n` +
+      `To change mode: ${italic(`${prefix}antipromote mode <mode>`)}\n` +
+      `To change target: ${italic(`${prefix}antipromote target <protected|admins>`)}\n` +
       `To disable: ${italic(`${prefix}antipromote off`)}`,
     );
   }
 
-  // Mode subcommand: .antipromote mode <warn|revert|kick|ban>
+  // Mode subcommand: .antipromote mode <restore|restorewarn|restorekick|restoreban>
   if (subCmd === 'mode') {
     const modeArg = args[1]?.toLowerCase();
     const mode = modeArg ? parseSecurityMode(modeArg) : null;
     if (!mode || mode === 'off') {
       return errorCard(
         'AntiPromote',
-        `Usage: ${prefix}antipromote mode <warn|revert|kick|ban>\n\n${SECURITY_MODE_USAGE}`
+        `Usage: ${prefix}antipromote mode <mode>\n\n${SECURITY_MODE_USAGE}`
       );
     }
     setPromoteMode(telegramId, sessionId, groupJid, mode);
     return successCard(
       'AntiPromote Mode Set',
-      `Mode: ${bold(mode)}\n${SECURITY_MODE_USAGE.split('\n').find((l) => l.includes(bold(mode))) ?? ''}\n` +
-      `To disable: ${italic(`${prefix}antipromote off`)}`,
+      `Mode: ${bold(mode)}\nTo disable: ${italic(`${prefix}antipromote off`)}`,
     );
   }
 
-  // Direct mode shorthand: .antipromote warn|revert|kick|ban
+  // Target subcommand: .antipromote target <protected|admins>
+  if (subCmd === 'target') {
+    const targetArg = args[1]?.toLowerCase();
+    const targetMode = targetArg ? parseTargetMode(targetArg) : null;
+    if (!targetMode) {
+      return errorCard(
+        'AntiPromote',
+        `Usage: ${prefix}antipromote target <protected|admins>\n\n${TARGET_MODE_USAGE}`
+      );
+    }
+    setPromoteTargetMode(telegramId, sessionId, groupJid, targetMode);
+    return successCard(
+      'AntiPromote Target Set',
+      `Target mode: ${bold(targetMode)}\n\n${TARGET_MODE_USAGE}`,
+    );
+  }
+
+  // Direct mode shorthand: .antipromote restore|restorekick|...
   const directMode = parseSecurityMode(subCmd ?? '');
   if (directMode && directMode !== 'off') {
     setPromoteMode(telegramId, sessionId, groupJid, directMode);
@@ -366,11 +408,13 @@ export function handleAntiPromoteCmd(
 
   return errorCard(
     'AntiPromote',
-    `Usage: ${prefix}antipromote <on|off|status|mode>\n\n` +
-    `${italic('Modes:')}\n${SECURITY_MODE_USAGE}\n\n` +
+    `Usage: ${prefix}antipromote <on|off|status|mode|target>\n\n` +
+    `${italic('Punishment modes:')}\n${SECURITY_MODE_USAGE}\n\n` +
+    `${italic('Target modes:')}\n${TARGET_MODE_USAGE}\n\n` +
     `Examples:\n` +
     `  ${prefix}antipromote on\n` +
-    `  ${prefix}antipromote mode revert\n` +
+    `  ${prefix}antipromote mode restorekick\n` +
+    `  ${prefix}antipromote target admins\n` +
     `  ${prefix}antipromote off`
   );
 }
@@ -378,13 +422,15 @@ export function handleAntiPromoteCmd(
 // ── AntiDemote command handler ────────────────────────────────
 
 /**
- * Handles: .antidemote on|off|mode <warn|revert|kick|ban>|status
+ * Handles: .antidemote on|off|mode <mode>|target <protected|admins>|status
  *
  * Examples:
- *   .antidemote on           → enable with current/default mode (revert)
- *   .antidemote off          → disable
- *   .antidemote mode kick    → set mode
- *   .antidemote status       → show config
+ *   .antidemote on                    → enable with current/default mode
+ *   .antidemote off                   → disable
+ *   .antidemote mode restorekick      → set punishment mode
+ *   .antidemote target admins         → protect every administrator from demotion
+ *   .antidemote target protected      → default: only protect the bot
+ *   .antidemote status                → show config
  */
 export function handleAntiDemote(
   args: string[],
@@ -404,7 +450,12 @@ export function handleAntiDemote(
     const gc  = loadGroupAntiConfig(telegramId, sessionId, groupJid);
     const mod = gc.antidemote as AntiDemoteConfig | undefined;
     if (!mod?.enabled) return warningCard('AntiDemote', 'Disabled in this group.');
-    return successCard('AntiDemote', `Enabled\nMode: ${bold(mod.mode)}\nPermits: ${mod.permitList.length}`);
+    return successCard('AntiDemote',
+      `Enabled\n` +
+      `Mode: ${bold(mod.mode)}\n` +
+      `Target: ${bold(mod.targetMode ?? 'protected')}\n` +
+      `Permits: ${mod.permitList.length}`
+    );
   }
 
   // Off
@@ -426,19 +477,21 @@ export function handleAntiDemote(
     return successCard(
       'AntiDemote Enabled',
       `Mode: ${bold(existing.mode)}\n` +
-      `To change mode: ${italic(`${prefix}antidemote mode <warn|revert|kick|ban>`)}\n` +
+      `Target: ${bold(existing.targetMode ?? 'protected')}\n` +
+      `To change mode: ${italic(`${prefix}antidemote mode <mode>`)}\n` +
+      `To change target: ${italic(`${prefix}antidemote target <protected|admins>`)}\n` +
       `To disable: ${italic(`${prefix}antidemote off`)}`,
     );
   }
 
-  // Mode subcommand: .antidemote mode <warn|revert|kick|ban>
+  // Mode subcommand: .antidemote mode <restore|restorewarn|restorekick|restoreban>
   if (subCmd === 'mode') {
     const modeArg = args[1]?.toLowerCase();
     const mode = modeArg ? parseSecurityMode(modeArg) : null;
     if (!mode || mode === 'off') {
       return errorCard(
         'AntiDemote',
-        `Usage: ${prefix}antidemote mode <warn|revert|kick|ban>\n\n${SECURITY_MODE_USAGE}`
+        `Usage: ${prefix}antidemote mode <mode>\n\n${SECURITY_MODE_USAGE}`
       );
     }
     setDemoteMode(telegramId, sessionId, groupJid, mode);
@@ -448,7 +501,24 @@ export function handleAntiDemote(
     );
   }
 
-  // Direct mode shorthand: .antidemote warn|revert|kick|ban
+  // Target subcommand: .antidemote target <protected|admins>
+  if (subCmd === 'target') {
+    const targetArg = args[1]?.toLowerCase();
+    const targetMode = targetArg ? parseTargetMode(targetArg) : null;
+    if (!targetMode) {
+      return errorCard(
+        'AntiDemote',
+        `Usage: ${prefix}antidemote target <protected|admins>\n\n${TARGET_MODE_USAGE}`
+      );
+    }
+    setDemoteTargetMode(telegramId, sessionId, groupJid, targetMode);
+    return successCard(
+      'AntiDemote Target Set',
+      `Target mode: ${bold(targetMode)}\n\n${TARGET_MODE_USAGE}`,
+    );
+  }
+
+  // Direct mode shorthand: .antidemote restore|restorekick|...
   const directMode = parseSecurityMode(subCmd ?? '');
   if (directMode && directMode !== 'off') {
     setDemoteMode(telegramId, sessionId, groupJid, directMode);
@@ -460,11 +530,13 @@ export function handleAntiDemote(
 
   return errorCard(
     'AntiDemote',
-    `Usage: ${prefix}antidemote <on|off|status|mode>\n\n` +
-    `${italic('Modes:')}\n${SECURITY_MODE_USAGE}\n\n` +
+    `Usage: ${prefix}antidemote <on|off|status|mode|target>\n\n` +
+    `${italic('Punishment modes:')}\n${SECURITY_MODE_USAGE}\n\n` +
+    `${italic('Target modes:')}\n${TARGET_MODE_USAGE}\n\n` +
     `Examples:\n` +
     `  ${prefix}antidemote on\n` +
-    `  ${prefix}antidemote mode revert\n` +
+    `  ${prefix}antidemote mode restorekick\n` +
+    `  ${prefix}antidemote target admins\n` +
     `  ${prefix}antidemote off`
   );
 }
@@ -499,8 +571,8 @@ export function handleAntiStatus(
     ['AntiPoll', gc.antipoll?.enabled ? `✅ ${gc.antipoll.action}` : '❌ off'],
     ['AntiForward', gc.antiforward?.enabled ? `✅ ${gc.antiforward.action}` : '❌ off'],
     ['AntiChannel', gc.antichannel?.enabled ? `✅ ${gc.antichannel.action}` : '❌ off'],
-    ['AntiPromote', gc.antipromote?.enabled ? `✅ mode:${(gc.antipromote as AntiPromoteConfig | undefined)?.mode ?? gc.antipromote.action}` : '❌ off'],
-    ['AntiDemote', gc.antidemote?.enabled ? `✅ mode:${gc.antidemote.mode}` : '❌ off'],
+    ['AntiPromote', gc.antipromote?.enabled ? `✅ mode:${(gc.antipromote as AntiPromoteConfig).mode} target:${(gc.antipromote as AntiPromoteConfig).targetMode ?? 'protected'}` : '❌ off'],
+    ['AntiDemote',  gc.antidemote?.enabled  ? `✅ mode:${gc.antidemote.mode} target:${gc.antidemote.targetMode ?? 'protected'}` : '❌ off'],
   ];
   return asciiBox({
     title: 'Anti System Status',

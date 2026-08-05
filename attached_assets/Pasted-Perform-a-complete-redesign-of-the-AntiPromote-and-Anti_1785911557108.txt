@@ -1,0 +1,237 @@
+Perform a complete redesign of the AntiPromote and AntiDemote enforcement engine.
+
+Do NOT patch the current implementation.
+Replace the authorization logic with a dedicated enforcement engine.
+
+════════════════════════════════════
+OBJECTIVE
+════════════════════════════════════
+
+AntiPromote and AntiDemote should protect ONLY the bot.
+
+No other user is automatically protected.
+
+If ANY administrator promotes or demotes another administrator (except when targeting the bot according to the configured mode), the configured Anti module must execute immediately.
+
+════════════════════════════════════
+REMOVE CURRENT LOGIC
+════════════════════════════════════
+
+Completely remove every dependency on:
+
+• isProtectedJid()
+• protected users
+• trusted admin exemption
+• workspace owner exemption
+• session owner exemption
+• global owner exemption
+
+Those concepts should NOT influence AntiPromote or AntiDemote.
+
+These modules are designed to monitor administrator actions, regardless of who performs them.
+
+════════════════════════════════════
+TARGET MODES
+════════════════════════════════════
+
+Implement only two target modes.
+
+Mode 1
+
+protected
+
+Default.
+
+Only protects the BOT.
+
+Examples:
+
+Admin demotes BOT
+→ Restore BOT immediately.
+→ Execute configured punishment.
+
+Admin promotes BOT
+→ Ignore.
+Already admin.
+
+Admin demotes another admin
+→ Ignore.
+
+Mode 2
+
+admins
+
+Every administrator becomes a protected target.
+
+Examples:
+
+Admin A demotes Admin B
+→ Restore Admin B.
+→ Execute punishment.
+
+Admin A demotes Owner
+→ Restore Owner.
+→ Execute punishment.
+
+Admin A demotes Super Admin
+→ Restore.
+→ Execute punishment.
+
+Admin A demotes Moderator
+→ Restore.
+→ Execute punishment.
+
+Admin A demotes BOT
+→ Restore BOT.
+→ Execute punishment.
+
+No administrator is exempt simply because they are Owner, Creator, Session Owner, Workspace Owner, Trusted Admin or Sudo.
+
+Only the configured target mode determines whether enforcement happens.
+
+════════════════════════════════════
+PUNISHMENT ENGINE
+════════════════════════════════════
+
+After restoration, execute the configured punishment.
+
+Supported modes:
+
+restore
+
+restorewarn
+
+restorekick
+
+restoreban
+
+legacy:
+
+dnp
+dwp
+knp
+kwp
+
+Map legacy modes correctly.
+
+Never silently ignore unknown modes.
+
+════════════════════════════════════
+BOT PROTECTION
+════════════════════════════════════
+
+If someone attempts to demote the bot:
+
+Immediately restore bot admin.
+
+If restore fails because the bot has already lost admin:
+
+Punishment cannot be executed.
+
+Instead send:
+
+⚠️ AntiDemote detected.
+Bot lost administrator privileges before restoration.
+
+Please promote the bot back to administrator.
+
+Log:
+
+reason
+actor
+target
+group
+timestamp
+
+════════════════════════════════════
+EVENT DETECTION
+════════════════════════════════════
+
+Audit the entire group-participant update pipeline.
+
+Verify that participant updates correctly detect:
+
+promote
+
+demote
+
+actor
+
+target
+
+old role
+
+new role
+
+Some events are currently not triggering.
+
+Fix the listener instead of adding polling.
+
+The engine must work with current @crysnovax/baileys participant update events.
+
+════════════════════════════════════
+NO SILENT FAILURES
+════════════════════════════════════
+
+Every detected promotion/demotion must produce exactly one outcome.
+
+Examples:
+
+Ignored
+Reason: Module disabled
+
+Ignored
+Reason: Target not protected by current mode
+
+Restored
+Punishment: Restore + Kick
+
+Restored
+Punishment: Restore + Warn
+
+Failed
+Reason: Bot not admin
+
+Every branch must log its decision.
+
+════════════════════════════════════
+VALIDATION
+════════════════════════════════════
+
+Verify all cases.
+
+Mode protected
+
+✓ Demote BOT → Restore + Punish
+
+✓ Demote normal admin → Ignore
+
+✓ Demote owner → Ignore
+
+Mode admins
+
+✓ Admin demotes admin → Restore + Punish
+
+✓ Owner demotes admin → Restore + Punish
+
+✓ Admin demotes owner → Restore + Punish
+
+✓ Admin demotes bot → Restore + Punish
+
+✓ Promotion events trigger AntiPromote correctly.
+
+✓ Exactly one enforcement per event.
+
+✓ No duplicate execution.
+
+✓ No race conditions.
+
+════════════════════════════════════
+FINAL REQUIREMENT
+════════════════════════════════════
+
+This must be a production-grade event engine, not a workaround.
+
+Audit the participant-update event flow from Baileys to the final enforcement pipeline.
+
+Ensure every promotion or demotion event reaches the engine exactly once, all enforcement decisions are deterministic, all restoration logic is reliable, and punishment executes immediately after restoration. The only entity inherently protected is the bot itself unless `antidemote mode admins` is explicitly enabled, in which case every administrator becomes a protected target. No owner, creator, trusted admin, workspace owner, session owner, or sudo user should automatically bypass AntiPromote or AntiDemote.

@@ -1,56 +1,67 @@
 // ============================================================
-// Group Security Engine — AntiPromote + AntiDemote (v2)
+// Group Security Engine — AntiPromote + AntiDemote (v3)
 // ============================================================
 //
-// Production-grade security subsystem.  Every administrative
-// action is monitored regardless of who performs it.
+// Complete redesign. Authorization exemptions have been removed.
+// The engine enforces based solely on TargetMode — no owner, trusted
+// admin, session owner, workspace owner, or sudo exemptions apply here.
 //
-// Architectural principles:
-//   • Detection ≠ Punishment.
-//     Detection always occurs; punishment only for actors
-//     classified as WA_ADMIN or NONE.
-//   • Every promote/demote event produces either a security
-//     action or a recorded audit entry.  Silent exits are
-//     forbidden — even disabled/no-author events are audited.
-//   • A single `finally` block writes the audit.  No branch
-//     ever calls logAudit directly.
-//   • Authorization logic lives in security-authorization.ts
-//     (shared by all moderation modules).
-//   • Actions are chainable; behaviour is never hardcoded.
-//   • Legacy modes (dwp/dnp/kwp/knp) are fully supported
-//     via a compatibility layer.
-//   • The bot protects its own admin status and explains
-//     every enforcement skip.
+// ── Design principles ─────────────────────────────────────
 //
-// Scope:
-//   This engine is authoritative for AntiPromote and AntiDemote.
-//   Other moderation modules (AutoBlock, AntiLink, AntiSpam, etc.)
-//   currently use the legacy isProtectedJid helper which exempts all
-//   WhatsApp admins.  Migrating those modules is a separate follow-up.
+//   1. Bot self-protection always fires on demote events,
+//      regardless of whether the AntiDemote module is enabled.
 //
-// Entry points:
-//   handleAntiPromoteEvent(socket, sessionId, telegramId, update)
+//   2. Target mode is the only enforcement gate:
+//        protected (default) — only the bot is protected
+//        admins              — every administrator is protected
+//
+//   3. Actor exemptions: NONE.
+//      Any actor who promotes or demotes a protected target is punished.
+//      Owner, trusted admin, sudo, session owner — all are treated equally.
+//
+//   4. Every event produces exactly one logged outcome:
+//        Ignored  / Reason: Module disabled
+//        Ignored  / Reason: Target not protected by current mode
+//        Ignored  / Reason: Invalid Actor
+//        Ignored  / Reason: Bot is no longer Admin
+//        Restored / Punishment: <mode>
+//        Failed   / Reason: Bot restore failed
+//
+//   5. A single `finally` block writes the audit. No branch calls
+//      logAudit directly.
+//
+//   6. No race conditions — enforce runs exactly once per event.
+//      Promise.allSettled used for concurrent independent ops.
+//
+// ── Entry points ──────────────────────────────────────────
 //   handleAntiDemoteEvent (socket, sessionId, telegramId, update)
+//   handleAntiPromoteEvent(socket, sessionId, telegramId, update)
 //   drainPendingRestores  (socket, sessionId, telegramId)
 //
-// Validation matrix (all branches covered):
-//   ✓ Global Owner promotes     → detected, logged, no punishment
-//   ✓ Global Owner demotes      → detected, logged, no punishment
-//   ✓ Session Owner promotes    → detected, logged, no punishment
-//   ✓ Trusted Admin promotes    → detected, logged, no punishment
-//   ✓ Trusted Admin demotes     → detected, logged, no punishment
-//   ✓ Normal Admin promotes     → AntiPromote executes
-//   ✓ Normal Admin demotes      → AntiDemote executes
-//   ✓ Bot is demoted            → Self-Protection Engine triggers
-//   ✓ Bot cannot recover        → Group receives recovery message
-//   ✓ Module disabled           → audited with skip reason
-//   ✓ No author in event        → audited with skip reason
-//   ✓ Legacy mode dwp           → REVERT + WARN
-//   ✓ Legacy mode dnp           → REVERT
-//   ✓ Legacy mode kwp           → KICK + WARN
-//   ✓ Legacy mode knp           → KICK
-//   ✓ Invalid mode              → error logged, safe fallback to WARN
-//   ✓ Every branch produces either an action or an audit entry
+// ── Validation matrix ─────────────────────────────────────
+//
+//   Mode: protected
+//   ✓ Admin demotes BOT      → Restore BOT + Punish actor
+//   ✓ Admin demotes admin    → Ignored (target not protected)
+//   ✓ Admin demotes owner    → Ignored (target not protected)
+//   ✓ Bot cannot be restored → Send failure message, no punishment
+//   ✓ Admin promotes any     → Ignored (protected mode = no-op for AntiPromote)
+//
+//   Mode: admins
+//   ✓ Admin A demotes Admin B  → Restore B + Punish A
+//   ✓ Owner demotes Admin      → Restore Admin + Punish Owner
+//   ✓ Admin demotes BOT        → Restore BOT + Punish actor
+//   ✓ Admin promotes member    → Revert promotion + Punish actor
+//   ✓ Admin promotes bot       → Ignored (bot already admin)
+//
+//   Both modes
+//   ✓ Module disabled          → Bot self-protection still runs (demote)
+//   ✓ No actor in event        → Logged, no punishment possible
+//   ✓ Bot not admin            → Cannot enforce, logged
+//   ✓ Legacy modes mapped      → Correct action chain applied
+//   ✓ Unknown mode             → Error logged, safe fallback (restore)
+//   ✓ Exactly one audit per event
+//   ✓ No duplicate execution
 // ============================================================
 
 import type { BridgeWASocket as WASocket } from '../baileys-types.js';
@@ -62,7 +73,6 @@ import {
 } from '../utils/group-permissions.js';
 import { loadGroupAntiConfig } from './config.js';
 import { PreviewManager } from '../../preview-engine/index.js';
-import { classifyActor } from './security-authorization.js';
 import { addPendingRestore, removePendingRestore, loadPendingRestores } from './pending-restores.js';
 import type {
   GroupSecurityMode,
@@ -72,11 +82,11 @@ import type {
   SecurityEventType,
   AntiPromoteConfig,
   AntiDemoteConfig,
-  AuthorizationResult,
   SkipReason,
+  TargetMode,
 } from './types.js';
 
-// ── Inline utility ─────────────────────────────────────────
+// ── Utilities ──────────────────────────────────────────────
 
 function normalizeNumber(jid: string | null | undefined): string {
   if (!jid) return '';
@@ -125,13 +135,17 @@ async function retryGroupUpdate(
   return false;
 }
 
-// ── Legacy Mode Compatibility Layer ────────────────────────
+// ── Mode Normalization ─────────────────────────────────────
 //
-// Maps legacy modes to modern action chains:
-//   dwp → REVERT + WARN
-//   dnp → REVERT
-//   kwp → KICK + WARN
-//   knp → KICK
+// Maps backward-compat aliases and legacy modes to canonical behavior.
+
+type NormalizedMode =
+  | 'restore'       // restore victim only
+  | 'restorewarn'   // restore victim + warn actor
+  | 'restorekick'   // restore victim + kick actor
+  | 'restoreban'    // restore victim + kick + ban actor
+  | 'knp'           // kick actor only, NO restore (legacy)
+  | 'kwp';          // kick + warn actor, NO restore (legacy)
 
 const LEGACY_MODES = new Set<string>(['dwp', 'dnp', 'kwp', 'knp']);
 
@@ -139,60 +153,59 @@ function isLegacyMode(mode: string): mode is LegacySecurityMode {
   return LEGACY_MODES.has(mode);
 }
 
+function normalizeMode(mode: GroupSecurityMode): NormalizedMode {
+  switch (mode) {
+    // Canonical v3
+    case 'restore':      return 'restore';
+    case 'restorewarn':  return 'restorewarn';
+    case 'restorekick':  return 'restorekick';
+    case 'restoreban':   return 'restoreban';
+    // Backward-compat aliases
+    case 'revert':       return 'restore';
+    case 'warn':         return 'restorewarn';
+    case 'kick':         return 'restorekick';
+    case 'ban':          return 'restoreban';
+    // Legacy — mapped to their correct chains
+    case 'dnp':          return 'restore';       // demote-no-punish: restore, no actor punishment
+    case 'dwp':          return 'restorewarn';   // demote-with-punish: restore + warn actor
+    case 'knp':          return 'knp';           // kick-no-punish: kick actor, NO restore
+    case 'kwp':          return 'kwp';           // kick-with-punish: kick + warn, NO restore
+    case 'off':
+    default:
+      logger.error('[SecurityEngine] Unknown or disabled mode — falling back to restore', { mode });
+      return 'restore';
+  }
+}
+
 // ── Action Plan ────────────────────────────────────────────
 
 interface ActionPlan {
-  actions: SecurityAction[];
-  revertOp: 'demote' | 'promote' | null;
-  isKick: boolean;
-  isBan: boolean;
+  restoreVictim: boolean;  // true = re-promote (demote) or re-demote (promote) the targets
+  warnActor: boolean;
+  kickActor: boolean;
+  banActor: boolean;
   label: string;
   penalty: string;
 }
 
-function buildActionPlan(
-  mode: GroupSecurityMode,
-  eventType: 'promote' | 'demote'
-): ActionPlan {
-  const revertOp = eventType === 'promote' ? 'demote' : 'promote';
-  const revertAction: SecurityAction =
-    eventType === 'promote' ? 'revert_promotion' : 'revert_demotion';
-  const revertLabel =
-    eventType === 'promote' ? 'Promotion Reverted' : 'Admin Rights Restored';
-
+function buildActionPlan(mode: GroupSecurityMode): ActionPlan {
   if (isLegacyMode(mode)) {
-    logger.info('[SecurityEngine] Legacy mode — mapping to modern engine', { mode });
-    switch (mode) {
-      case 'dwp':
-        // REVERT + WARN: undo the role change AND warn the actor
-        return { actions: [revertAction, 'warn', 'notify_group', 'audit'], revertOp, isKick: false, isBan: false, label: revertLabel, penalty: 'Warning Issued (legacy: dwp)' };
-      case 'dnp':
-        // REVERT only: undo the role change, no additional penalty
-        return { actions: [revertAction, 'notify_group', 'audit'], revertOp, isKick: false, isBan: false, label: revertLabel, penalty: 'Reverted (legacy: dnp)' };
-      case 'kwp':
-        // KICK + WARN: penalize actor only — no role-change revert
-        return { actions: ['kick', 'warn', 'notify_group', 'audit'], revertOp: null, isKick: true, isBan: false, label: 'Warning Issued', penalty: 'Actor Kicked + Warning (legacy: kwp)' };
-      case 'knp':
-        // KICK only: penalize actor only — no role-change revert
-        return { actions: ['kick', 'notify_group', 'audit'], revertOp: null, isKick: true, isBan: false, label: 'Actor Kicked', penalty: 'Actor Kicked (legacy: knp)' };
-    }
+    logger.info('[SecurityEngine] Legacy mode — applying compat mapping', { mode });
   }
-
-  switch (mode) {
-    case 'warn':
-      return { actions: ['warn', 'notify_group', 'audit'], revertOp: null, isKick: false, isBan: false, label: 'Warning Issued', penalty: 'Warning Issued' };
-    case 'revert':
-      return { actions: [revertAction, 'notify_group', 'audit'], revertOp, isKick: false, isBan: false, label: revertLabel, penalty: revertLabel };
-    case 'kick':
-      return { actions: [revertAction, 'kick', 'notify_group', 'audit'], revertOp, isKick: true, isBan: false, label: revertLabel, penalty: 'Actor Kicked' };
-    case 'ban':
-      return { actions: [revertAction, 'ban', 'notify_group', 'audit'], revertOp, isKick: true, isBan: true, label: revertLabel, penalty: 'Actor Kicked & Blocked' };
-    case 'off':
-      return { actions: ['audit'], revertOp: null, isKick: false, isBan: false, label: 'Module Off', penalty: 'No Action' };
-    default: {
-      logger.error('[SecurityEngine] Unknown mode — falling back to WARN', { mode });
-      return { actions: ['warn', 'notify_group', 'audit'], revertOp: null, isKick: false, isBan: false, label: `Unknown Mode (${String(mode)})`, penalty: 'Warning Issued (fallback)' };
-    }
+  const norm = normalizeMode(mode);
+  switch (norm) {
+    case 'restore':
+      return { restoreVictim: true,  warnActor: false, kickActor: false, banActor: false, label: 'Restored',               penalty: 'None' };
+    case 'restorewarn':
+      return { restoreVictim: true,  warnActor: true,  kickActor: false, banActor: false, label: 'Restored',               penalty: 'Warning' };
+    case 'restorekick':
+      return { restoreVictim: true,  warnActor: false, kickActor: true,  banActor: false, label: 'Restored',               penalty: 'Actor Kicked' };
+    case 'restoreban':
+      return { restoreVictim: true,  warnActor: false, kickActor: true,  banActor: true,  label: 'Restored',               penalty: 'Actor Kicked & Blocked' };
+    case 'knp':
+      return { restoreVictim: false, warnActor: false, kickActor: true,  banActor: false, label: 'Actor Kicked',           penalty: 'Actor Kicked (legacy: knp)' };
+    case 'kwp':
+      return { restoreVictim: false, warnActor: true,  kickActor: true,  banActor: false, label: 'Actor Kicked + Warning', penalty: 'Actor Kicked + Warning (legacy: kwp)' };
   }
 }
 
@@ -211,7 +224,7 @@ function buildSecurityCard(opts: {
   });
   const targets = opts.targetNumbers.map((n) => `  ➜ @${n}`).join('\n');
   const skipLine = opts.skipReason
-    ? `\nSkip Reason\n  ➜ ${opts.skipReason}\n`
+    ? `\nStatus\n  ➜ ${opts.skipReason}\n`
     : '';
   return (
     `⟦ OMEGA • SECURITY ⟧\n\n` +
@@ -225,14 +238,18 @@ function buildSecurityCard(opts: {
   );
 }
 
-// ── Bot Self-Protection Engine ─────────────────────────────
+// ── Bot Self-Protection ────────────────────────────────────
+//
+// Always fires when the bot is among the demoted participants.
+// Independent of module enabled/disabled state.
+// Returns true if the bot's admin was successfully restored.
 
-async function handleBotSelfDemotion(
+async function runBotSelfProtection(
   socket: WASocket,
   sessionId: string,
   telegramId: string,
   groupJid: string
-): Promise<void> {
+): Promise<boolean> {
   logger.warn('[SecurityEngine] Bot self-protection: bot was demoted', { sessionId, groupJid });
 
   const sock = socket as unknown as { user?: { id?: string } };
@@ -240,28 +257,22 @@ async function handleBotSelfDemotion(
 
   if (!botJid) {
     logger.error('[SecurityEngine] Bot self-protection: cannot resolve bot JID', { sessionId, groupJid });
-    return;
+    return false;
   }
 
   const restored = await retryGroupUpdate(socket, groupJid, [botJid], 'promote', 3);
 
   if (restored) {
     logger.info('[SecurityEngine] Bot self-protection: admin status restored', { sessionId, groupJid });
-    try {
-      await PreviewManager.send(
-        socket as any, groupJid,
-        `✅ Security Restored\n\nBot administrative privileges were temporarily removed.\nAutomatic enforcement has been restored.`,
-        { sessionId, telegramId }
-      );
-    } catch { /* non-critical */ }
-    return;
+    return true;
   }
 
   logger.error('[SecurityEngine] Bot self-protection: cannot restore admin status', { sessionId, groupJid });
+
   try {
     await PreviewManager.send(
       socket as any, groupJid,
-      `❌ Security Alert\n\nBot administrative privileges were removed.\n\nAutomatic enforcement has been suspended.\n\nPlease promote the bot again to restore security.`,
+      `⚠️ AntiDemote detected.\nBot lost administrator privileges before restoration.\n\nPlease promote the bot back to administrator.`,
       { sessionId, telegramId }
     );
   } catch (err) {
@@ -269,179 +280,128 @@ async function handleBotSelfDemotion(
       err: String(err), sessionId, groupJid,
     });
   }
+
+  return false;
 }
 
-// ── Action Executor ────────────────────────────────────────
+// ── Bot Admin Check ────────────────────────────────────────
 
-interface ExecutionContext {
+async function checkBotIsAdmin(
+  socket: WASocket,
+  sessionId: string,
+  groupJid: string
+): Promise<boolean> {
+  const meta = await fetchGroupMeta(socket, groupJid, true).catch(() => null);
+  if (!meta) {
+    logger.warn('[SecurityEngine] fetchGroupMeta failed — cannot verify bot admin status', {
+      sessionId, groupJid,
+    });
+    return false;
+  }
+  return meta.botIsAdmin;
+}
+
+// ── Punishment Executor ────────────────────────────────────
+
+interface PunishmentContext {
   socket: WASocket;
   sessionId: string;
   telegramId: string;
   groupJid: string;
   actorJid: string;
   actorNumber: string;
-  targetJids: string[];
   targetNumbers: string[];
   plan: ActionPlan;
   eventLabel: string;
-  auth: AuthorizationResult;
-  audit: SecurityAuditLog;
   customMessage?: string;
+  audit: SecurityAuditLog;
 }
 
-async function executeActionPlan(ctx: ExecutionContext): Promise<void> {
+async function executePunishment(ctx: PunishmentContext): Promise<void> {
   const {
     socket, sessionId, telegramId, groupJid,
-    actorJid, actorNumber, targetJids, targetNumbers,
-    plan, eventLabel, auth, audit, customMessage,
+    actorJid, actorNumber, targetNumbers,
+    plan, eventLabel, customMessage, audit,
   } = ctx;
 
-  const ops: Promise<unknown>[] = [];
   const executedActions: SecurityAction[] = [];
+  const ops: Promise<unknown>[] = [];
 
-  for (const action of plan.actions) {
-    switch (action) {
-
-      case 'revert_promotion': {
-        executedActions.push(action);
-        const restoreId = `promote:${groupJid}:${targetJids.join(',')}:${Date.now()}`;
-        addPendingRestore(sessionId, telegramId, {
-          id: restoreId, groupJid, participants: targetJids,
-          action: 'demote', reason: 'antipromote_revert',
-        });
-        ops.push(
-          retryGroupUpdate(socket, groupJid, targetJids, 'demote').then((ok) => {
-            audit.restoreSuccess = ok;
-            if (ok) removePendingRestore(sessionId, telegramId, restoreId);
-            else audit.errors?.push('revert_demote_failed_all_attempts');
-          })
-        );
-        break;
-      }
-
-      case 'revert_demotion': {
-        executedActions.push(action);
-        const restoreId = `demote:${groupJid}:${targetJids.join(',')}:${Date.now()}`;
-        addPendingRestore(sessionId, telegramId, {
-          id: restoreId, groupJid, participants: targetJids,
-          action: 'promote', reason: 'antidemote_revert',
-        });
-        ops.push(
-          retryGroupUpdate(socket, groupJid, targetJids, 'promote').then((ok) => {
-            audit.restoreSuccess = ok;
-            if (ok) removePendingRestore(sessionId, telegramId, restoreId);
-            else audit.errors?.push('restore_promote_failed_all_attempts');
-          })
-        );
-        break;
-      }
-
-      case 'kick':
-        executedActions.push(action);
-        ops.push(
-          retryGroupUpdate(socket, groupJid, [actorJid], 'remove').then((ok) => {
-            if (!ok) audit.errors?.push('kick_actor_failed');
-          })
-        );
-        break;
-
-      case 'ban':
-        executedActions.push(action);
-        ops.push(
-          retryGroupUpdate(socket, groupJid, [actorJid], 'remove').then((ok) => {
-            if (!ok) audit.errors?.push('kick_actor_failed');
-          })
-        );
-        ops.push(
-          (socket as unknown as {
-            updateBlockStatus(jid: string, action: string): Promise<unknown>;
-          }).updateBlockStatus(actorJid, 'block').catch((err) => {
-            audit.errors?.push(`block_actor_failed:${String(err)}`);
-          })
-        );
-        break;
-
-      case 'warn':
-        // Warn is communicated through the notify_group card.
-        executedActions.push(action);
-        break;
-
-      case 'notify_group': {
-        executedActions.push(action);
-        const card = buildSecurityCard({
-          eventLabel, actorNumber, targetNumbers,
-          actionLabel: plan.label, penaltyLabel: plan.penalty,
-          skipReason: auth.skipReason,
-        });
-        ops.push(
-          PreviewManager.send(socket as any, groupJid, customMessage ?? card, {
-            extra: { mentions: [actorJid, ...targetJids] },
-            sessionId, telegramId,
-          }).catch((err) => {
-            audit.errors?.push(`send_card_failed:${String(err)}`);
-          })
-        );
-        break;
-      }
-
-      case 'delete_event':
-        // Participant update events have no deletable message; reserved for future use.
-        executedActions.push(action);
-        break;
-
-      case 'notify_owner':
-        executedActions.push(action);
-        logger.info('[SecurityEngine] notify_owner (not yet implemented)', { sessionId, groupJid, actorJid });
-        break;
-
-      case 'notify_telegram':
-        executedActions.push(action);
-        logger.info('[SecurityEngine] notify_telegram (not yet implemented)', { sessionId, groupJid, actorJid });
-        break;
-
-      case 'audit':
-        // Emitted by the single `finally` logAudit call; tracked here for the record.
-        executedActions.push(action);
-        break;
-    }
+  // ── Kick / Ban actor ──────────────────────────────────────
+  if (ctx.plan.kickActor) {
+    executedActions.push('kick');
+    ops.push(
+      retryGroupUpdate(socket, groupJid, [actorJid], 'remove').then((ok) => {
+        if (!ok) audit.errors?.push('kick_actor_failed_all_attempts');
+      })
+    );
   }
 
+  if (ctx.plan.banActor) {
+    executedActions.push('ban');
+    ops.push(
+      (socket as unknown as {
+        updateBlockStatus(jid: string, action: string): Promise<unknown>;
+      }).updateBlockStatus(actorJid, 'block').catch((err) => {
+        audit.errors?.push(`block_actor_failed:${String(err)}`);
+      })
+    );
+  }
+
+  // ── Notify group ─────────────────────────────────────────
+  executedActions.push('notify_group');
+  const card = buildSecurityCard({
+    eventLabel,
+    actorNumber,
+    targetNumbers,
+    actionLabel: plan.label,
+    penaltyLabel: plan.penalty,
+  });
+  ops.push(
+    PreviewManager.send(socket as any, groupJid, customMessage ?? card, {
+      extra: { mentions: [actorJid] },
+      sessionId, telegramId,
+    }).catch((err) => {
+      audit.errors?.push(`send_card_failed:${String(err)}`);
+    })
+  );
+
+  // ── Warn text (embedded in card; flag is informational) ───
+  if (plan.warnActor) {
+    executedActions.push('warn');
+  }
+
+  executedActions.push('audit');
   audit.executedActions = executedActions;
+
   if (ops.length > 0) await Promise.allSettled(ops);
 }
 
 // ── Audit Log ──────────────────────────────────────────────
-// Single emission point — always called from `finally`.
-// No function other than `finally` may call logAudit.
 
 function logAudit(audit: SecurityAuditLog, startMs: number): void {
   audit.durationMs = Date.now() - startMs;
   const level = audit.success ? 'info' : 'error';
   logger[level]('[SecurityEngine] SecurityAudit', {
-    timestamp:            audit.timestamp,
-    workspaceId:          audit.workspaceId,
-    sessionId:            audit.sessionId,
-    groupId:              audit.groupId,
-    groupName:            audit.groupName,
-    actorJid:             audit.actorJid,
-    actorNumber:          audit.actorNumber,
-    actorPermissionLevel: audit.actorPermissionLevel,
-    targets:              audit.targetJids,
-    event:                audit.event,
-    enforcementMode:      audit.enforcementMode,
-    executedActions:      audit.executedActions,
-    skipReason:           audit.skipReason,
-    restoreSuccess:       audit.restoreSuccess,
-    success:              audit.success,
-    durationMs:           audit.durationMs,
-    errors:               audit.errors?.length ? audit.errors : undefined,
+    timestamp:       audit.timestamp,
+    workspaceId:     audit.workspaceId,
+    sessionId:       audit.sessionId,
+    groupId:         audit.groupId,
+    groupName:       audit.groupName,
+    actorJid:        audit.actorJid,
+    actorNumber:     audit.actorNumber,
+    targets:         audit.targetJids,
+    event:           audit.event,
+    enforcementMode: audit.enforcementMode,
+    targetMode:      audit.targetMode,
+    executedActions: audit.executedActions,
+    skipReason:      audit.skipReason,
+    restoreSuccess:  audit.restoreSuccess,
+    success:         audit.success,
+    durationMs:      audit.durationMs,
+    errors:          audit.errors?.length ? audit.errors : undefined,
   });
 }
-
-// ── Blank Audit Factory ────────────────────────────────────
-// Creates a minimal audit record that can be filled in as the
-// handler progresses.  Created before any early-exit path so
-// every event always produces one audit entry.
 
 function makeAudit(
   telegramId: string,
@@ -450,39 +410,258 @@ function makeAudit(
   actorJid: string,
   targetJids: string[],
   event: SecurityEventType,
-  enforcementMode: string
+  enforcementMode: string,
+  targetMode: TargetMode
 ): SecurityAuditLog {
   return {
-    timestamp:            new Date().toISOString(),
-    workspaceId:          telegramId,
+    timestamp:       new Date().toISOString(),
+    workspaceId:     telegramId,
     sessionId,
-    groupId:              groupJid,
-    groupName:            groupJid.split('@')[0] ?? '',
+    groupId:         groupJid,
+    groupName:       groupJid.split('@')[0] ?? '',
     actorJid,
-    actorNumber:          normalizeNumber(actorJid),
-    actorPermissionLevel: 'NONE',
+    actorNumber:     normalizeNumber(actorJid),
     targetJids,
     event,
     enforcementMode,
-    executedActions:      [],
-    success:              true,   // optimistic; set false on engine error
-    durationMs:           0,
-    errors:               [],
+    targetMode,
+    executedActions: [],
+    success:         true,
+    durationMs:      0,
+    errors:          [],
   };
 }
 
-// ── AntiPromote Engine ─────────────────────────────────────
+// ══════════════════════════════════════════════════════════
+// AntiDemote Engine
+// ══════════════════════════════════════════════════════════
+//
+// Processing flow:
+//   1. Bot self-protection (always, regardless of module state)
+//   2. Guard: module enabled?
+//   3. Guard: actor known?
+//   4. Determine enforcement targets by targetMode
+//   5. Guard: any protected target was demoted?
+//   6. Restore non-bot targets (bot already handled in step 1)
+//   7. Execute punishment against actor
+//   8. Audit (single finally block)
 
-/**
- * Process a 'promote' participant event.
- *
- * Targets = the participants who WERE promoted.
- * Actor   = the admin who performed the promotion.
- *
- * Every event is audited — including disabled-module and no-author
- * cases.  The audit is written in the single `finally` block.
- * No branch calls logAudit directly.
- */
+export async function handleAntiDemoteEvent(
+  socket: WASocket,
+  sessionId: string,
+  telegramId: string,
+  update: ParticipantUpdateEvent
+): Promise<void> {
+  if (update.action !== 'demote') return;
+
+  const startMs   = Date.now();
+  const groupJid  = update.id;
+  const targetJids = update.participants;
+  const actorJid  = update.author ?? '';
+
+  // Resolve bot JID early — needed for self-protection and target checks.
+  const sock = socket as unknown as { user?: { id?: string } };
+  const rawBotJid = sock.user?.id ?? '';
+  const botNum    = rawBotJid ? numericId(rawBotJid) : '';
+  const botJid    = rawBotJid ? stripDeviceSuffix(rawBotJid) : '';
+
+  // ── Step 1: Bot Self-Protection ─────────────────────────
+  // Fires regardless of module state.  Records whether the bot was
+  // demoted and whether restoration succeeded.
+  const botWasDemoted = botNum
+    ? targetJids.some((jid) => numericId(jid) === botNum)
+    : false;
+
+  let botRestored = false;
+  if (botWasDemoted) {
+    botRestored = await runBotSelfProtection(socket, sessionId, telegramId, groupJid);
+  }
+
+  // ── Load module config ───────────────────────────────────
+  const gc  = loadGroupAntiConfig(telegramId, sessionId, groupJid);
+  const mod = gc.antidemote as AntiDemoteConfig | undefined;
+  const targetMode: TargetMode = mod?.targetMode ?? 'protected';
+  const modeStr = mod ? String(mod.mode) : 'off';
+
+  const audit = makeAudit(
+    telegramId, sessionId, groupJid, actorJid, targetJids,
+    'skipped', modeStr, targetMode
+  );
+
+  try {
+    // ── Step 2: Module enabled? ──────────────────────────────
+    if (!mod?.enabled || mod.mode === 'off') {
+      audit.skipReason     = 'Module Disabled';
+      audit.executedActions = ['audit'];
+      logger.debug('[SecurityEngine] AntiDemote disabled', { sessionId, groupJid });
+      return;
+    }
+
+    // ── Step 3: Actor known? ────────────────────────────────
+    if (!actorJid) {
+      audit.skipReason     = 'Invalid Actor';
+      audit.executedActions = ['audit'];
+      logger.debug('[SecurityEngine] AntiDemote: no author in event', { sessionId, groupJid });
+      return;
+    }
+
+    const actorNumber   = normalizeNumber(actorJid);
+
+    // ── Step 4: Determine enforcement targets ────────────────
+    // targetMode 'protected': only the bot is a protected target.
+    // targetMode 'admins':    every demoted participant is a protected target.
+    let enforcementTargets: string[];
+    if (targetMode === 'protected') {
+      // Only enforce when the bot was demoted.
+      enforcementTargets = botWasDemoted ? [botJid].filter(Boolean) : [];
+    } else {
+      // 'admins' mode: all demoted participants are protected.
+      enforcementTargets = [...targetJids];
+    }
+
+    // ── Step 5: Any protected target? ───────────────────────
+    if (enforcementTargets.length === 0) {
+      audit.event      = 'skipped';
+      audit.skipReason = 'Target not protected by current mode';
+      audit.executedActions = ['audit'];
+      logger.info('[SecurityEngine] AntiDemote: no protected targets', {
+        sessionId, groupJid, targetMode,
+      });
+      return;
+    }
+
+    const targetNumbers = enforcementTargets.map((j) => normalizeNumber(j));
+
+    // ── Step 6: Bot admin check (needed for non-bot restores) ─
+    // In 'protected' mode the only target is the bot — restoration was
+    // already attempted in Step 1 so we skip this check.
+    // In 'admins' mode we need the bot to be admin to restore others.
+    const nonBotTargets = enforcementTargets.filter((j) => numericId(j) !== botNum);
+    const hasBotInTargets = botWasDemoted;
+
+    if (nonBotTargets.length > 0) {
+      const botIsAdmin = await checkBotIsAdmin(socket, sessionId, groupJid);
+      if (!botIsAdmin) {
+        audit.event      = 'skipped';
+        audit.skipReason = 'Bot is no longer Admin';
+        audit.executedActions = ['audit'];
+        logger.info('[SecurityEngine] AntiDemote: bot not admin, cannot restore', {
+          sessionId, groupJid,
+        });
+        return;
+      }
+    }
+
+    // ── Step 6b: If only target was bot and restore failed ───
+    if (hasBotInTargets && !botRestored && nonBotTargets.length === 0) {
+      // Bot protection ran but failed and there are no other targets.
+      // Punishment cannot execute — we already sent the failure message.
+      audit.event          = 'bot_restore_failed';
+      audit.restoreSuccess = false;
+      audit.success        = false;
+      audit.skipReason     = 'Bot restore failed';
+      audit.executedActions = ['audit'];
+      logger.warn('[SecurityEngine] AntiDemote: bot restore failed, punishment skipped', {
+        sessionId, groupJid,
+      });
+      return;
+    }
+
+    // ── Step 6c: Restore non-bot targets ────────────────────
+    const restoreOps: Promise<void>[] = [];
+    const restoreIds: string[] = [];
+
+    if (nonBotTargets.length > 0) {
+      const restoreId = `demote:${groupJid}:${nonBotTargets.join(',')}:${Date.now()}`;
+      restoreIds.push(restoreId);
+      addPendingRestore(sessionId, telegramId, {
+        id: restoreId, groupJid, participants: nonBotTargets,
+        action: 'promote', reason: 'antidemote_restore',
+      });
+      restoreOps.push(
+        retryGroupUpdate(socket, groupJid, nonBotTargets, 'promote').then((ok) => {
+          audit.restoreSuccess = ok;
+          if (ok) {
+            removePendingRestore(sessionId, telegramId, restoreId);
+          } else {
+            audit.errors?.push('restore_failed_all_attempts');
+          }
+        })
+      );
+    }
+
+    if (hasBotInTargets) {
+      // Already restored in step 1; record result.
+      audit.restoreSuccess = botRestored;
+    }
+
+    audit.event          = 'unauthorized_demote';
+    audit.enforcementMode = modeStr;
+
+    const plan = buildActionPlan(mod.mode);
+
+    // Run restores concurrently with punishment setup.
+    await Promise.allSettled(restoreOps);
+
+    // ── Step 7: Punishment ───────────────────────────────────
+    // If the ONLY enforcement target was the bot and restore failed,
+    // punishment is skipped (spec requirement: "Punishment cannot be executed").
+    // If there are non-bot targets or bot was successfully restored, punish.
+    const canPunish = !(hasBotInTargets && !botRestored && nonBotTargets.length === 0);
+    if (!canPunish) {
+      logger.warn('[SecurityEngine] AntiDemote: bot restore failed — skipping punishment', {
+        sessionId, groupJid, actorJid,
+      });
+      return;
+    }
+
+    await executePunishment({
+      socket, sessionId, telegramId, groupJid,
+      actorJid, actorNumber, targetNumbers,
+      plan,
+      eventLabel: 'Unauthorized Demotion',
+      customMessage: mod.customMessage,
+      audit,
+    });
+
+    logger.info('[SecurityEngine] AntiDemote enforced', {
+      sessionId, groupJid, actorJid, targetMode, mode: modeStr,
+    });
+
+  } catch (err) {
+    audit.success = false;
+    audit.errors?.push(`engine_error:${String(err)}`);
+    logger.error('[SecurityEngine] AntiDemote engine error', {
+      err: String(err), sessionId, groupJid,
+    });
+  } finally {
+    logAudit(audit, startMs);
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+// AntiPromote Engine
+// ══════════════════════════════════════════════════════════
+//
+// Processing flow:
+//   1. Guard: module enabled?
+//   2. Guard: actor known?
+//   3. Determine enforcement targets by targetMode
+//   4. Guard: any protected target was promoted?
+//   5. Guard: bot is admin?
+//   6. Revert promotions
+//   7. Execute punishment against actor
+//   8. Audit (single finally block)
+//
+// Target mode 'protected':
+//   All promotions are ignored. In 'protected' mode the bot is the
+//   only entity of concern, and promoting the bot (already an admin)
+//   is a no-op that should be ignored.
+//
+// Target mode 'admins':
+//   Any promotion of a member to admin is unauthorized.
+//   Promoting the bot is still ignored (it is already admin).
+
 export async function handleAntiPromoteEvent(
   socket: WASocket,
   sessionId: string,
@@ -493,29 +672,33 @@ export async function handleAntiPromoteEvent(
 
   const startMs    = Date.now();
   const groupJid   = update.id;
-  const actorJid   = update.author ?? '';
   const targetJids  = update.participants;
+  const actorJid   = update.author ?? '';
+
+  const sock = socket as unknown as { user?: { id?: string } };
+  const rawBotJid = sock.user?.id ?? '';
+  const botNum    = rawBotJid ? numericId(rawBotJid) : '';
 
   const gc  = loadGroupAntiConfig(telegramId, sessionId, groupJid);
   const mod = gc.antipromote as AntiPromoteConfig | undefined;
+  const targetMode: TargetMode = mod?.targetMode ?? 'protected';
+  const modeStr = mod ? String(mod.mode) : 'off';
 
-  // Audit is created NOW — before any early exit — so every event is recorded.
   const audit = makeAudit(
     telegramId, sessionId, groupJid, actorJid, targetJids,
-    'detected_promote',
-    mod ? String(mod.mode) : 'off'
+    'skipped', modeStr, targetMode
   );
 
   try {
-    // ── Module disabled ──────────────────────────────────────
+    // ── Step 1: Module enabled? ──────────────────────────────
     if (!mod?.enabled || mod.mode === 'off') {
       audit.skipReason     = 'Module Disabled';
       audit.executedActions = ['audit'];
       logger.debug('[SecurityEngine] AntiPromote disabled', { sessionId, groupJid });
-      return; // finally will write the audit
+      return;
     }
 
-    // ── No author — cannot determine who performed the action ─
+    // ── Step 2: Actor known? ────────────────────────────────
     if (!actorJid) {
       audit.skipReason     = 'Invalid Actor';
       audit.executedActions = ['audit'];
@@ -523,75 +706,91 @@ export async function handleAntiPromoteEvent(
       return;
     }
 
-    const actorNumber   = normalizeNumber(actorJid);
-    const targetNumbers = targetJids.map((j) => normalizeNumber(j));
+    const actorNumber = normalizeNumber(actorJid);
 
-    // ── Authorization ────────────────────────────────────────
-    const auth = await classifyActor(
-      socket, sessionId, telegramId, groupJid, actorJid, mod.permitList ?? []
-    );
-    audit.actorPermissionLevel = auth.level;
+    // ── Step 3: Determine enforcement targets ────────────────
+    // targetMode 'protected':
+    //   Bot is the only protected entity. Promoting the bot is harmless
+    //   ("already admin" — spec says ignore). No other promotions trigger enforcement.
+    //   Result: enforcement targets = empty → ignored.
+    //
+    // targetMode 'admins':
+    //   Any member being promoted to admin is an unauthorized promotion.
+    //   Exception: promoting the bot (already admin) is ignored.
 
-    logger.info('[SecurityEngine] AntiPromote event classified', {
-      sessionId, groupJid, actorJid,
-      permissionLevel: auth.level,
-      isPunishable: auth.isPunishable,
-      mode: mod.mode,
+    let enforcementTargets: string[];
+    if (targetMode === 'protected') {
+      // In 'protected' mode, AntiPromote has nothing to act on:
+      //   - Bot promoted → ignore (already admin)
+      //   - Others promoted → not our concern
+      enforcementTargets = [];
+    } else {
+      // 'admins' mode: every promoted participant is a target,
+      // EXCEPT the bot itself (bot is already admin — ignore).
+      enforcementTargets = targetJids.filter((jid) => {
+        const n = numericId(jid);
+        return !n || n !== botNum;
+      });
+    }
+
+    // ── Step 4: Any enforcement target? ─────────────────────
+    if (enforcementTargets.length === 0) {
+      audit.event      = 'skipped';
+      audit.skipReason = 'Target not protected by current mode';
+      audit.executedActions = ['audit'];
+      logger.info('[SecurityEngine] AntiPromote: no enforcement targets', {
+        sessionId, groupJid, targetMode,
+      });
+      return;
+    }
+
+    const targetNumbers = enforcementTargets.map((j) => normalizeNumber(j));
+
+    // ── Step 5: Bot admin check ──────────────────────────────
+    const botIsAdmin = await checkBotIsAdmin(socket, sessionId, groupJid);
+    if (!botIsAdmin) {
+      audit.event      = 'skipped';
+      audit.skipReason = 'Bot is no longer Admin';
+      audit.executedActions = ['audit'];
+      logger.info('[SecurityEngine] AntiPromote: bot not admin, cannot enforce', {
+        sessionId, groupJid,
+      });
+      return;
+    }
+
+    // ── Step 6: Revert promotions ────────────────────────────
+    audit.event          = 'unauthorized_promote';
+    audit.enforcementMode = modeStr;
+
+    const plan = buildActionPlan(mod.mode);
+
+    if (plan.restoreVictim) {
+      const restoreId = `promote:${groupJid}:${enforcementTargets.join(',')}:${Date.now()}`;
+      addPendingRestore(sessionId, telegramId, {
+        id: restoreId, groupJid, participants: enforcementTargets,
+        action: 'demote', reason: 'antipromote_revert',
+      });
+      const ok = await retryGroupUpdate(socket, groupJid, enforcementTargets, 'demote');
+      audit.restoreSuccess = ok;
+      if (ok) {
+        removePendingRestore(sessionId, telegramId, restoreId);
+      } else {
+        audit.errors?.push('revert_promotion_failed_all_attempts');
+      }
+    }
+
+    // ── Step 7: Punishment ───────────────────────────────────
+    await executePunishment({
+      socket, sessionId, telegramId, groupJid,
+      actorJid, actorNumber, targetNumbers,
+      plan,
+      eventLabel: 'Unauthorized Promotion',
+      customMessage: mod.customMessage,
+      audit,
     });
 
-    // ── Bot not admin — enforcement impossible ───────────────
-    if (!auth.botIsAdmin) {
-      audit.skipReason     = 'Bot is no longer Admin' as SkipReason;
-      audit.executedActions = ['audit'];
-      return;
-    }
-
-    // ── Bot acting on itself — skip ──────────────────────────
-    if (auth.skipReason === 'Bot is Self') {
-      audit.skipReason     = 'Bot is Self';
-      audit.executedActions = ['audit'];
-      return;
-    }
-
-    // ── Protected actor: detect + log, no punishment ─────────
-    if (!auth.isPunishable) {
-      audit.event      = 'detected_promote';
-      audit.skipReason = auth.skipReason;
-      audit.executedActions = ['audit', 'notify_group'];
-
-      // Send a detection card (observe-only)
-      const levelLabel = auth.skipReason ?? auth.level;
-      const infoCard = buildSecurityCard({
-        eventLabel:   `Promotion Detected — ${levelLabel}`,
-        actorNumber,
-        targetNumbers,
-        actionLabel:  'Detected — No Enforcement',
-        penaltyLabel: `Skipped: ${levelLabel}`,
-        skipReason:   auth.skipReason,
-      });
-      await PreviewManager.send(socket as any, groupJid, infoCard, {
-        extra: { mentions: [actorJid, ...targetJids] },
-        sessionId, telegramId,
-      }).catch((err) => {
-        audit.errors?.push(`send_detect_card_failed:${String(err)}`);
-      });
-
-      return;
-    }
-
-    // ── Punishable actor — build & execute action plan ────────
-    audit.event          = 'unauthorized_promote';
-    audit.enforcementMode = String(mod.mode);
-
-    const plan = buildActionPlan(mod.mode, 'promote');
-
-    await executeActionPlan({
-      socket, sessionId, telegramId, groupJid,
-      actorJid, actorNumber, targetJids, targetNumbers,
-      plan,
-      eventLabel: 'Unauthorized Promotion Detected',
-      auth, audit,
-      customMessage: mod.customMessage,
+    logger.info('[SecurityEngine] AntiPromote enforced', {
+      sessionId, groupJid, actorJid, targetMode, mode: modeStr,
     });
 
   } catch (err) {
@@ -601,158 +800,6 @@ export async function handleAntiPromoteEvent(
       err: String(err), sessionId, groupJid,
     });
   } finally {
-    // Single audit emission point — always reached.
-    logAudit(audit, startMs);
-  }
-}
-
-// ── AntiDemote Engine ──────────────────────────────────────
-
-/**
- * Process a 'demote' participant event.
- *
- * Targets = the participants who WERE demoted.
- * Actor   = the admin who performed the demotion.
- *
- * Also triggers the Bot Self-Protection Engine when the bot
- * itself is among the demoted participants.  Bot protection
- * fires even when the AntiDemote module is disabled.
- *
- * Every event is audited.  Single `finally` emission.
- */
-export async function handleAntiDemoteEvent(
-  socket: WASocket,
-  sessionId: string,
-  telegramId: string,
-  update: ParticipantUpdateEvent
-): Promise<void> {
-  if (update.action !== 'demote') return;
-
-  const startMs    = Date.now();
-  const groupJid   = update.id;
-  const targetJids  = update.participants;
-  const actorJid   = update.author ?? '';
-
-  // ── Bot Self-Protection (fires regardless of module state) ──
-  // Must happen before any module-enabled check so the bot can
-  // defend itself even when AntiDemote is configured off.
-  const sock = socket as unknown as { user?: { id?: string } };
-  const rawBotJid = sock.user?.id ?? '';
-  if (rawBotJid) {
-    const botNum = numericId(rawBotJid);
-    const botWasDemoted = botNum
-      ? targetJids.some((jid) => numericId(jid) === botNum)
-      : false;
-    if (botWasDemoted) {
-      await handleBotSelfDemotion(socket, sessionId, telegramId, groupJid);
-    }
-  }
-
-  const gc  = loadGroupAntiConfig(telegramId, sessionId, groupJid);
-  const mod = gc.antidemote as AntiDemoteConfig | undefined;
-
-  // Audit is created NOW — before any early exit.
-  const audit = makeAudit(
-    telegramId, sessionId, groupJid, actorJid, targetJids,
-    'detected_demote',
-    mod ? String(mod.mode) : 'off'
-  );
-
-  try {
-    // ── Module disabled ──────────────────────────────────────
-    if (!mod?.enabled || mod.mode === 'off') {
-      audit.skipReason     = 'Module Disabled';
-      audit.executedActions = ['audit'];
-      logger.debug('[SecurityEngine] AntiDemote disabled', { sessionId, groupJid });
-      return;
-    }
-
-    // ── No author — cannot determine who performed the action ─
-    if (!actorJid) {
-      audit.skipReason     = 'Invalid Actor';
-      audit.executedActions = ['audit'];
-      logger.debug('[SecurityEngine] AntiDemote: no author in event', { sessionId, groupJid });
-      return;
-    }
-
-    const actorNumber   = normalizeNumber(actorJid);
-    const targetNumbers = targetJids.map((j) => normalizeNumber(j));
-
-    // ── Authorization ────────────────────────────────────────
-    const auth = await classifyActor(
-      socket, sessionId, telegramId, groupJid, actorJid, mod.permitList ?? []
-    );
-    audit.actorPermissionLevel = auth.level;
-
-    logger.info('[SecurityEngine] AntiDemote event classified', {
-      sessionId, groupJid, actorJid,
-      permissionLevel: auth.level,
-      isPunishable: auth.isPunishable,
-      mode: mod.mode,
-    });
-
-    // ── Bot not admin — enforcement impossible ───────────────
-    if (!auth.botIsAdmin) {
-      audit.skipReason     = 'Bot is no longer Admin' as SkipReason;
-      audit.executedActions = ['audit'];
-      return;
-    }
-
-    // ── Bot acting on itself — skip ──────────────────────────
-    if (auth.skipReason === 'Bot is Self') {
-      audit.skipReason     = 'Bot is Self';
-      audit.executedActions = ['audit'];
-      return;
-    }
-
-    // ── Protected actor: detect + log, no punishment ─────────
-    if (!auth.isPunishable) {
-      audit.event      = 'detected_demote';
-      audit.skipReason = auth.skipReason;
-      audit.executedActions = ['audit', 'notify_group'];
-
-      const levelLabel = auth.skipReason ?? auth.level;
-      const infoCard = buildSecurityCard({
-        eventLabel:   `Demotion Detected — ${levelLabel}`,
-        actorNumber,
-        targetNumbers,
-        actionLabel:  'Detected — No Enforcement',
-        penaltyLabel: `Skipped: ${levelLabel}`,
-        skipReason:   auth.skipReason,
-      });
-      await PreviewManager.send(socket as any, groupJid, infoCard, {
-        extra: { mentions: [actorJid, ...targetJids] },
-        sessionId, telegramId,
-      }).catch((err) => {
-        audit.errors?.push(`send_detect_card_failed:${String(err)}`);
-      });
-
-      return;
-    }
-
-    // ── Punishable actor — build & execute action plan ────────
-    audit.event          = 'unauthorized_demote';
-    audit.enforcementMode = String(mod.mode);
-
-    const plan = buildActionPlan(mod.mode, 'demote');
-
-    await executeActionPlan({
-      socket, sessionId, telegramId, groupJid,
-      actorJid, actorNumber, targetJids, targetNumbers,
-      plan,
-      eventLabel: 'Unauthorized Demotion Detected',
-      auth, audit,
-      customMessage: mod.customMessage,
-    });
-
-  } catch (err) {
-    audit.success = false;
-    audit.errors?.push(`engine_error:${String(err)}`);
-    logger.error('[SecurityEngine] AntiDemote engine error', {
-      err: String(err), sessionId, groupJid,
-    });
-  } finally {
-    // Single audit emission point — always reached.
     logAudit(audit, startMs);
   }
 }

@@ -18,6 +18,7 @@ import type {
   AntiAction,
   AntiDemoteMode,
   GroupSecurityMode,
+  TargetMode,
 } from './types.js';
 
 // ── Defaults ──────────────────────────────────────────────
@@ -49,14 +50,16 @@ export function defaultWordsConfig(): AntiWordsConfig {
 export function defaultPromoteConfig(): AntiPromoteConfig {
   return {
     ...defaultModuleConfig('kick'),
-    mode: 'revert',
+    mode: 'restorekick',
+    targetMode: 'protected',
   };
 }
 
 export function defaultDemoteConfig(): AntiDemoteConfig {
   return {
     ...defaultModuleConfig('kick'),
-    mode: 'revert',
+    mode: 'restorekick',
+    targetMode: 'protected',
   };
 }
 
@@ -320,6 +323,19 @@ export function setPromoteMode(
   saveSessionAntiConfig(telegramId, sessionId, all);
 }
 
+export function setPromoteTargetMode(
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  targetMode: TargetMode
+): void {
+  const all = loadSessionAntiConfig(telegramId, sessionId);
+  if (!all[groupJid]) all[groupJid] = { groupJid };
+  const existing = (all[groupJid].antipromote ?? defaultPromoteConfig()) as AntiPromoteConfig;
+  all[groupJid].antipromote = { ...existing, targetMode };
+  saveSessionAntiConfig(telegramId, sessionId, all);
+}
+
 // ── AntiDemote mode update ────────────────────────────────
 
 export function setDemoteMode(
@@ -332,6 +348,19 @@ export function setDemoteMode(
   if (!all[groupJid]) all[groupJid] = { groupJid };
   const existing = (all[groupJid].antidemote ?? defaultDemoteConfig()) as AntiDemoteConfig;
   all[groupJid].antidemote = { ...existing, enabled: true, mode };
+  saveSessionAntiConfig(telegramId, sessionId, all);
+}
+
+export function setDemoteTargetMode(
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  targetMode: TargetMode
+): void {
+  const all = loadSessionAntiConfig(telegramId, sessionId);
+  if (!all[groupJid]) all[groupJid] = { groupJid };
+  const existing = (all[groupJid].antidemote ?? defaultDemoteConfig()) as AntiDemoteConfig;
+  all[groupJid].antidemote = { ...existing, targetMode };
   saveSessionAntiConfig(telegramId, sessionId, all);
 }
 

@@ -6,26 +6,40 @@ export type AntiAction = 'kick' | 'warn' | 'delete';
 
 // ── Security Permission Levels ─────────────────────────────
 //
-// Ordered highest → lowest trust.
-// Being a WhatsApp Admin is NOT a permission level that grants exemption.
-// Group admin status alone must NEVER bypass AntiPromote or AntiDemote.
-//
-// Protected from punishment (still detected & audited):
-//   GLOBAL_OWNER, SESSION_OWNER, WORKSPACE_OWNER,
-//   TRUSTED_ADMIN, SUDO_USER, TEMPORARY_PERMIT
-//
-// Enforced against (no exemption):
-//   WA_ADMIN, NONE
+// Still used by other moderation modules (AntiLink, AntiSpam, etc.).
+// AntiPromote and AntiDemote no longer use permission levels —
+// they use TargetMode instead.
 
 export type PermissionLevel =
-  | 'GLOBAL_OWNER'       // Env TELEGRAM_OWNER_ID + configured owner WA number
-  | 'SESSION_OWNER'      // isOwner in workspace config
-  | 'WORKSPACE_OWNER'    // Alias for SESSION_OWNER (semantic clarity)
-  | 'TRUSTED_ADMIN'      // Explicitly configured trusted numbers
-  | 'SUDO_USER'          // sudoNumbers in workspace config
-  | 'TEMPORARY_PERMIT'   // Per-module permit list
-  | 'WA_ADMIN'           // WhatsApp group admin ONLY — NOT exempt from enforcement
-  | 'NONE';              // Regular member
+  | 'GLOBAL_OWNER'
+  | 'SESSION_OWNER'
+  | 'WORKSPACE_OWNER'
+  | 'TRUSTED_ADMIN'
+  | 'SUDO_USER'
+  | 'TEMPORARY_PERMIT'
+  | 'WA_ADMIN'
+  | 'NONE';
+
+// ── Target Mode ────────────────────────────────────────────
+//
+// Determines WHICH participants AntiPromote/AntiDemote protects.
+//
+//   protected (default)
+//     Only the bot is a protected target.
+//     AntiDemote: fires only when the bot is demoted.
+//     AntiPromote: fires for any unauthorized promotion (to admin)
+//                  EXCEPT promoting the bot (already admin — ignored).
+//
+//   admins
+//     Every administrator is a protected target.
+//     AntiDemote: fires when ANY admin is demoted.
+//     AntiPromote: fires when ANY member is promoted to admin.
+//
+// No actor is exempt regardless of who they are (owner, trusted admin,
+// sudo, workspace owner, etc.). The only entity inherently protected is
+// the bot itself (in 'protected' mode) or every admin (in 'admins' mode).
+
+export type TargetMode = 'protected' | 'admins';
 
 // ── Security Skip Reasons ──────────────────────────────────
 //
@@ -33,48 +47,55 @@ export type PermissionLevel =
 // Silent exits are forbidden.
 
 export type SkipReason =
+  // Used by AntiPromote / AntiDemote engine (v3)
+  | 'Bot is Self'
+  | 'Bot is no longer Admin'
+  | 'Bot restore failed'
+  | 'Missing WhatsApp Permission'
+  | 'Invalid Actor'
+  | 'Unknown Group State'
+  | 'Module Disabled'
+  | 'Target not protected by current mode'
+  // Used by other modules (AntiLink, AntiSpam, etc.) via classifyActor
   | 'Global Owner'
   | 'Session Owner'
   | 'Workspace Owner'
   | 'Trusted Admin'
   | 'Sudo User'
-  | 'Temporary Permit'
-  | 'Bot is Self'
-  | 'Bot is no longer Admin'
-  | 'Missing WhatsApp Permission'
-  | 'Invalid Actor'
-  | 'Unknown Group State'
-  | 'Module Disabled';
+  | 'Temporary Permit';
 
 // ── Security Actions ───────────────────────────────────────
 //
 // Actions are chainable.  Example chains:
-//   REVERT → WARN → LOG
-//   REVERT → KICK → LOG
-//   WARN → TELEGRAM → AUDIT
+//   RESTORE → LOG
+//   RESTORE → WARN → LOG
+//   RESTORE → KICK → LOG
+//   RESTORE → KICK → BAN → LOG
 
 export type SecurityAction =
-  | 'revert_promotion'    // Demote the promoted targets back to member
-  | 'revert_demotion'     // Re-promote the demoted targets back to admin
-  | 'warn'                // Warn the actor in group
-  | 'kick'                // Remove the actor from the group
-  | 'ban'                 // Remove + block the actor
-  | 'delete_event'        // Delete the offending event message (if available)
-  | 'notify_group'        // Send OMEGA SECURITY card to the group
-  | 'notify_owner'        // Notify the session owner (future: Telegram DM)
-  | 'notify_telegram'     // Send alert to owner via Telegram bot
-  | 'audit';              // Write structured security audit log entry
+  | 'restore_target'   // Re-promote (AntiDemote) or re-demote (AntiPromote) the affected participant(s)
+  | 'warn'             // Warn the actor in group
+  | 'kick'             // Remove the actor from the group
+  | 'ban'              // Remove + block the actor
+  | 'notify_group'     // Send OMEGA SECURITY card to the group
+  | 'notify_owner'     // Notify the session owner (future: Telegram DM)
+  | 'notify_telegram'  // Send alert to owner via Telegram bot
+  | 'audit';           // Write structured security audit log entry
+
+// Legacy action names (kept for type compat — mapped at use site)
+export type LegacySecurityAction =
+  | 'revert_promotion'
+  | 'revert_demotion';
 
 // ── Security Event Types ───────────────────────────────────
 
 export type SecurityEventType =
   | 'unauthorized_promote'
   | 'unauthorized_demote'
-  | 'detected_promote'    // Protected actor — detect only, no punishment
-  | 'detected_demote'     // Protected actor — detect only, no punishment
-  | 'bot_demoted'         // Bot's own admin was removed
-  | 'bot_restored'        // Bot successfully re-promoted itself
-  | 'bot_restore_failed'; // Bot could not recover its admin status
+  | 'bot_demoted'          // Bot's own admin was removed
+  | 'bot_restored'         // Bot successfully re-promoted itself
+  | 'bot_restore_failed'   // Bot could not recover its admin status
+  | 'skipped';             // Enforcement skipped — see skipReason
 
 // ── Structured Security Audit Log ─────────────────────────
 //
@@ -88,10 +109,10 @@ export interface SecurityAuditLog {
   groupName: string;
   actorJid: string;
   actorNumber: string;      // numeric part only
-  actorPermissionLevel: PermissionLevel;
   targetJids: string[];
   event: SecurityEventType;
-  enforcementMode: string;  // mode string as configured (incl. legacy)
+  enforcementMode: string;  // punishment mode as configured (incl. legacy)
+  targetMode: TargetMode;   // which targets are protected
   executedActions: SecurityAction[];
   skipReason?: SkipReason;  // populated when enforcement was skipped
   success: boolean;
@@ -101,23 +122,22 @@ export interface SecurityAuditLog {
 }
 
 // ── Authorization Result ───────────────────────────────────
+// Still used by other moderation modules via security-authorization.ts.
 
 export interface AuthorizationResult {
   level: PermissionLevel;
-  isPunishable: boolean;    // true = enforcement should proceed
-  skipReason?: SkipReason;  // populated when isPunishable = false
+  isPunishable: boolean;
+  skipReason?: SkipReason;
   botIsAdmin: boolean;
 }
 
 // ── Legacy Mode Support ────────────────────────────────────
 //
 // Legacy modes are mapped to modern action chains:
-//   dwp → REVERT + WARN
-//   dnp → REVERT
-//   kwp → KICK + WARN
-//   knp → KICK
-//
-// Unknown modes produce structured logs and fall back safely.
+//   dwp → restore + warn actor
+//   dnp → restore only
+//   kwp → kick actor + warn (no restore of victim)
+//   knp → kick actor only   (no restore of victim)
 
 export type LegacySecurityMode = 'dwp' | 'dnp' | 'kwp' | 'knp';
 
@@ -125,24 +145,39 @@ export type LegacySecurityMode = 'dwp' | 'dnp' | 'kwp' | 'knp';
 export type AntiDemoteMode = LegacySecurityMode;
 
 /**
- * Unified mode for AntiPromote and AntiDemote.
+ * Punishment mode for AntiPromote and AntiDemote.
  *
- *  off    — module disabled
- *  warn   — send a warning card, no role change
- *  revert — undo the role change
- *  kick   — revert + kick the actor
- *  ban    — revert + kick + block the actor
- *  dwp    — legacy: REVERT + WARN
- *  dnp    — legacy: REVERT
- *  kwp    — legacy: KICK + WARN
- *  knp    — legacy: KICK
+ * Canonical modes (v3):
+ *   restore      — restore the victim only, no actor punishment
+ *   restorewarn  — restore victim + warn actor in group
+ *   restorekick  — restore victim + kick actor
+ *   restoreban   — restore victim + kick + block actor
+ *
+ * Backward-compat aliases (map to canonical):
+ *   revert       → restore
+ *   warn         → restorewarn
+ *   kick         → restorekick
+ *   ban          → restoreban
+ *
+ * Legacy modes (no-restore variants, kept for existing configs):
+ *   dnp          → restore only            (legacy: demote-no-punish)
+ *   dwp          → restore + warn actor    (legacy: demote-with-punish)
+ *   knp          → kick actor, no restore  (legacy: kick-no-punish)
+ *   kwp          → kick + warn, no restore (legacy: kick-with-punish)
  */
 export type GroupSecurityMode =
   | 'off'
-  | 'warn'
+  // Canonical v3 modes:
+  | 'restore'
+  | 'restorewarn'
+  | 'restorekick'
+  | 'restoreban'
+  // Backward-compat aliases:
   | 'revert'
+  | 'warn'
   | 'kick'
   | 'ban'
+  // Legacy:
   | LegacySecurityMode;
 
 /** Base config shared by every anti module */
@@ -167,15 +202,30 @@ export interface AntiWordsConfig extends AntiModuleConfig {
 
 /**
  * AntiPromote module config.
- * Uses GroupSecurityMode (includes legacy mode aliases).
+ *
+ * targetMode — who is protected from unauthorized promotions:
+ *   'protected' (default) — nobody specifically; all promotions in 'admins' mode are flagged
+ *   'admins'              — every promotion of a member to admin is reverted
+ *
+ * mode — what punishment is applied to the actor when enforcement triggers.
  */
 export interface AntiPromoteConfig extends AntiModuleConfig {
   mode: GroupSecurityMode;
+  targetMode: TargetMode;  // default: 'protected'
 }
 
-/** AntiDemote module config — unified mode system */
+/**
+ * AntiDemote module config.
+ *
+ * targetMode — who is protected from demotion:
+ *   'protected' (default) — only the bot
+ *   'admins'              — every administrator
+ *
+ * mode — what punishment is applied to the actor when enforcement triggers.
+ */
 export interface AntiDemoteConfig extends AntiModuleConfig {
   mode: GroupSecurityMode;
+  targetMode: TargetMode;  // default: 'protected'
   /** @deprecated kept for migration; handled by legacy compat layer */
   legacyMode?: AntiDemoteMode;
 }
