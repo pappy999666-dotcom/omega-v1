@@ -168,19 +168,49 @@ export async function handleWAEvent(
   if (event === 'group-participants.update') {
     const telegramId = sessionOwnerMap.get(sessionId);
     if (telegramId) {
-      // Baileys emits group-participants.update as an ARRAY of update objects.
-      // Casting to a single object was the root cause of Welcome/Goodbye never firing.
+      // Baileys emits group-participants.update as a SINGLE object (not an array).
+      // Wrap it in an array to support both shapes for forward-compatibility.
       const rawUpdates = data as unknown;
-      const updates: Array<{ id: string; participants: string[]; action: string; author?: string }> =
+      const updates: Array<{ id: string; participants: unknown[]; action: string; author?: string }> =
         Array.isArray(rawUpdates)
-          ? (rawUpdates as Array<{ id: string; participants: string[]; action: string; author?: string }>)
-          : [rawUpdates as { id: string; participants: string[]; action: string; author?: string }];
+          ? (rawUpdates as Array<{ id: string; participants: unknown[]; action: string; author?: string }>)
+          : [rawUpdates as { id: string; participants: unknown[]; action: string; author?: string }];
 
       for (const update of updates) {
         if (!update?.id) continue;
+
+        // ── BAILEYS 2.7.0 PARTICIPANT FORMAT FIX ──────────────────────────
+        // @crysnovax/baileys@2.7.0 changed `participants` from string[] (JID strings)
+        // to Object[] ({ id: string, phoneNumber: string, admin?: string }) to support
+        // LID-based JIDs.  All downstream consumers (Welcome, Goodbye, AutoBlock,
+        // AntiPromote, AntiDemote, patchGroupMetaCache) expect plain JID strings.
+        // Normalize here — at the single dispatch boundary — so every feature works
+        // without modification.
+        //
+        // Backward-compatible: if Baileys ever reverts to strings this no-ops correctly.
+        const rawParticipants: unknown[] = update.participants ?? [];
+        const participantJids: string[] = rawParticipants
+          .map((p: unknown): string => {
+            if (typeof p === 'string') return p; // old format — pass through
+            const obj = p as { id?: string; phoneNumber?: string };
+            // Prefer the full JID (id) over the bare phone number
+            if (obj.id) return obj.id;
+            if (obj.phoneNumber) return `${obj.phoneNumber}@s.whatsapp.net`;
+            return '';
+          })
+          .filter(Boolean);
+
+        logger.debug('[EventHandler] group-participants.update', {
+          sessionId,
+          groupJid: update.id,
+          action: update.action,
+          participants: participantJids,
+          author: update.author,
+        });
+
         await handleParticipantUpdate(socket, sessionId, telegramId, {
           id: update.id,
-          participants: update.participants ?? [],
+          participants: participantJids,
           action: update.action as 'add' | 'remove' | 'promote' | 'demote',
           author: update.author,
         }).catch((err) => {
