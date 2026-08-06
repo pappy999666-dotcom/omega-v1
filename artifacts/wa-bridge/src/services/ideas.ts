@@ -5,13 +5,8 @@
 
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { logger } from '../utils/logger.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT
-  ? path.resolve(process.env.WORKSPACE_ROOT)
-  : path.resolve(__dirname, '../../workspaces');
+import { WORKSPACE_ROOT } from './workspace.js';
 
 const IDEAS_PATH = path.join(WORKSPACE_ROOT, '_platform', 'ideas.json');
 

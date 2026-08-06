@@ -43,6 +43,15 @@ import { buildMenuSections, buildGroupMenuSections } from './menu-registry.js';
 import { addIdea } from '../services/ideas.js';
 // ── Anti System ───────────────────────────────────────────
 import { runAntiChecks, handleParticipantUpdate } from './anti-system/index.js';
+// ── Runtime stores (dedupe, getMessage, contacts, presence, status) ──
+import {
+  markSeen,
+  rememberMessage,
+  upsertContacts,
+  setPresence,
+  setGroupMetaSnapshot,
+  noteReaction,
+} from './message-store.js';
 import {
   handleAntiCommand,
   handlePermitCommand,
@@ -81,7 +90,7 @@ import {
   cmdEventStatus,
 } from './commands/group-moderation.js';
 import { setAutoblockConfig, loadGroupEventConfig } from '../services/group-config.js';
-import { fetchGroupMeta, resolveRealJidFromMeta } from './utils/group-permissions.js';
+import { fetchGroupMeta, resolveRealJidFromMeta, bustGroupMetaCache } from './utils/group-permissions.js';
 import { parseUrlButtons } from './utils/url-buttons.js';
 import fs from 'fs';
 import path from 'path';
@@ -159,66 +168,246 @@ export async function handleWAEvent(
   data: unknown,
   socket: WASocket
 ): Promise<void> {
-  if (event === 'messages.upsert') {
-    await handleMessages(sessionId, data as { messages: WebMessageInfo[]; type: string }, socket);
-    return;
-  }
-
-  // ── Anti System: group participant events (AntiPromote / AntiDemote / Welcome / Goodbye) ──
-  if (event === 'group-participants.update') {
-    const telegramId = sessionOwnerMap.get(sessionId);
-    if (telegramId) {
-      // Baileys emits group-participants.update as a SINGLE object (not an array).
-      // Wrap it in an array to support both shapes for forward-compatibility.
-      const rawUpdates = data as unknown;
-      const updates: Array<{ id: string; participants: unknown[]; action: string; author?: string }> =
-        Array.isArray(rawUpdates)
-          ? (rawUpdates as Array<{ id: string; participants: unknown[]; action: string; author?: string }>)
-          : [rawUpdates as { id: string; participants: unknown[]; action: string; author?: string }];
-
-      for (const update of updates) {
-        if (!update?.id) continue;
-
-        // ── BAILEYS 2.7.0 PARTICIPANT FORMAT FIX ──────────────────────────
-        // @crysnovax/baileys@2.7.0 changed `participants` from string[] (JID strings)
-        // to Object[] ({ id: string, phoneNumber: string, admin?: string }) to support
-        // LID-based JIDs.  All downstream consumers (Welcome, Goodbye, AutoBlock,
-        // AntiPromote, AntiDemote, patchGroupMetaCache) expect plain JID strings.
-        // Normalize here — at the single dispatch boundary — so every feature works
-        // without modification.
-        //
-        // Backward-compatible: if Baileys ever reverts to strings this no-ops correctly.
-        const rawParticipants: unknown[] = update.participants ?? [];
-        const participantJids: string[] = rawParticipants
-          .map((p: unknown): string => {
-            if (typeof p === 'string') return p; // old format — pass through
-            const obj = p as { id?: string; phoneNumber?: string };
-            // Prefer the full JID (id) over the bare phone number
-            if (obj.id) return obj.id;
-            if (obj.phoneNumber) return `${obj.phoneNumber}@s.whatsapp.net`;
-            return '';
-          })
-          .filter(Boolean);
-
-        logger.debug('[EventHandler] group-participants.update', {
-          sessionId,
-          groupJid: update.id,
-          action: update.action,
-          participants: participantJids,
-          author: update.author,
-        });
-
-        await handleParticipantUpdate(socket, sessionId, telegramId, {
-          id: update.id,
-          participants: participantJids,
-          action: update.action as 'add' | 'remove' | 'promote' | 'demote',
-          author: update.author,
-        }).catch((err) => {
-          logger.warn('[AntiSystem] handleParticipantUpdate error', { err: String(err) });
-        });
-      }
+  switch (event) {
+    // ── Messages ────────────────────────────────────────────
+    case 'messages.upsert': {
+      await handleMessages(sessionId, data as { messages: WebMessageInfo[]; type: string }, socket);
+      return;
     }
-    return;
+
+    // ── Anti System: group participant events (AntiPromote / AntiDemote / Welcome / Goodbye) ──
+    case 'group-participants.update': {
+      const telegramId = sessionOwnerMap.get(sessionId);
+      if (telegramId) {
+        // Baileys emits group-participants.update as a SINGLE object (not an array).
+        // Wrap it in an array to support both shapes for forward-compatibility.
+        const rawUpdates = data as unknown;
+        const updates: Array<{ id: string; participants: unknown[]; action: string; author?: string }> =
+          Array.isArray(rawUpdates)
+            ? (rawUpdates as Array<{ id: string; participants: unknown[]; action: string; author?: string }>)
+            : [rawUpdates as { id: string; participants: unknown[]; action: string; author?: string }];
+
+        for (const update of updates) {
+          if (!update?.id) continue;
+
+          // ── BAILEYS 2.7.0 PARTICIPANT FORMAT FIX ──────────────────────────
+          // @crysnovax/baileys@2.7.0 changed `participants` from string[] (JID strings)
+          // to Object[] ({ id: string, phoneNumber: string, admin?: string }) to support
+          // LID-based JIDs.  All downstream consumers (Welcome, Goodbye, AutoBlock,
+          // AntiPromote, AntiDemote, patchGroupMetaCache) expect plain JID strings.
+          // Normalize here — at the single dispatch boundary — so every feature works
+          // without modification.
+          //
+          // Backward-compatible: if Baileys ever reverts to strings this no-ops correctly.
+          const rawParticipants: unknown[] = update.participants ?? [];
+          const participantJids: string[] = rawParticipants
+            .map((p: unknown): string => {
+              if (typeof p === 'string') return p; // old format — pass through
+              const obj = p as { id?: string; phoneNumber?: string };
+              // Prefer the full JID (id) over the bare phone number
+              if (obj.id) return obj.id;
+              if (obj.phoneNumber) return `${obj.phoneNumber}@s.whatsapp.net`;
+              return '';
+            })
+            .filter(Boolean);
+
+          logger.debug('[EventHandler] group-participants.update', {
+            sessionId,
+            groupJid: update.id,
+            action: update.action,
+            participants: participantJids,
+            author: update.author,
+          });
+
+          await handleParticipantUpdate(socket, sessionId, telegramId, {
+            id: update.id,
+            participants: participantJids,
+            action: update.action as 'add' | 'remove' | 'promote' | 'demote',
+            author: update.author,
+          }).catch((err) => {
+            logger.warn('[AntiSystem] handleParticipantUpdate error', { err: String(err) });
+          });
+        }
+      }
+      return;
+    }
+
+    // ── messages.update: delivery/read/played status changes ──
+    case 'messages.update': {
+      const updates = Array.isArray(data)
+        ? (data as Array<{ key?: { id?: string; remoteJid?: string }; update?: { status?: number } }>)
+        : [];
+      for (const u of updates) {
+        if (u?.key?.id) {
+          logger.debug('[Events] messages.update', { sessionId, id: u.key.id, status: u.update?.status });
+        }
+      }
+      return;
+    }
+
+    // ── messages.reaction: reaction to any of our messages ──
+    case 'messages.reaction': {
+      const reactions = Array.isArray(data)
+        ? (data as Array<{ key?: { id?: string }; senderId?: string; reaction?: { text?: string } }>)
+        : [];
+      for (const r of reactions) {
+        if (!r?.key?.id) continue;
+        noteReaction(sessionId, r.key.id, r.senderId ?? '', r.reaction?.text ?? '');
+        logger.debug('[Events] messages.reaction', { sessionId, id: r.key.id, text: r.reaction?.text });
+      }
+      return;
+    }
+
+    // ── messages.delete: message deleted (self / everyone) ──
+    case 'messages.delete': {
+      const payload = data as unknown;
+      let deletedIds: string[] = [];
+      if (Array.isArray(payload)) {
+        deletedIds = (payload as Array<{ key?: { id?: string } }>)
+          .map((d) => d?.key?.id)
+          .filter((v): v is string => Boolean(v));
+      } else {
+        const single = payload as { keys?: Array<{ id?: string }> };
+        deletedIds = (single?.keys ?? [])
+          .map((k) => k?.id)
+          .filter((v): v is string => Boolean(v));
+      }
+      if (deletedIds.length > 0) logger.info('[Events] messages.delete', { sessionId, ids: deletedIds });
+      return;
+    }
+
+    // ── Receipts (delivered/read/played confirmations) ──
+    case 'messages.receipt-update':
+    case 'message-receipt.update': {
+      logger.debug('[Events] receipt-update', { sessionId, count: Array.isArray(data) ? data.length : 0 });
+      return;
+    }
+
+    // ── Media re-upload updates (thumbnails etc.) — no action needed ──
+    case 'messages.media-update': {
+      logger.debug('[Events] messages.media-update', { sessionId });
+      return;
+    }
+
+    // ── History sync (disabled via syncFullHistory=false) ──
+    case 'messaging-history.set': {
+      logger.debug('[Events] messaging-history.set (history sync skipped)', { sessionId });
+      return;
+    }
+
+    // ── groups.update: subject/description/icon changed → invalidate meta cache ──
+    case 'groups.update': {
+      const updates = Array.isArray(data)
+        ? (data as Array<{ id?: string; subject?: string; desc?: string }>)
+        : [];
+      for (const g of updates) {
+        if (!g?.id) continue;
+        try {
+          bustGroupMetaCache(socket, g.id);
+          setGroupMetaSnapshot(sessionId, g.id, g);
+          logger.debug('[Events] groups.update', { sessionId, groupJid: g.id, subject: g.subject });
+        } catch (err) {
+          logger.warn('[Events] groups.update error', { err: String(err) });
+        }
+      }
+      return;
+    }
+
+    // ── presence.update: online/offline/composing tracking (store only, no per-event logs) ──
+    case 'presence.update': {
+      const upd = data as { id?: string; presences?: Record<string, { lastKnownPresence?: string }> };
+      try {
+        if (upd?.presences) {
+          for (const [jid, p] of Object.entries(upd.presences)) {
+            const online =
+              p?.lastKnownPresence === 'available' ||
+              p?.lastKnownPresence === 'composing' ||
+              p?.lastKnownPresence === 'recording';
+            setPresence(sessionId, jid, online);
+          }
+        }
+      } catch (err) {
+        logger.debug('[Events] presence.update error', { err: String(err) });
+      }
+      return;
+    }
+
+    // ── contacts.update / contacts.upsert: name/avatar/LID mapping refresh ──
+    case 'contacts.update':
+    case 'contacts.upsert': {
+      const contacts = Array.isArray(data) ? (data as Array<Record<string, unknown>>) : [];
+      if (contacts.length > 0) upsertContacts(sessionId, contacts);
+      return;
+    }
+
+    // ── Calls: log + optional auto-reject (anti-call) ──
+    case 'call': {
+      const calls = Array.isArray(data)
+        ? (data as Array<{ id?: string; from?: string; status?: string; isVideo?: boolean; isGroup?: boolean }>)
+        : [];
+      for (const call of calls) {
+        if (!call?.id || !call?.from) continue;
+        logger.info('[Events] Incoming call', {
+          sessionId,
+          from: call.from,
+          status: call.status,
+          isVideo: call.isVideo,
+        });
+        const telegramId = sessionOwnerMap.get(sessionId);
+        if (telegramId && call.status === 'offer') {
+          const config = loadSessionConfig(telegramId, sessionId);
+          if (config.antiCallEnabled) {
+            const reject = (socket as unknown as { rejectCall?: (id: string, from: string) => Promise<unknown> }).rejectCall;
+            if (reject) {
+              await reject(call.id, call.from).catch((err) =>
+                logger.warn('[Events] Call reject failed', { err: String(err) })
+              );
+            }
+          }
+        }
+      }
+      return;
+    }
+
+    // ── Blocklist ──
+    case 'blocklist.set':
+    case 'blocklist.update': {
+      logger.debug('[Events] blocklist update', { sessionId, count: Array.isArray(data) ? data.length : 0 });
+      return;
+    }
+
+    // ── Chats / labels / products / stickers — logged for future features ──
+    case 'chats.set':
+    case 'chats.update':
+    case 'chats.delete':
+    case 'labels.association':
+    case 'labels.edit':
+    case 'product.update':
+    case 'sticker.update':
+    case 'status.update':
+    case 'chat-update': {
+      logger.debug('[Events] state change', { sessionId, event });
+      return;
+    }
+
+    // ── Newsletter (channels) — future-proofing ──
+    case 'newsletter.update':
+    case 'newsletter.mute':
+    case 'newsletter.reaction':
+    case 'newsletter.follow':
+    case 'newsletter.join':
+    case 'newsletter.leave':
+    case 'newsletter.view':
+    case 'newsletter.delete':
+    case 'newsletter.ephemeral': {
+      logger.debug('[Events] newsletter event', { sessionId, event });
+      return;
+    }
+
+    default: {
+      logger.debug('[Events] unhandled event', { sessionId, event });
+      return;
+    }
   }
 }
 
@@ -290,6 +479,35 @@ export async function executeGroupBridgeCommand(
   await processMessage(sessionId, telegramId, syntheticMessage, socket, onReply);
 }
 
+// ── Status Pipeline ───────────────────────────────────────
+// Incoming status posts arrive via messages.upsert with
+// remoteJid === 'status@broadcast'. Auto-view + optional auto-like.
+async function autoHandleStatus(
+  sessionId: string,
+  telegramId: string,
+  msg: WebMessageInfo,
+  socket: WASocket
+): Promise<void> {
+  try {
+    if (msg.key?.remoteJid !== 'status@broadcast') return;
+    if (msg.key.fromMe) return; // never auto-react to our own posts
+    const config = loadSessionConfig(telegramId, sessionId);
+    // Auto-view (marks the status as seen)
+    if (config.autoStatusView !== false) {
+      const read = (socket as unknown as { readMessages?: (keys: unknown[]) => Promise<unknown> }).readMessages;
+      if (read) await read([msg.key]).catch(() => undefined);
+    }
+    // Auto-like with the configured emoji (opt-in)
+    if (config.autoStatusLike && config.statusEmoji) {
+      await socket
+        .sendMessage('status@broadcast', { react: { text: config.statusEmoji, key: msg.key } }, {})
+        .catch(() => undefined);
+    }
+  } catch (err) {
+    logger.debug('[Status] autoHandleStatus error', { err: String(err) });
+  }
+}
+
 // ── Message Handler ───────────────────────────────────────
 
 async function handleMessages(
@@ -304,6 +522,24 @@ async function handleMessages(
 
   for (const msg of upsert.messages) {
     if (!msg.message) continue;
+
+    // ── Dedupe + store ─────────────────────────────────────────
+    // Baileys can re-deliver the same upsert after a reconnect; dedupe by
+    // message id. Remember every message in the per-session store so Baileys'
+    // getMessage (quoted replies / LID resolution) has the full payload.
+    if (!markSeen(sessionId, msg.key?.id)) continue;
+    rememberMessage(sessionId, msg);
+
+    // ── Auto-read incoming 1:1 messages (marks DMs as read instantly) ──
+    // Gate off with WA_AUTO_READ=0 if undesired. Status posts are handled
+    // separately by the status pipeline below.
+    if (!msg.key?.fromMe && msg.key?.remoteJid?.endsWith('@s.whatsapp.net')) {
+      if (process.env.WA_AUTO_READ !== '0') {
+        (socket as unknown as { readMessages?: (keys: unknown[]) => Promise<unknown> })
+          .readMessages?.([msg.key])
+          .catch(() => undefined);
+      }
+    }
 
     // ── One-time GC join code check ──────────────────────────────
     const msgGroupJid = msg.key.remoteJid ?? '';
@@ -350,6 +586,11 @@ async function handleMessages(
         err: err.message,
       });
     });
+
+    // ── Status pipeline: auto-view / auto-like incoming status posts ──
+    if (msg.key?.remoteJid === 'status@broadcast') {
+      await autoHandleStatus(sessionId, telegramId, msg, socket);
+    }
   }
 }
 

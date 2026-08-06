@@ -16,10 +16,64 @@ import type {
 } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 
+import os from 'os';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT
-  ? path.resolve(process.env.WORKSPACE_ROOT)
-  : path.resolve(__dirname, '../../workspaces');
+
+// ── WORKSPACE ROOT (session persistence — CRITICAL) ────────
+// Sessions MUST live OUTSIDE the git repository. The old default
+// (`artifacts/workspaces`) was inside the repo tree AND git-tracked,
+// so `git pull` / `git reset --hard` / `git clean` on the VPS wiped
+// every session. New default: ~/.omega-v1/workspaces (never tracked).
+//
+// Resolution order:
+//   1. WORKSPACE_ROOT env var (explicit VPS override, e.g. /root/omega-data)
+//   2. OMEGA_DATA_DIR env var
+//   3. ~/.omega-v1/workspaces (safe default, outside any git checkout)
+export const WORKSPACE_ROOT: string = (() => {
+  const envRoot = process.env.WORKSPACE_ROOT ?? process.env.OMEGA_DATA_DIR;
+  if (envRoot) return path.resolve(envRoot);
+  return path.join(os.homedir(), '.omega-v1', 'workspaces');
+})();
+
+/**
+ * One-time migration: copy any existing in-repo workspace data
+ * (legacy `artifacts/workspaces`) into the new persistent root.
+ * Idempotent — only copies when the new root is empty/missing.
+ * Runs at module load; safe to call repeatedly.
+ */
+export function migrateLegacyWorkspaces(): void {
+  try {
+    const legacy = path.resolve(__dirname, '../../workspaces');
+    if (legacy === WORKSPACE_ROOT) return;
+    if (!fs.existsSync(legacy)) return;
+    const entries = fs.readdirSync(legacy).filter((f) => f !== '.gitkeep');
+    if (entries.length === 0) return;
+    if (fs.existsSync(WORKSPACE_ROOT) && fs.readdirSync(WORKSPACE_ROOT).length > 0) return;
+    fs.mkdirSync(WORKSPACE_ROOT, { recursive: true });
+    for (const entry of entries) {
+      fs.cpSync(path.join(legacy, entry), path.join(WORKSPACE_ROOT, entry), { recursive: true });
+    }
+    logger.warn(
+      `[Workspace] Migrated session data from legacy in-repo path ${legacy} → ${WORKSPACE_ROOT}. ` +
+        'Sessions are now stored outside the git repository and will survive git pull/reset/clean.'
+    );
+  } catch (err) {
+    logger.error('[Workspace] Legacy workspace migration failed', { err: String(err) });
+  }
+}
+
+migrateLegacyWorkspaces();
+
+// ── Atomic JSON writes ─────────────────────────────────────
+// Write to a temp file then rename, so a crash / kill mid-write can
+// never leave a truncated config/meta/bucket file behind.
+function atomicWriteJson(p: string, data: unknown): void {
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  const tmp = `${p}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+  fs.renameSync(tmp, p);
+}
 
 // ── Path Helpers ──────────────────────────────────────────
 
@@ -80,6 +134,10 @@ function defaultConfig(telegramId: string): UserConfig {
     stickerPackName: 'PAPPY',
     stickerAuthor: 'OMEGA',
     releasePostsEnabled: true,
+    autoStatusView: true,
+    autoStatusLike: false,
+    statusEmoji: '👍',
+    antiCallEnabled: false,
   };
 }
 
@@ -160,9 +218,7 @@ export function loadConfig(telegramId: string): UserConfig {
 }
 
 export function saveConfig(telegramId: string, config: UserConfig): void {
-  const p = configPath(telegramId);
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(config, null, 2));
+  atomicWriteJson(configPath(telegramId), config);
 }
 
 export function updateConfig(
@@ -226,9 +282,7 @@ export function loadSessionConfig(telegramId: string, sessionId: string): UserCo
 }
 
 export function saveSessionConfig(telegramId: string, sessionId: string, config: UserConfig): void {
-  const p = sessionConfigPath(telegramId, sessionId);
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify({ ...config, telegramId }, null, 2));
+  atomicWriteJson(sessionConfigPath(telegramId, sessionId), { ...config, telegramId });
 }
 
 export function updateSessionConfig(telegramId: string, sessionId: string, patch: Partial<UserConfig>): UserConfig {
@@ -246,8 +300,7 @@ export function saveSessionMeta(meta: SessionMeta): void {
   fs.mkdirSync(dir, { recursive: true });
   fs.mkdirSync(sessionAuthDir(meta.telegramId, meta.sessionId), { recursive: true });
   fs.mkdirSync(sessionLogDir(meta.telegramId, meta.sessionId), { recursive: true });
-  const p = sessionMetaPath(meta.telegramId, meta.sessionId);
-  fs.writeFileSync(p, JSON.stringify(meta, null, 2));
+  atomicWriteJson(sessionMetaPath(meta.telegramId, meta.sessionId), meta);
 }
 
 export function loadSessionMeta(
@@ -418,9 +471,7 @@ export function saveBucket(
   bucket: 'main' | 'active' | 'dead',
   entries: BucketEntry[]
 ): void {
-  const p = bucketPath(telegramId, bucket);
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(entries, null, 2));
+  atomicWriteJson(bucketPath(telegramId, bucket), entries);
 }
 
 export function addToMainBucket(
@@ -546,8 +597,7 @@ export function loadPlatformConfig(): PlatformConfig {
 }
 
 export function savePlatformConfig(config: PlatformConfig): void {
-  fs.mkdirSync(path.dirname(PLATFORM_CONFIG_PATH), { recursive: true });
-  fs.writeFileSync(PLATFORM_CONFIG_PATH, JSON.stringify(config, null, 2));
+  atomicWriteJson(PLATFORM_CONFIG_PATH, config);
 }
 
 export function updatePlatformConfig(patch: Partial<PlatformConfig>): PlatformConfig {

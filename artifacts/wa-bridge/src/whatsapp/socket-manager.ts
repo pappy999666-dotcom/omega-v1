@@ -32,6 +32,7 @@ import {
 } from '../utils/error-recovery.js';
 import { logger, sessionLogger } from '../utils/logger.js';
 import { sleep } from '../utils/delay.js';
+import { loadMessage } from './message-store.js';
 
 // ── Type Definitions ──────────────────────────────────────
 
@@ -278,7 +279,17 @@ export async function initSocket(
     enableRecentMessageCache: true,
     logger: P({ level: 'silent' }),
     generateHighQualityLinkPreview: true,
-    getMessage: async () => undefined,
+    // getMessage feeds Baileys' quoted-message / LID-resolution pipeline.
+    // It reads from our per-session in-memory message store (populated on
+    // every messages.upsert) so quoted stickers, quoted media, and
+    // contextInfo.participant lookups resolve correctly.
+    getMessage: async (key: { remoteJid?: string; id?: string } | undefined) => {
+      try {
+        return loadMessage(sessionId, key?.remoteJid, key?.id)?.message ?? undefined;
+      } catch {
+        return undefined;
+      }
+    },
   }) as WASocket;
 
   // ── Auth Events ──────────────────────────────────────────
@@ -490,20 +501,53 @@ export async function initSocket(
 
   // ── Forward All Events ────────────────────────────────────
 
+  // ── FULL BAILEYS EVENT LISTENER TABLE ─────────────────────
+  // Every event the fork can emit is forwarded to the global callback so
+  // future features can consume any of them without touching this file.
+  // Handlers in event-handlers.ts are cheap no-ops for events we do not
+  // act on yet (they only log at debug level).
   const FORWARDED_EVENTS: (keyof BaileysEventMap)[] = [
+    // Messages
     'messages.upsert',
     'messages.update',
     'messages.media-update',
     'messages.delete',
     'messages.reaction',
     'messages.receipt-update',
+    'message-receipt.update',
+    'messaging-history.set',
+    // Groups
     'groups.update',
     'group-participants.update',
-    'presence.update',
+    // Contacts / chats / presence
     'contacts.update',
+    'contacts.upsert',
+    'chats.set',
+    'chats.update',
+    'chats.delete',
+    'presence.update',
+    // Calls
     'call',
+    // Blocklist / labels / products / stickers
     'blocklist.set',
     'blocklist.update',
+    'labels.association',
+    'labels.edit',
+    'product.update',
+    'sticker.update',
+    'status.update',
+    // Newsletter (channels) — future-proofing
+    'newsletter.update',
+    'newsletter.mute',
+    'newsletter.reaction',
+    'newsletter.follow',
+    'newsletter.join',
+    'newsletter.leave',
+    'newsletter.view',
+    'newsletter.delete',
+    'newsletter.ephemeral',
+    // Internal
+    'chat-update',
   ];
 
   for (const ev of FORWARDED_EVENTS) {

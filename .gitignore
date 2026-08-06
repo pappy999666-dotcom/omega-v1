@@ -47,3 +47,9 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# ── Omega-V1 runtime data (NEVER track sessions/auth in git) ──
+# Session/auth data lives OUTSIDE the repo in ~/.omega-v1/workspaces.
+# This legacy in-repo path must stay untracked so git pull/reset/clean
+# can never wipe a user's WhatsApp sessions again.
+artifacts/workspaces/

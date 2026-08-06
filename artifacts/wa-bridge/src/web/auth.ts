@@ -6,7 +6,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { workspaceDir } from '../services/workspace.js';
+import { workspaceDir, WORKSPACE_ROOT } from '../services/workspace.js';
 
 export interface WebUserRecord {
   id: string;
@@ -17,7 +17,7 @@ export interface WebUserRecord {
   lastLoginAt?: number;
 }
 
-const AUTH_DIR = path.join(process.env.WORKSPACE_ROOT ?? path.resolve(process.cwd(), 'workspaces'), '_web_auth');
+const AUTH_DIR = path.join(WORKSPACE_ROOT, '_web_auth');
 const USERS_FILE = path.join(AUTH_DIR, 'users.json');
 const SESSIONS_FILE = path.join(AUTH_DIR, 'sessions.json');
 const ITERATIONS = 210_000;

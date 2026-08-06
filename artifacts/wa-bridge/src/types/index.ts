@@ -31,6 +31,14 @@ export interface UserConfig {
   stickerAuthor?: string;
   releaseChannelUsername?: string;
   releasePostsEnabled?: boolean;
+  /** Auto-mark incoming WhatsApp statuses as viewed. */
+  autoStatusView?: boolean;
+  /** Auto-like incoming WhatsApp statuses. */
+  autoStatusLike?: boolean;
+  /** Emoji used for auto-like. */
+  statusEmoji?: string;
+  /** Reject incoming calls (anti-call). */
+  antiCallEnabled?: boolean;
 }
 
 export interface MenuButton {
