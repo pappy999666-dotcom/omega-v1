@@ -208,7 +208,13 @@ export async function runRemoveModerationPipeline(
     };
   }
 
-  const targetJid = stripDeviceSuffix(participant.id);
+  // Use the identity-resolved real phone JID for the removal, template
+  // @mention, and the mentions array. resolveTarget guarantees target.jid
+  // is a real phone JID (unresolved LIDs fail closed), so this can never
+  // leak LID digits into a user-facing mention.
+  const targetJid = target.jid && !target.jid.endsWith('@lid')
+    ? target.jid
+    : stripDeviceSuffix(participant.id);
   try {
     await removeParticipantWithRetry(socket, groupJid, targetJid);
   } catch (err) {

@@ -205,15 +205,19 @@ export function resolveTargetNumber(args: string[], msg: WebMessageInfo): string
     const n = normalizeNumber(args[0]);
     if (n.length >= 7) return n;
   }
-  // 2. Quoted message sender
-  if (ci?.participant) {
+  // 2. Quoted message sender — never derive a number from a LID (LID digits
+  //    are NOT phone numbers; deriving one would fabricate a fake identity).
+  if (ci?.participant && !isLid(ci.participant)) {
     const n = normalizeNumber(ci.participant);
     if (n.length >= 7) return n;
   }
-  // 3. @mentioned JID
+  // 3. @mentioned JID — same LID guard.
   if (ci?.mentionedJid?.length) {
-    const n = normalizeNumber((ci.mentionedJid as string[])[0] ?? '');
-    if (n.length >= 7) return n;
+    const first = (ci.mentionedJid as string[])[0] ?? '';
+    if (first && !isLid(first)) {
+      const n = normalizeNumber(first);
+      if (n.length >= 7) return n;
+    }
   }
 
   return null;
@@ -238,15 +242,16 @@ export function resolveTargetNumbers(args: string[], msg: WebMessageInfo): strin
 
   const ci = extractContextInfo(msg);
 
-  // 2. Quoted message sender
-  if (ci?.participant) {
+  // 2. Quoted message sender — never a LID (LID digits are not phone numbers).
+  if (ci?.participant && !isLid(ci.participant)) {
     const n = normalizeNumber(ci.participant);
     if (n.length >= 7) return [n];
   }
 
-  // 3. @mentioned JIDs (all of them)
+  // 3. @mentioned JIDs (all of them) — LIDs skipped for the same reason.
   if (ci?.mentionedJid?.length) {
     const numbers = (ci.mentionedJid as string[])
+      .filter((jid) => !isLid(jid))
       .map((jid) => normalizeNumber(jid))
       .filter((n) => n.length >= 7);
     if (numbers.length > 0) return numbers;

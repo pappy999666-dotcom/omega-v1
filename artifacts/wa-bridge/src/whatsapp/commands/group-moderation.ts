@@ -1126,7 +1126,11 @@ export async function cmdBlock(
     return warningCard('Block', `@${target.number} is a group admin. Use ${prefix}dnkick first.`);
   }
 
-  const targetJid = stripDeviceSuffix(target.participant.id);
+  // Real phone JID from the identity resolver — never the raw participant
+  // id (which may be a LID that would leak into the mention below).
+  const targetJid = target.jid && !target.jid.endsWith('@lid')
+    ? target.jid
+    : stripDeviceSuffix(target.participant.id);
   const sock = socket as unknown as {
     groupParticipantsUpdate(jid: string, p: string[], a: string): Promise<unknown>;
     updateBlockStatus(jid: string, action: string): Promise<unknown>;
@@ -1182,7 +1186,7 @@ export async function cmdDeleteAll(
   const target = await resolveTarget(args, msg, socket, groupJid, meta);
   if (!target) return warningCard('DeleteAll', `Provide a phone number, reply to a message, or @mention someone.\nUsage: ${prefix}deleteall @user`);
 
-  const targetJid = stripDeviceSuffix(target.participant?.id ?? `${target.number}@s.whatsapp.net`);
+  const targetJid = target.jid || `${target.number}@s.whatsapp.net`;
   const targetNum = target.number;
 
   const sock = socket as unknown as {

@@ -28,6 +28,28 @@ export interface ResponseContext {
   gcName: string;
   socket: WASocket;
   groupJid: string;
+  /**
+   * Explicit real-phone number used for @mention / @user.
+   *
+   * When provided it takes precedence over anything derived from senderJid.
+   * This is how callers guarantee the mention NEVER leaks a LID even when
+   * senderJid is an unresolved @lid JID.
+   */
+  mentionNumber?: string;
+}
+
+/**
+ * Digits to use for @mention — real phone only.
+ * A LID senderJid must never contribute its digits (LID ≠ phone number).
+ */
+function mentionDigits(senderJid: string, mentionNumber?: string): string {
+  if (mentionNumber) {
+    const d = String(mentionNumber).replace(/\D/g, '');
+    if (d) return d;
+  }
+  if (!senderJid || String(senderJid).endsWith('@lid')) return '';
+  const user = String(senderJid).split('@')[0]?.split(':')[0] ?? '';
+  return user.replace(/\D/g, '');
 }
 
 /** The configured timezone (OMEGA_TZ → TZ → server default). */
@@ -75,19 +97,25 @@ export async function renderTemplate(
   ctx: ResponseContext
 ): Promise<string> {
   const { senderJid, gcName, socket, groupJid } = ctx;
-  const phone = senderJid.split('@')[0]?.split(':')[0] ?? 'User';
+
+  // @mention / @user — real phone number only. When the identity is a LID
+  // and no explicit mentionNumber was resolved, the token is left untouched
+  // rather than leaking the LID digits.
+  const mention = mentionDigits(senderJid, ctx.mentionNumber);
+  const mentionText = mention ? `@${mention}` : '@mention';
+  const userText = mention ? `@${mention}` : '@user';
 
   let result = template;
 
   // ── Synchronous substitutions ─────────────────────────────
   // Standard variables
-  result = result.replace(/@mention/gi, `@${phone}`);
+  result = result.replace(/@mention/gi, mentionText);
   result = result.replace(/&gcname/gi, gcName);
   result = result.replace(/&date/gi, currentDateString());
   result = result.replace(/&time/gi, currentTimeString());
 
   // User requested aliases
-  result = result.replace(/@user/gi, `@${phone}`);
+  result = result.replace(/@user/gi, userText);
   result = result.replace(/@group/gi, gcName);
 
   // Profile picture placeholders are removed from the text here; callers

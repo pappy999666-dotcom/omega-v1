@@ -9,6 +9,7 @@ import type { BridgeWASocket as WASocket, BaileysEventMap, IMessage, WebMessageI
 import { resolvePreviewRoute } from './preview-router.js';
 import { parseCommand, parseStickerCommand, hashSticker } from './command-parser.js';
 import { resolveTarget, resolveTargetNumbers } from './utils/resolve-target.js';
+import { normalizeParticipantUpdateJids } from './utils/identity.js';
 import { loadSessionConfig, loadSessionMeta, updateSessionMeta, saveSessionMeta } from '../services/workspace.js';
 import { stopSpamLoop, isSpamLoopActive, cmdToChat, cmdToChatX, cmdSStatus, cmdGroupStatus } from './commands/status.js';
 import { cmdAllStatus, cmdAllGStatus, stopAllStatus, isAllStatusRunning } from './commands/all-status.js';
@@ -198,18 +199,12 @@ export async function handleWAEvent(
           // Normalize here — at the single dispatch boundary — so every feature works
           // without modification.
           //
+          // IMPORTANT: the fork exposes `phoneNumber` on LID entries (id: xxx@lid).
+          // The real phone JID is PREFERRED over the LID id so downstream features
+          // never leak a LID into welcome/goodbye mentions or moderation actions.
           // Backward-compatible: if Baileys ever reverts to strings this no-ops correctly.
           const rawParticipants: unknown[] = update.participants ?? [];
-          const participantJids: string[] = rawParticipants
-            .map((p: unknown): string => {
-              if (typeof p === 'string') return p; // old format — pass through
-              const obj = p as { id?: string; phoneNumber?: string };
-              // Prefer the full JID (id) over the bare phone number
-              if (obj.id) return obj.id;
-              if (obj.phoneNumber) return `${obj.phoneNumber}@s.whatsapp.net`;
-              return '';
-            })
-            .filter(Boolean);
+          const participantJids: string[] = normalizeParticipantUpdateJids(rawParticipants);
 
           logger.debug('[EventHandler] group-participants.update', {
             sessionId,

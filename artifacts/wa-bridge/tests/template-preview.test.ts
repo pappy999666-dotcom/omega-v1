@@ -75,6 +75,43 @@ test('gracefully ignores unsupported variables (leaves token as-is or empty, nev
   assert.ok(out.includes('Hi'));
 });
 
+// ── LID safety: @mention must NEVER render LID digits ──
+
+test('mentionNumber overrides @mention (resolved real phone wins over LID sender)', async () => {
+  const out = await renderTemplate('Welcome @mention!', {
+    senderJid: '150268759003140@lid',
+    mentionNumber: '15551234567',
+    gcName: 'TG',
+    socket: fakeSocket,
+    groupJid: '1@g.us',
+  });
+  assert.ok(out.includes('@15551234567'));
+  assert.ok(!out.includes('150268759003140'), 'LID digits must never appear');
+});
+
+test('LID senderJid with no mentionNumber leaves @mention literal (never leaks LID)', async () => {
+  const out = await renderTemplate('Welcome @mention!', {
+    senderJid: '150268759003140@lid',
+    gcName: 'TG',
+    socket: fakeSocket,
+    groupJid: '1@g.us',
+  });
+  assert.ok(!out.includes('150268759003140'), 'LID digits must never appear');
+  assert.ok(out.includes('@mention'), 'token remains literal — graceful no-op');
+});
+
+test('@user also honours mentionNumber and never leaks LID digits', async () => {
+  const out = await renderTemplate('Hi @user!', {
+    senderJid: '150268759003140@lid',
+    mentionNumber: '15551234567',
+    gcName: 'TG',
+    socket: fakeSocket,
+    groupJid: '1@g.us',
+  });
+  assert.ok(out.includes('@15551234567'));
+  assert.ok(!out.includes('150268759003140'));
+});
+
 test('strips &pp and &getpp from text (media is attached by callers)', async () => {
   const out = await renderTemplate('Photo: &pp and &getpp', {
     senderJid: 'x@s.whatsapp.net',

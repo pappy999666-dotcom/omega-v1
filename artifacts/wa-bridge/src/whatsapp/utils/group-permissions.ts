@@ -293,15 +293,15 @@ export function resolveRealJidFromMeta(
   const clean = stripDeviceSuffix(rawJid);
   if (!clean.endsWith('@lid')) return clean;
 
-  const lidNum = numericId(rawJid);
-
-  // Try to match via the phoneNumber field that Baileys populates for LID entries
-  const byPhone = participants.find(
-    (p) =>
-      !p.id.endsWith('@lid') &&
-      (p.phoneNumber ?? '').replace(/\D/g, '') === lidNum
-  );
-  if (byPhone) return stripDeviceSuffix(byPhone.id);
+  // The LID participant entry itself carries the REAL phone number in its
+  // `phoneNumber` field — match by the entry's own id and read it.
+  // (Never compare LID digits against phone digits — LID numbers are NOT
+  // phone numbers, so that cross-comparison always fails.)
+  const entry = participants.find((p) => stripDeviceSuffix(p.id) === clean);
+  if (entry?.phoneNumber) {
+    const phone = entry.phoneNumber.replace(/\D/g, '');
+    if (phone) return `${phone}@s.whatsapp.net`;
+  }
 
   // Can't resolve — return as-is; caller should treat as unresolvable
   return clean;

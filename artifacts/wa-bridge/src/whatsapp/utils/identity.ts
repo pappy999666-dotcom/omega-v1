@@ -326,6 +326,47 @@ export function authorFromUpdate(
   return author ? normalizeJid(author) : undefined;
 }
 
+/** Build a real phone JID from a phoneNumber/pn value (bare digits or full JID). */
+function toPhoneJid(value: string | null | undefined): string {
+  if (!value) return '';
+  const v = String(value);
+  if (v.includes('@')) {
+    const n = normalizeJid(v);
+    return isPhoneJid(n) ? n : '';
+  }
+  const digits = v.replace(/\D/g, '');
+  return digits ? `${digits}@s.whatsapp.net` : '';
+}
+
+/**
+ * Normalize a @crysnovax/baileys 2.7.0 `group-participants.update`
+ * `participants` payload (string JIDs OR objects) into plain JID strings.
+ *
+ * The fork's object entries are shaped `{ id: '<jid>', phoneNumber: '<pn>' }`
+ * where `id` may be a LID (`xxx@lid`) and `phoneNumber` is the REAL phone
+ * number.  Preferring the real phone JID here (instead of the LID `id`)
+ * means Welcome / Goodbye / AutoBlock / AntiPromote / AntiDemote all
+ * receive real JIDs and never leak LIDs downstream.
+ */
+export function normalizeParticipantUpdateJids(participants: unknown[]): string[] {
+  const out: string[] = [];
+  for (const p of participants ?? []) {
+    if (typeof p === 'string') {
+      const n = normalizeJid(p);
+      if (n && !out.includes(n)) out.push(n);
+      continue;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const o = (p ?? {}) as any;
+    const phoneJid = toPhoneJid(o.phoneNumber ?? o.pn ?? '');
+    const idJid = normalizeJid(o.id ?? o.jid ?? o.lid ?? '');
+    // Prefer the real phone JID whenever the payload exposes one.
+    const picked = phoneJid || idJid;
+    if (picked && !out.includes(picked)) out.push(picked);
+  }
+  return out;
+}
+
 /** Build a WAMessageKey for a quoted message from contextInfo. */
 export function buildQuotedKey(
   msg: WebMessageInfo,
@@ -356,8 +397,13 @@ export function buildQuotedKey(
 
 /** Minimal group participant shape accepted by the resolvers. */
 export interface IdentityParticipant {
-  id: string;
+  id?: string;
   phoneNumber?: string;
+  /** Fork aliases — some payloads expose the phone under `pn`. */
+  pn?: string;
+  /** Fork aliases — some payloads expose the JID under `jid` / `lid`. */
+  jid?: string;
+  lid?: string;
 }
 
 /**
@@ -388,19 +434,22 @@ export async function resolveIdentity(
     if (real) return { jid: real, number: normalizePhone(real), isLid };
   }
 
-  // 2. Group participant list (phoneNumber field is the reliable source).
+  // 2. Group participant list.  The LID participant entry itself carries the
+  //    real phone number in phoneNumber/pn — match by the entry's OWN identity
+  //    fields (id / jid / lid), never by comparing LID digits to phone digits
+  //    (LID numbers are NOT phone numbers, so that comparison always fails).
   if (participants?.length) {
-    const lidNum = numericId(norm);
     const match = participants.find((p) => {
-      if (isLid) {
-        // Match a LID against a real participant via its phoneNumber.
-        return !isLidJid(p.id) && normalizePhone(p.phoneNumber) === lidNum;
-      }
-      return normalizeJid(p.id) === norm;
+      const own = [p.id, p.jid, p.lid].filter(Boolean).map((v) => normalizeJid(v));
+      return own.includes(norm);
     });
     if (match) {
-      const phone = normalizePhone(match.phoneNumber);
+      const phone = normalizePhone(match.phoneNumber ?? match.pn);
       if (phone) return { jid: `${phone}@s.whatsapp.net`, number: phone, isLid };
+      const ownJid = normalizeJid(match.id ?? match.jid ?? '');
+      if (ownJid && isPhoneJid(ownJid)) {
+        return { jid: ownJid, number: normalizePhone(ownJid), isLid };
+      }
     }
   }
 

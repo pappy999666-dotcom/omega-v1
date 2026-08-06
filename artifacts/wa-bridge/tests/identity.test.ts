@@ -13,8 +13,10 @@ import {
   quotedMessageOf,
   extractMessageTextAny,
   normalizeParticipantEntries,
+  normalizeParticipantUpdateJids,
   authorFromUpdate,
   buildQuotedKey,
+  resolveIdentity,
 } from '../src/whatsapp/utils/identity.js';
 import type { WebMessageInfo, IMessage, MessageContextInfo } from '../src/whatsapp/baileys-types.js';
 
@@ -138,6 +140,55 @@ test('authorFromUpdate prefers authorPn then author then actor', () => {
   assert.equal(authorFromUpdate({ author: '2@s.whatsapp.net' }), '2@s.whatsapp.net');
   assert.equal(authorFromUpdate({ actor: '3@s.whatsapp.net' }), '3@s.whatsapp.net');
   assert.equal(authorFromUpdate({}), undefined);
+});
+
+// ── group-participants.update payload normalization (event-handlers boundary) ──
+
+test('normalizeParticipantUpdateJids prefers real phone JIDs from LID entries', () => {
+  const out = normalizeParticipantUpdateJids([
+    '15550001111@s.whatsapp.net',
+    { id: '150268759003140@lid', phoneNumber: '15551234567' },
+    { id: '15029876543210@lid', pn: '15552345678' },
+    { id: '15027890123456@lid' },
+    { id: '15559876543@lid', phoneNumber: '15559876543@s.whatsapp.net' },
+  ]);
+  assert.deepEqual(out, [
+    '15550001111@s.whatsapp.net',
+    '15551234567@s.whatsapp.net',
+    '15552345678@s.whatsapp.net',
+    '15027890123456@lid',
+    '15559876543@s.whatsapp.net',
+  ]);
+});
+
+test('normalizeParticipantUpdateJids skips empty entries and dedupes', () => {
+  const out = normalizeParticipantUpdateJids([
+    {}, null, undefined, '',
+    { id: '15550001111@s.whatsapp.net', phoneNumber: '15550001111' },
+    '15550001111@s.whatsapp.net',
+  ]);
+  assert.deepEqual(out, ['15550001111@s.whatsapp.net']);
+});
+
+// ── resolveIdentity: LID → real phone via the participant entry's own fields ──
+
+test('resolveIdentity resolves a LID via its participant phoneNumber field', async () => {
+  const out = await resolveIdentity({} as any, '150268759003140@lid', [
+    { id: '150268759003140@lid', phoneNumber: '15551234567' },
+    { id: '9999999999@s.whatsapp.net' },
+  ]);
+  assert.equal(out.jid, '15551234567@s.whatsapp.net');
+  assert.equal(out.number, '15551234567');
+  assert.equal(out.isLid, true);
+});
+
+test('resolveIdentity never fabricates a phone from LID digits', async () => {
+  const out = await resolveIdentity({} as any, '150268759003140@lid', [
+    { id: '15551234567@s.whatsapp.net', phoneNumber: '15551234567' },
+  ]);
+  // No participant entry carries the LID itself → unresolvable → fail closed.
+  assert.equal(out.jid, '');
+  assert.equal(out.number, '');
 });
 
 // ── quoted key builder ─────────────────────────────────────

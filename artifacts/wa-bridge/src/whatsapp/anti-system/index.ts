@@ -10,6 +10,8 @@
 //  • handleParticipantUpdate no longer returns early when there
 //    is no `author`, so Welcome/Goodbye always fire on add/remove.
 //  • AutoBlock: per-group toggle that blocks new joiners.
+//  • Welcome/Goodbye: per-group isolated and default OFF — they
+//    only fire after the admin explicitly enables them.
 // ============================================================
 
 import type { BridgeWASocket as WASocket, WebMessageInfo } from '../baileys-types.js';
@@ -316,6 +318,8 @@ export interface ParticipantUpdateEvent {
  *
  * NOTE: `author` is NOT required for Welcome/Goodbye — those fire on
  *   every add/remove regardless of whether an admin initiated it.
+ *   Both are per-group isolated and DEFAULT OFF: they only fire after
+ *   the admin explicitly enables them (.welcome on / .setwelcome).
  */
 export async function handleParticipantUpdate(
   socket: WASocket,
@@ -366,14 +370,15 @@ export async function handleParticipantUpdate(
 
   // ── Welcome Message ──────────────────────────────────────
   if (action === 'add') {
-    // Welcome messages — fire unless explicitly disabled (.welcome off).
-    // A missing custom template falls back to the built-in default so the
-    // event is never silently dropped.
+    // Welcome messages — per-group isolated, default OFF. They only fire
+    // after the admin explicitly enables them (.welcome on / .setwelcome).
+    // A missing custom template falls back to the built-in default so an
+    // enabled-but-empty config never silently drops the event.
     const eventConfig = loadGroupEventConfig(telegramId, sessionId, groupJid);
     const welcomeTemplate =
       eventConfig.welcomeMessage?.trim() || DEFAULT_WELCOME_TEMPLATE;
 
-    if (eventConfig.welcomeEnabled !== false) {
+    if (eventConfig.welcomeEnabled === true) {
       let gcName = groupJid.split('@')[0] ?? 'Group';
       let welcomeMeta: { subject?: string; participants?: { id: string; phoneNumber?: string }[] } | null = null;
       try {
@@ -386,13 +391,17 @@ export async function handleParticipantUpdate(
       for (const participantJid of participants) {
         try {
           // Resolve LID → real phone JID through the central identity resolver.
-          // An unresolved LID is NEVER used in a mention (would leak the LID).
+          // An unresolved LID is NEVER used in a mention (would leak the LID):
+          //   • mentionJid (native @mention payload) is empty for unresolved LIDs
+          //   • mentionNumber (the @mention text) is only the REAL phone number
+          //   • renderTemplate never derives digits from a @lid senderJid
           const resolved = await resolveIdentity(socket, participantJid, welcomeMeta?.participants ?? null);
           const mentionJid = resolved.jid || (participantJid.endsWith('@lid') ? '' : participantJid);
           const mentionNumber = resolved.number || '';
 
           const rendered = await renderTemplate(welcomeTemplate, {
-            senderJid: mentionJid || participantJid,
+            senderJid: mentionJid,
+            mentionNumber,
             gcName,
             socket,
             groupJid,
@@ -462,7 +471,8 @@ export async function handleParticipantUpdate(
     const goodbyeTemplate =
       eventConfig.goodbyeMessage?.trim() || DEFAULT_GOODBYE_TEMPLATE;
 
-    if (eventConfig.goodbyeEnabled !== false) {
+    // Per-group isolated, default OFF — same policy as Welcome.
+    if (eventConfig.goodbyeEnabled === true) {
       let gcName = groupJid.split('@')[0] ?? 'Group';
       // Use the pre-remove snapshot captured above so LID resolution can still
       // find the leaving participants (patchGroupMetaCache already removed them
@@ -477,7 +487,8 @@ export async function handleParticipantUpdate(
           const mentionJid = resolved.jid || (participantJid.endsWith('@lid') ? '' : participantJid);
 
           const rendered = await renderTemplate(goodbyeTemplate, {
-            senderJid: mentionJid || participantJid,
+            senderJid: mentionJid,
+            mentionNumber: resolved.number || '',
             gcName,
             socket,
             groupJid,
