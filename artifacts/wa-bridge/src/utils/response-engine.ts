@@ -22,6 +22,7 @@
 
 import type { BridgeWASocket as WASocket } from '../whatsapp/baileys-types.js';
 import { fetchGroupMeta } from '../whatsapp/utils/group-permissions.js';
+import { resolveMention } from '../whatsapp/utils/mention-engine.js';
 
 export interface ResponseContext {
   senderJid: string;
@@ -149,6 +150,53 @@ export async function renderTemplate(
   }
 
   return result;
+}
+
+/**
+ * Render a response template AND return the mentionedJid array that stays
+ * in sync with the rendered text (native WhatsApp mentions).
+ *
+ * The sender identity is resolved through the central Mention Engine
+ * (LID → real phone JID), so @mention/@user never leak LID digits and the
+ * returned mentions array always carries the real phone JID.
+ */
+export async function renderTemplateWithMentions(
+  template: string,
+  ctx: ResponseContext
+): Promise<{ text: string; mentions: string[] }> {
+  let participants: { id: string; phoneNumber?: string }[] | null = null;
+  try {
+    const meta = await fetchGroupMeta(ctx.socket, ctx.groupJid).catch(() => null);
+    participants = meta?.participants ?? null;
+  } catch {
+    /* non-critical */
+  }
+
+  const mention = await resolveMention(ctx.socket, {
+    jid: ctx.senderJid,
+    participants,
+  });
+
+  const text = await renderTemplate(template, {
+    ...ctx,
+    senderJid: mention.jid || ctx.senderJid,
+    mentionNumber: mention.number || ctx.mentionNumber,
+  });
+
+  const mentions = mention.jid ? [mention.jid] : [];
+
+  // When the identity could not be resolved to a phone number, strip the
+  // template tokens instead of leaking a raw '@mention' / '@<lid>' string.
+  if (!mention.jid) {
+    const cleaned = text
+      .replace(/@mention/gi, '')
+      .replace(/@user/gi, '')
+      .replace(/[ \t]{2,}/g, ' ')
+      .trim();
+    return { text: cleaned, mentions };
+  }
+
+  return { text, mentions };
 }
 
 /**

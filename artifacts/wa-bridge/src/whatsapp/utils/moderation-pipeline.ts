@@ -7,7 +7,7 @@
 import type { BridgeWASocket as WASocket, WebMessageInfo } from '../baileys-types.js';
 import { logger } from '../../utils/logger.js';
 import { errorCard, warningCard } from '../../utils/ascii-art.js';
-import { renderTemplate } from '../../utils/response-engine.js';
+import { renderTemplateWithMentions } from '../../utils/response-engine.js';
 import { resolveTarget } from './resolve-target.js';
 import { PreviewManager } from '../../preview-engine/index.js';
 import { BOT_NOT_ADMIN_MSG, fetchGroupMeta, isAdminJid, stripDeviceSuffix } from './group-permissions.js';
@@ -255,14 +255,19 @@ export async function runRemoveModerationPipeline(
   try {
     const defaultText =
       action === 'ban'
-        ? `🔨 @${target.number} has been banned from *${meta.subject}*.`
-        : `🚫 @${target.number} has been kicked from *${meta.subject}*.`;
-    const rendered = await renderTemplate(template ?? defaultText, {
-      senderJid: targetJid,
-      gcName: meta.subject,
-      socket,
-      groupJid,
-    });
+        ? '🔨 @mention has been banned from *&gcname*.'
+        : '🚫 @mention has been kicked from *&gcname*.';
+    // Central Mention Engine — rendered text and the mentionedJid array are
+    // built together, so the kick/ban mention is a real native mention.
+    const { text: rendered, mentions: mentionJids } = await renderTemplateWithMentions(
+      template ?? defaultText,
+      {
+        senderJid: targetJid,
+        gcName: meta.subject,
+        socket,
+        groupJid,
+      }
+    );
     // Fetch PFP for announcement
     let pfpBuffer: Buffer | null = null;
     try {
@@ -272,7 +277,8 @@ export async function runRemoveModerationPipeline(
 
     // Centralize response through PreviewManager to ensure global URL buttons and formatting preservation
     await PreviewManager.send(socket as any, groupJid, rendered, {
-      extra: { mentions: [targetJid] },
+      extra: { mentions: mentionJids },
+      forceMentions: true,
       sessionId,
       telegramId,
       ...(pfpBuffer ? { media: { buffer: pfpBuffer as any, type: 'image', caption: rendered } } : {}),

@@ -15,6 +15,10 @@ import { PreviewLogger } from './PreviewLogger.js';
 import { previewCache } from './PreviewCache.js';
 import pLimit from 'p-limit';
 import { loadSessionConfig, getGlobalMenuButtons } from '../services/workspace.js';
+import {
+  sanitizeMentionJids,
+  MENTION_TOKEN_RE,
+} from '../whatsapp/utils/mention-engine.js';
 
 // ── Concurrency Control ─────────────────────────────────────
 // Limits concurrent preview resolutions to prevent memory pressure
@@ -130,11 +134,45 @@ export class PreviewDispatcher {
     const start = Date.now();
 
     // ── Pipeline Stage: Session Config & Policy ──
-    let mentions: string[] = (options.extra?.mentions as string[]) ?? [];
-    if (options.sessionId && options.telegramId && !options.forceMentions) {
+    // Central Mention Engine: normalize every mention JID to a REAL phone JID
+    // (@s.whatsapp.net). LID entries are resolved through the fork's lidMapping
+    // + participant list; unresolvable entries are dropped. This guarantees the
+    // mentionedJid array always matches the @<phone> tokens in the text — the
+    // structural precondition for native WhatsApp mentions. When nothing can be
+    // resolved the original array is kept so silent hidetag pings still work.
+    const hadMentionOption =
+      Array.isArray(options.extra?.mentions) &&
+      (options.extra!.mentions as unknown[]).length > 0;
+    let mentions: string[] = hadMentionOption
+      ? [...(options.extra!.mentions as string[])]
+      : [];
+    let sendText = text ?? '';
+
+    if (mentions.length > 0) {
+      try {
+        const sanitized = await sanitizeMentionJids(socket as never, mentions);
+        if (sanitized.length > 0) mentions = sanitized;
+      } catch {
+        // keep originals — never fail a send over mention normalization
+      }
+    }
+
+    // tagReply=false disables tagging in replies: strip BOTH the mention array
+    // AND any @<digits> tokens so no raw phone number leaks into the text while
+    // the array is gone (rendered text must stay in sync with mentionedJid).
+    if (
+      options.sessionId &&
+      options.telegramId &&
+      !options.forceMentions &&
+      hadMentionOption
+    ) {
       const config = loadSessionConfig(options.telegramId, options.sessionId);
       if (config.tagReply === false) {
         mentions = [];
+        sendText = sendText
+          .replace(MENTION_TOKEN_RE, '')
+          .replace(/[ \t]{2,}/g, ' ')
+          .trim();
       }
     }
 
@@ -276,12 +314,12 @@ export class PreviewDispatcher {
         let content: any;
         const { type, buffer, mimetype, fileName, caption, ptt, gifPlayback } = options.media;
         
-        if (type === 'image') content = { image: buffer, caption: caption ?? text };
-        else if (type === 'video') content = { video: buffer, caption: caption ?? text, gifPlayback };
+        if (type === 'image') content = { image: buffer, caption: caption ?? sendText };
+        else if (type === 'video') content = { video: buffer, caption: caption ?? sendText, gifPlayback };
         else if (type === 'audio') content = { audio: buffer, mimetype: mimetype ?? 'audio/mp4', ptt };
         else if (type === 'sticker') content = { sticker: buffer, mimetype: mimetype ?? 'image/webp' };
-        else if (type === 'document') content = { document: buffer, mimetype: mimetype ?? 'application/octet-stream', fileName, caption: caption ?? text };
-        else content = { text, ...(options.extra ?? {}) };
+        else if (type === 'document') content = { document: buffer, mimetype: mimetype ?? 'application/octet-stream', fileName, caption: caption ?? sendText };
+        else content = { text: sendText, ...(options.extra ?? {}) };
 
         if (options.extra) content = { ...content, ...options.extra };
         if (options.externalAdReply) {
@@ -302,13 +340,13 @@ export class PreviewDispatcher {
     }
 
     // Step 1: Detect URL (only if not media/poll)
-    const url = options.existingPreview?.url ?? UrlDetector.extractFirst(text || '');
+    const url = options.existingPreview?.url ?? UrlDetector.extractFirst(sendText || '');
 
     if (!url || options.suppressPreview) {
       // No URL or suppressed — send plain text
       try {
         let content: any = {
-          text,
+          text: sendText,
           ...(options.extra ?? {}),
         };
         if (options.externalAdReply) {
@@ -360,7 +398,7 @@ export class PreviewDispatcher {
         );
 
         // Build payload
-        return PayloadBuilder.build(text, {
+        return PayloadBuilder.build(sendText, {
           suppressPreview: options.suppressPreview,
           meta: result.meta,
           hqThumbnail: result.meta.hqThumbnail,
@@ -374,7 +412,7 @@ export class PreviewDispatcher {
       PreviewLogger.fallbackActivated('send', 'resolve', 'plain-text');
       PreviewLogger.sendFailed(jid, url, String(err));
       try {
-        let content: any = { text };
+        let content: any = { text: sendText };
         content = applyGlobalPipeline(content);
         await socket.sendMessage(jid, content as AnyMessageContent, options.statusOptions as any);
         return { success: true, stage: 'Stage5_UrlOnly' };
@@ -417,7 +455,7 @@ export class PreviewDispatcher {
       PreviewLogger.sendFailed(jid, url, String(err));
       // Self-healing: try without preview
       try {
-        let content: any = { text };
+        let content: any = { text: sendText };
         content = applyGlobalPipeline(content);
         await socket.sendMessage(jid, content as AnyMessageContent, options.statusOptions as any);
         return { success: true, stage: 'Stage5_UrlOnly' };

@@ -10,6 +10,7 @@ import { bold, italic, successCard, warningCard } from '../../utils/ascii-art.js
 import { incrementWarn, resetWarn, getWarnCount } from './config.js';
 import { renderResponse } from './response.js';
 import type { ViolationContext, AntiAction } from './types.js';
+import { resolveMention } from '../utils/mention-engine.js';
 
 // ── Low-level Primitives ──────────────────────────────────
 
@@ -96,24 +97,41 @@ export async function executeAction(
   const { groupJid, senderJid, senderNumber, moduleKey, moduleName, moduleConfig, sessionId, telegramId } = ctx;
   const { action, warnThreshold, customMessage } = moduleConfig;
 
-  // Resolve display name / group name for response
+  // Resolve group name + participant list (participants enable LID → phone
+  // resolution in the Central Mention Engine below).
   let gcName = groupJid.split('@')[0] ?? 'Group';
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let groupParticipants: { id: string; phoneNumber?: string }[] | null = null;
   try {
     const meta = await (socket as unknown as {
-      groupMetadata(jid: string): Promise<{ subject?: string }>;
+      groupMetadata(jid: string): Promise<{ subject?: string; participants?: { id: string; phoneNumber?: string }[] }>;
     }).groupMetadata(groupJid);
     gcName = meta?.subject ?? gcName;
+    groupParticipants = meta?.participants ?? null;
   } catch { /* non-critical */ }
+
+  // ── Central Mention Engine ────────────────────────────────
+  // The mention token (@<phone>) and the mentionedJid array are built from
+  // ONE resolved identity — never "@" + digits assembled by hand. LID senders
+  // are mapped to their real phone JID; when unresolvable, no token is emitted
+  // and no LID digits can leak into the response.
+  const mention = await resolveMention(socket, {
+    jid: senderJid,
+    participants: groupParticipants,
+  });
+  const mentionList = mention.jid ? [mention.jid] : undefined;
+  const renderCtx = {
+    senderJid: mention.jid || senderJid,
+    mentionNumber: mention.number,
+    gcName,
+    socket,
+    groupJid,
+  };
 
   // Build response text
   const responseText = await renderResponse(
-    customMessage ?? getDefaultMessage(moduleName, action, senderJid),
-    {
-      senderJid,
-      gcName,
-      socket,
-      groupJid,
-    }
+    customMessage ?? getDefaultMessage(moduleName, action),
+    renderCtx
   );
 
   // Always delete the message immediately (concurrent with action)
@@ -124,7 +142,8 @@ export async function executeAction(
     ops.push(kickParticipant(socket, groupJid, senderJid));
     ops.push(
       PreviewManager.send(socket as any, groupJid, responseText, {
-        extra: { mentions: [senderJid] },
+        ...(mentionList ? { extra: { mentions: mentionList } } : {}),
+        forceMentions: true,
         sessionId,
         telegramId,
       })
@@ -139,10 +158,14 @@ export async function executeAction(
       // Threshold reached — kick and reset
       resetWarn(sessionId, groupJid, senderNumber, moduleKey);
       ops.push(kickParticipant(socket, groupJid, senderJid));
-      const kickMsg = `⚠️ @${senderNumber} has been kicked after ${warnThreshold} warnings (${moduleName}).`;
+      const kickMsg = await renderResponse(
+        `⚠️ @mention has been kicked after ${warnThreshold} warnings (${moduleName}).`,
+        renderCtx
+      );
       ops.push(
         PreviewManager.send(socket as any, groupJid, kickMsg, {
-          extra: { mentions: [senderJid] },
+          ...(mentionList ? { extra: { mentions: mentionList } } : {}),
+          forceMentions: true,
           sessionId,
           telegramId,
         })
@@ -153,7 +176,8 @@ export async function executeAction(
       const warnMsg = `${responseText}\n\n${italic(`Warning ${count}/${warnThreshold}. ${remaining} more will result in a kick.`)}`;
       ops.push(
         PreviewManager.send(socket as any, groupJid, warnMsg, {
-          extra: { mentions: [senderJid] },
+          ...(mentionList ? { extra: { mentions: mentionList } } : {}),
+          forceMentions: true,
           sessionId,
           telegramId,
         })
@@ -165,7 +189,8 @@ export async function executeAction(
     // Delete only — still notify
     ops.push(
       PreviewManager.send(socket as any, groupJid, responseText, {
-        extra: { mentions: [senderJid] },
+        ...(mentionList ? { extra: { mentions: mentionList } } : {}),
+        forceMentions: true,
         sessionId,
         telegramId,
       })
@@ -177,16 +202,18 @@ export async function executeAction(
 }
 
 // ── Default Messages ──────────────────────────────────────
+// Built with the @mention template token — the Mention Engine (via
+// renderResponse) substitutes the real phone token, so the text and the
+// mentionedJid array can never disagree.
 
-function getDefaultMessage(moduleName: string, action: AntiAction, senderJid: string): string {
-  const num = senderJid.split('@')[0]?.split(':')[0] ?? 'User';
+function getDefaultMessage(moduleName: string, action: AntiAction): string {
   switch (action) {
     case 'kick':
-      return `🚫 @${num} violated *${moduleName}* and has been removed from this group.`;
+      return `🚫 @mention violated *${moduleName}* and has been removed from this group.`;
     case 'warn':
-      return `⚠️ @${num} violated *${moduleName}*. Please follow group rules.`;
+      return `⚠️ @mention violated *${moduleName}*. Please follow group rules.`;
     case 'delete':
     default:
-      return `🗑️ @${num} — Your message was removed. *${moduleName}* is active in this group.`;
+      return `🗑️ @mention — Your message was removed. *${moduleName}* is active in this group.`;
   }
 }

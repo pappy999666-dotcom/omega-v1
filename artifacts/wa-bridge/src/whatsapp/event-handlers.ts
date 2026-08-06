@@ -10,6 +10,7 @@ import { resolvePreviewRoute } from './preview-router.js';
 import { parseCommand, parseStickerCommand, hashSticker } from './command-parser.js';
 import { resolveTarget, resolveTargetNumbers } from './utils/resolve-target.js';
 import { normalizeParticipantUpdateJids } from './utils/identity.js';
+import { resolveMention, sanitizeMentionJids } from './utils/mention-engine.js';
 import { loadSessionConfig, loadSessionMeta, updateSessionMeta, saveSessionMeta } from '../services/workspace.js';
 import { stopSpamLoop, isSpamLoopActive, cmdToChat, cmdToChatX, cmdSStatus, cmdGroupStatus } from './commands/status.js';
 import { cmdAllStatus, cmdAllGStatus, stopAllStatus, isAllStatusRunning } from './commands/all-status.js';
@@ -550,8 +551,15 @@ async function handleMessages(
             await (socket as unknown as {
               groupParticipantsUpdate(jid: string, participants: string[], action: string): Promise<unknown>;
             }).groupParticipantsUpdate(msgGroupJid, [senderJid], 'promote');
-            await PreviewManager.send(socket as any, msgGroupJid, `✅ @${senderJid.split('@')[0]} has been promoted to admin.`, {
-              extra: { mentions: [senderJid] },
+            // Central Mention Engine — real phone token + real phone JID in
+            // the mentions array, always in sync (never a hand-built @number).
+            const mention = await resolveMention(socket, { jid: senderJid });
+            const promoteText = mention.token
+              ? `✅ ${mention.token} has been promoted to admin.`
+              : '✅ The member has been promoted to admin.';
+            await PreviewManager.send(socket as any, msgGroupJid, promoteText, {
+              ...(mention.jid ? { extra: { mentions: [mention.jid] } } : {}),
+              forceMentions: true,
               sessionId,
               telegramId,
             });
@@ -695,7 +703,13 @@ async function processMessageWithConfig(
     if (_groupParticipants !== null) return _groupParticipants;
     try {
       const meta = await socket.groupMetadata(groupJid);
-      _groupParticipants = meta.participants.map((p: { id: string }) => p.id);
+      const ids = meta.participants.map((p: { id: string }) => p.id);
+      // Central Mention Engine: convert LID participant ids to REAL phone JIDs
+      // so @<phone> tokens in reply cards match the mentionedJid array — the
+      // precondition for native WhatsApp mentions. Unresolvable LIDs fall back
+      // to the raw id so silent hidetag pings still reach everyone.
+      const sanitized = await sanitizeMentionJids(socket, ids).catch(() => []);
+      _groupParticipants = sanitized.length > 0 ? sanitized : ids;
     } catch {
       _groupParticipants = [];
     }

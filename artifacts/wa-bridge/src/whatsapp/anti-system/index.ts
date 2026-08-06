@@ -415,6 +415,7 @@ export async function handleParticipantUpdate(
               await PreviewManager.send(socket as any, groupJid, rendered, {
                 media: { buffer: pp, type: 'image', caption: rendered },
                 ...(mentionList ? { extra: { mentions: mentionList } } : {}),
+                forceMentions: true,
                 sessionId,
                 telegramId,
               });
@@ -424,6 +425,7 @@ export async function handleParticipantUpdate(
 
           await PreviewManager.send(socket as any, groupJid, rendered, {
             ...(mentionList ? { extra: { mentions: mentionList } } : {}),
+            forceMentions: true,
             sessionId,
             telegramId,
           });
@@ -501,6 +503,7 @@ export async function handleParticipantUpdate(
               await PreviewManager.send(socket as any, groupJid, rendered, {
                 media: { buffer: pp, type: 'image', caption: rendered },
                 ...(mentionList ? { extra: { mentions: mentionList } } : {}),
+                forceMentions: true,
                 sessionId,
                 telegramId,
               });
@@ -510,6 +513,7 @@ export async function handleParticipantUpdate(
 
           await PreviewManager.send(socket as any, groupJid, rendered, {
             ...(mentionList ? { extra: { mentions: mentionList } } : {}),
+            forceMentions: true,
             sessionId,
             telegramId,
           });

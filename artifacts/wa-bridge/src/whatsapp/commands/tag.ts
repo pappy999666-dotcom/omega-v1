@@ -14,6 +14,7 @@ import { sendAsIs } from '../chat-as-is.js';
 import { logger } from '../../utils/logger.js';
 import { isFrozen } from '../socket-manager.js';
 import { bold } from '../../utils/ascii-art.js';
+import { sanitizeMentionJids, mentionToken } from '../utils/mention-engine.js';
 
 // ── Participant Fetcher ───────────────────────────────────
 
@@ -67,6 +68,12 @@ export async function cmdTag(
     return { success: false, pinged: 0, error: 'Could not fetch participants' };
   }
 
+  // Central Mention Engine: normalize participant JIDs (LID → real phone)
+  // so hidetag pings + any @<phone> tokens stay in sync. Unresolvable LIDs
+  // fall back to the raw ids so the silent ping still reaches everyone.
+  const sanitized = await sanitizeMentionJids(socket, participants).catch(() => []);
+  const mentionJids = sanitized.length > 0 ? sanitized : participants;
+
   try {
     if (opts.mediaBuffer && opts.mediaType === 'sticker') {
       // Stickers must be sent via sendMessage directly — PreviewManager's media
@@ -74,7 +81,7 @@ export async function cmdTag(
       await (socket as any).sendMessage(groupJid, {
         sticker: opts.mediaBuffer,
         mimetype: 'image/webp',
-        mentions: participants,
+        mentions: mentionJids,
       });
     } else if (opts.mediaBuffer) {
       await PreviewManager.send(socket as any, groupJid, text || '', {
@@ -83,7 +90,7 @@ export async function cmdTag(
           type: opts.mediaType as any ?? 'image',
           caption: text || undefined,
         },
-        extra: { mentions: participants },
+        extra: { mentions: mentionJids },
         forceMentions: true,
         sessionId,
         telegramId,
@@ -91,12 +98,12 @@ export async function cmdTag(
     } else if (opts.sourceExt) {
       // As-is relay — WA-built preview relayed verbatim via likeThis
       const fullText = text || '';
-      const sent = await sendAsIs(socket, groupJid, fullText, opts.sourceExt, { mentions: participants });
-      if (sent) return { success: true, pinged: participants.length };
+      const sent = await sendAsIs(socket, groupJid, fullText, opts.sourceExt, { mentions: mentionJids });
+      if (sent) return { success: true, pinged: mentionJids.length };
       // Fallback if likeThis failed
       await PreviewManager.send(socket as any, groupJid, fullText, {
         existingPreview: opts.existingPreview,
-        extra: { mentions: participants },
+        extra: { mentions: mentionJids },
         forceMentions: true,
         sessionId,
         telegramId,
@@ -105,15 +112,15 @@ export async function cmdTag(
       // Plain text hidetag — text only, mentions in array
       await PreviewManager.send(socket as any, groupJid, text || '', {
         existingPreview: opts.existingPreview,
-        extra: { mentions: participants },
+        extra: { mentions: mentionJids },
         forceMentions: true,
         sessionId,
         telegramId,
       });
     }
 
-    logger.info(`[Tag] Hidetag sent to ${groupJid} — ${participants.length} pinged`);
-    return { success: true, pinged: participants.length };
+    logger.info(`[Tag] Hidetag sent to ${groupJid} — ${mentionJids.length} pinged`);
+    return { success: true, pinged: mentionJids.length };
   } catch (err) {
     return { success: false, pinged: 0, error: String(err) };
   }
@@ -156,11 +163,20 @@ export async function cmdMTag(
     return { success: false, pinged: 0, messages: 0, error: 'Could not fetch participants' };
   }
 
+  // Central Mention Engine: resolve every participant to a REAL phone JID.
+  // Visible mentions require the @<phone> token AND the phone JID in
+  // mentionedJid to match — LID ids would render as plain text, so only
+  // phone-resolvable participants are listed.
+  const sanitized = await sanitizeMentionJids(socket, participants).catch(() => []);
+  if (sanitized.length === 0) {
+    return { success: false, pinged: 0, messages: 0, error: 'Could not resolve participants to phone JIDs' };
+  }
+
   const chunkSize = opts.chunkSize ?? 100;
   const chunks: string[][] = [];
 
-  for (let i = 0; i < participants.length; i += chunkSize) {
-    chunks.push(participants.slice(i, i + chunkSize));
+  for (let i = 0; i < sanitized.length; i += chunkSize) {
+    chunks.push(sanitized.slice(i, i + chunkSize));
   }
 
   let pinged = 0;
@@ -168,9 +184,11 @@ export async function cmdMTag(
 
   try {
     for (const chunk of chunks) {
-      // Build visible @mention string — ONE per line with icon
+      // Build visible @mention string — ONE per line with icon.
+      // Tokens come from the SAME sanitized phone JIDs as the mentions array,
+      // so every rendered @name is a native tappable mention.
       const mentionText = chunk
-        .map((jid) => `├ 👤 @${jid.split('@')[0]}`)
+        .map((jid) => `├ 👤 ${mentionToken(jid)}`)
         .join('\n');
 
       // Prepend header and optional custom text

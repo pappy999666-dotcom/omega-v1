@@ -75,7 +75,8 @@ import { loadGroupAntiConfig } from './config.js';
 import { PreviewManager } from '../../preview-engine/index.js';
 import { addPendingRestore, removePendingRestore, loadPendingRestores } from './pending-restores.js';
 import { resolveIdentity, type IdentityParticipant } from '../utils/identity.js';
-import { formatInTimeZone } from '../../utils/response-engine.js';
+import { resolveMention } from '../utils/mention-engine.js';
+import { formatInTimeZone, renderTemplate } from '../../utils/response-engine.js';
 import type {
   GroupSecurityMode,
   LegacySecurityMode,
@@ -218,7 +219,9 @@ function buildSecurityCard(opts: {
   const time = formatInTimeZone(new Date(), {
     hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
   });
-  const targets = opts.targetNumbers.map((n) => `  ➜ @${n}`).join('\n');
+  const targets = opts.targetNumbers
+    .map((n) => `  ➜ ${n ? `@${n}` : 'Unknown'}`)
+    .join('\n');
   const skipLine = opts.skipReason
     ? `\nStatus\n  ➜ ${opts.skipReason}\n`
     : '';
@@ -228,7 +231,7 @@ function buildSecurityCard(opts: {
   return (
     `⟦ OMEGA • SECURITY ⟧\n\n` +
     `⚠ ${opts.eventLabel}\n\n` +
-    `Actor\n  ➜ @${opts.actorNumber}\n\n` +
+    `Actor\n  ➜ ${opts.actorNumber ? `@${opts.actorNumber}` : 'Unknown'}\n\n` +
     `Target\n${targets}\n\n` +
     `Action\n  ➜ ${opts.actionLabel}\n\n` +
     `Penalty\n  ➜ ${opts.penaltyLabel}\n` +
@@ -309,8 +312,7 @@ interface PunishmentContext {
   telegramId: string;
   groupJid: string;
   actorJid: string;
-  actorNumber: string;
-  targetNumbers: string[];
+  targetJids: string[];
   plan: ActionPlan;
   eventLabel: string;
   customMessage?: string;
@@ -320,9 +322,22 @@ interface PunishmentContext {
 async function executePunishment(ctx: PunishmentContext): Promise<void> {
   const {
     socket, sessionId, telegramId, groupJid,
-    actorJid, actorNumber, targetNumbers,
+    actorJid, targetJids,
     plan, eventLabel, customMessage, audit,
   } = ctx;
+
+  // ── Central Mention Engine ────────────────────────────────
+  // Resolve the actor + targets to REAL phone identities so the security
+  // card never leaks LID digits and the notify mention is a native mention
+  // (real @<phone> token + matching phone JID in mentionedJid).
+  const actorMention = await resolveMention(socket, { jid: actorJid }).catch(() => null);
+  const cardActorNumber = actorMention?.number || '';
+  const notifyJid = actorMention?.jid || '';
+  const targetNumbers: string[] = [];
+  for (const j of targetJids) {
+    const m = await resolveMention(socket, { jid: j }).catch(() => null);
+    targetNumbers.push(m?.number || '');
+  }
 
   const executedActions: SecurityAction[] = [];
   const ops: Promise<unknown>[] = [];
@@ -352,14 +367,26 @@ async function executePunishment(ctx: PunishmentContext): Promise<void> {
   executedActions.push('notify_group');
   const card = buildSecurityCard({
     eventLabel,
-    actorNumber,
+    actorNumber: cardActorNumber,
     targetNumbers,
     actionLabel: plan.label,
     penaltyLabel: plan.penalty,
   });
+  // Admin-custom messages may use @mention — render it through the template
+  // engine so it becomes a real native mention (never a literal token).
+  const cardText = customMessage
+    ? await renderTemplate(customMessage, {
+        senderJid: notifyJid || actorJid,
+        mentionNumber: cardActorNumber,
+        gcName: groupJid.split('@')[0] ?? 'Group',
+        socket,
+        groupJid,
+      }).catch(() => customMessage)
+    : card;
   ops.push(
-    PreviewManager.send(socket as any, groupJid, customMessage ?? card, {
-      extra: { mentions: [actorJid] },
+    PreviewManager.send(socket as any, groupJid, cardText, {
+      ...(notifyJid ? { extra: { mentions: [notifyJid] } } : {}),
+      forceMentions: true,
       sessionId, telegramId,
     }).catch((err) => {
       audit.errors?.push(`send_card_failed:${String(err)}`);
@@ -617,7 +644,7 @@ export async function handleAntiDemoteEvent(
 
     await executePunishment({
       socket, sessionId, telegramId, groupJid,
-      actorJid, actorNumber, targetNumbers,
+      actorJid, targetJids: enforcementTargets,
       plan,
       eventLabel: 'Unauthorized Demotion',
       customMessage: mod.customMessage,
@@ -782,7 +809,7 @@ export async function handleAntiPromoteEvent(
     // ── Step 7: Punishment ───────────────────────────────────
     await executePunishment({
       socket, sessionId, telegramId, groupJid,
-      actorJid, actorNumber, targetNumbers,
+      actorJid, targetJids: enforcementTargets,
       plan,
       eventLabel: 'Unauthorized Promotion',
       customMessage: mod.customMessage,
