@@ -176,6 +176,47 @@ export async function sanitizeMentionJids(
   return out;
 }
 
+// ── Token sync guard ───────────────────────────────────────
+
+/**
+ * Structural invariant for native WhatsApp mentions: EVERY @<digits>
+ * token in the outgoing text must have its phone JID present in the
+ * mentionedJid array, otherwise WhatsApp renders the raw number instead
+ * of the contact's profile name.
+ *
+ * Scans `text` for @<digits> tokens and appends the matching phone JID
+ * (digits@s.whatsapp.net) to `mentions` when missing. Phone-JID inputs
+ * resolve synchronously (passthrough, no network), so this is cheap and
+ * safe to run on every send.
+ */
+export async function syncMentionTokens(
+  socket: WASocket,
+  text: string,
+  mentions: string[],
+  participants?: IdentityParticipant[] | null
+): Promise<{ text: string; mentions: string[] }> {
+  const result = text ?? '';
+  if (!MENTION_TOKEN_RE.test(result)) return { text: result, mentions: [...mentions] };
+
+  const out = [...mentions];
+  const seen = new Set<string>(out);
+
+  for (const match of result.matchAll(MENTION_TOKEN_RE)) {
+    const digits = match[1];
+    if (!digits) continue;
+    const phoneJid = `${digits}@s.whatsapp.net`;
+    if (seen.has(phoneJid)) continue;
+    // Resolve through the central engine (LID-safe; phone JIDs pass through).
+    const r = await resolveMention(socket, { jid: phoneJid, participants }).catch(() => null);
+    if (r?.jid && !seen.has(r.jid)) {
+      seen.add(r.jid);
+      out.push(r.jid);
+    }
+  }
+
+  return { text: result, mentions: out };
+}
+
 // ── Rendered text builder ──────────────────────────────────
 
 /**

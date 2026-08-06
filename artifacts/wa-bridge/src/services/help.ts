@@ -3,9 +3,9 @@
 // Platform-aware command documentation
 // ============================================================
 
-import { MENU_CATALOG } from '../whatsapp/menu-registry.js';
+import { MENU_CATALOG, helpPageText } from '../whatsapp/menu-registry.js';
 import { H, header, escape } from '../utils/formatter.js';
-import { whatsappMenu, asciiBox, bold, italic } from '../utils/ascii-art.js';
+import { asciiBox, italic } from '../utils/ascii-art.js';
 
 export function generateTelegramHelp(isOwner: boolean): string {
   const sections: Record<string, string[]> = {};
@@ -69,23 +69,18 @@ export function generateWhatsAppHelp(prefix: string, isGroup: boolean, commandNa
     }
   }
 
-  const sections: { heading: string; items: { cmd: string; desc: string }[] }[] = [];
-  const sectionMap: Record<string, { heading: string; items: { cmd: string; desc: string }[] }> = {};
+  // Registry-driven paginated help (page 1 by default). The full command
+  // list is never dumped in one message — each page carries 5-7 commands
+  // with usage, permissions and the premium flag.
+  return helpPageText(prefix, 1, isGroup ? 'group' : 'main', []).text;
+}
 
-  for (const [cmd, entry] of Object.entries(MENU_CATALOG)) {
-    if (entry.hidden) continue;
-    if (isGroup && entry.target === 'main') continue;
-    if (!isGroup && entry.target === 'group') continue;
-
-    if (!sectionMap[entry.section]) {
-      sectionMap[entry.section] = { heading: entry.section, items: [] };
-      sections.push(sectionMap[entry.section]);
-    }
-    sectionMap[entry.section].items.push({
-      cmd: `${prefix}${entry.syntax}`,
-      desc: entry.desc
-    });
-  }
-
-  return whatsappMenu('OMEGA • CORE', sections, prefix);
+/** Paginated help page n — used by .help <n> and the native-flow Help buttons. */
+export function generateWhatsAppHelpPage(
+  prefix: string,
+  isGroup: boolean,
+  page: number,
+  knownCommands: readonly string[] = []
+): { text: string; totalPages: number } {
+  return helpPageText(prefix, page, isGroup ? 'group' : 'main', knownCommands);
 }

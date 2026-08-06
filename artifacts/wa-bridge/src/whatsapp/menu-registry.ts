@@ -4,6 +4,11 @@
 // Single source of truth for every command's section, syntax,
 // description, and which menu it belongs to.
 //
+// The MENU NAVIGATION HUB at the bottom of this file derives every
+// category from MENU_CATALOG + ALL_COMMANDS, so new commands appear
+// automatically — no manual menu edits.
+//
+//
 // HOW TO ADD A NEW COMMAND:
 //   1. Add the command name to ALL_COMMANDS in command-parser.ts
 //   2. Add a case in the switch in event-handlers.ts
@@ -16,6 +21,8 @@
 // Commands not listed here fall into "◈ OTHER" automatically.
 // Set hidden: true for aliases / internal commands to suppress them.
 // ============================================================
+
+import { getPremiumTip } from '../utils/ascii-art.js';
 
 export interface MenuEntry {
   /** Section heading (shared entries are grouped together) */
@@ -353,4 +360,281 @@ export function buildGroupMenuSections(
   knownCommands: readonly string[] = []
 ): { heading: string; items: { cmd: string; desc: string }[] }[] {
   return buildSections(prefix, knownCommands, 'group', GROUP_SECTION_ORDER);
+}
+
+// ═══════════════════════════════════════════════════════════
+// MENU NAVIGATION HUB — button-driven, registry-powered
+//
+// The main menu is a navigation hub. Each category maps to an
+// explicit command list (derived from MENU_CATALOG / ALL_COMMANDS)
+// and is rendered as a native WhatsApp quick_reply button. Tapping
+// a button opens ONLY that category — never the whole registry.
+// Category pages are paginated (5-7 commands each) with native
+// Prev / Next / Home buttons.
+// ═══════════════════════════════════════════════════════════
+
+export const MENU_PAGE_SIZE = 6;
+
+/** Commands that require the premium tier — flagged 💎 in help pages. */
+const PREMIUM_COMMANDS = new Set<string>([
+  'joinall', 'leaveall', 'allstatus', 'allstatusx', 'allchat',
+  'sstatus', 'spam', 'togstatusx', 'tochatx', 'setmenuvideo',
+]);
+
+export interface NavCategory {
+  id: string;
+  label: string;
+  emoji: string;
+  desc: string;
+  /** Command names in this category (keys of MENU_CATALOG / ALL_COMMANDS). */
+  commands: string[];
+  /** Absorb registered-but-uncatalogued commands. */
+  fallback?: boolean;
+}
+
+const GROUP_MODERATION_COMMANDS = [
+  'kick', 'remove', 'dnkick', 'ban', 'unban', 'banlist', 'warn', 'unwarn',
+  'resetwarn', 'warns', 'poll', 'blockall', 'autoblock', 'block', 'deleteall',
+  'mute', 'unmute', 'stopjoin', 'setwelcome', 'welcomemsg', 'welcome',
+  'setgoodbye', 'goodbyemsg', 'goodbye', 'kickmsg', 'warnmsg', 'banmsg',
+  'unbanmsg', 'eventstatus', 'pendingjoin', 'approveall', 'rejectall',
+  'approveamt', 'approvecountry',
+];
+
+const ANTI_COMMANDS = [
+  'antistatus', 'antilink', 'linkpermit', 'rmlinkpermit', 'antilinkmsg',
+  'antibot', 'botpermit', 'rmbotpermit', 'antispam', 'spamlimit',
+  'spampermit', 'rmspampermit', 'antispammsg', 'antipic', 'antivid',
+  'antiaud', 'picpermit', 'rmpicpermit', 'vidpermit', 'rmvidpermit',
+  'audpermit', 'rmaudpermit', 'antivn', 'vnpermit', 'rmvnpermit',
+  'antivnmsg', 'antitxt', 'antiemoji', 'emojipermit', 'rmemojipermit',
+  'antiemojimsg', 'antisticker', 'sticpermit', 'rmsticpermit',
+  'antigroupcall', 'antinsfw', 'nsfwpermit', 'rmnsfwpermit',
+  'antigroupmention', 'antigm', 'mentionpermit', 'rmmentionpermit',
+  'antiwords', 'antiaddword', 'antirmword', 'antiwordlist', 'antiwordsmsg',
+  'antipoll', 'pollpermit', 'rmpollpermit', 'antiforward', 'fwdpermit',
+  'rmfwdpermit', 'antichannel', 'chanpermit', 'rmchanpermit',
+  'antipromote', 'antidemote',
+];
+
+export const MAIN_NAV: NavCategory[] = [
+  { id: 'help', label: 'Help', emoji: '📖', desc: 'Navigation & command index', commands: ['menu', 'help', 'gmenu'] },
+  { id: 'group', label: 'Group', emoji: '⚔️', desc: 'Kick, ban, warn, polls & events', commands: GROUP_MODERATION_COMMANDS },
+  { id: 'promo', label: 'Promotion', emoji: '⬆️', desc: 'Admin promotion, demotion & guards', commands: ['promote', 'demote', 'antipromote', 'antidemote'] },
+  { id: 'info', label: 'Info', emoji: 'ℹ️', desc: 'Ping, status, groups & users', commands: ['ping', 'info', 'groups', 'jid', 'userinfo', 'getinfo', 'sudo', 'idea'] },
+  { id: 'system', label: 'System', emoji: '🖥️', desc: 'Status engine, broadcast & sessions', commands: ['godcast', 'statusdesign', 'settheme', 'smedia', 'gstatus', 'tochat', 'togstatus', 'tochatx', 'togstatusx', 'sstatus', 'allstatus', 'allstatusx', 'allchat', 'stopspam', 'stop', 'spam', 'join', 'joinall', 'left', 'leave', 'leaveall', 'addlink', 'ls', 'curr', 'switch', 'sinfo', 'restart', 'disconnect', 'delete', 'rename', 'freeze', 'unfreeze'] },
+  { id: 'pair', label: 'Pair', emoji: '📱', desc: 'Link a new WhatsApp session', commands: ['pair'] },
+  { id: 'settings', label: 'Settings', emoji: '⚙️', desc: 'Prefix, sudo, media & stickers', commands: ['setprefix', 'prefix', 'public', 'publicresponse', 'tagreply', 'setmenupic', 'setmenuvideo', 'delmenumedia', 'setsudo', 'delsudo', 'setpackname', 'setauthor', 'setcmd', 'delcmd', 'listcmd'] },
+  { id: 'utils', label: 'Utilities', emoji: '🧰', desc: 'Tag, mtag, stickers & extras', commands: ['tag', 'mtag', 'sticker'], fallback: true },
+];
+
+export const GROUP_NAV: NavCategory[] = [
+  { id: 'group', label: 'Group', emoji: '⚔️', desc: 'Kick, ban, warn, polls & events', commands: GROUP_MODERATION_COMMANDS },
+  { id: 'promo', label: 'Promotion', emoji: '⬆️', desc: 'Admin promotion, demotion & guards', commands: ['promote', 'demote', 'antipromote', 'antidemote'] },
+  { id: 'anti', label: 'Anti', emoji: '🛡️', desc: 'Full Anti System — link, spam, media, words', commands: ANTI_COMMANDS },
+  { id: 'info', label: 'Info', emoji: 'ℹ️', desc: 'Ping, status, groups & users', commands: ['ping', 'info', 'groups', 'jid', 'userinfo', 'getinfo', 'sudo', 'idea'] },
+  { id: 'utils', label: 'Utilities', emoji: '🧰', desc: 'Tag, mtag, stickers & extras', commands: ['tag', 'mtag', 'sticker'], fallback: true },
+];
+
+export function navFor(menuTarget: 'main' | 'group'): NavCategory[] {
+  return menuTarget === 'group' ? GROUP_NAV : MAIN_NAV;
+}
+
+export function navCategoryById(menuTarget: 'main' | 'group', id: string): NavCategory | undefined {
+  return navFor(menuTarget).find((n) => n.id === id);
+}
+
+export interface NavCommandLine {
+  cmd: string;
+  desc: string;
+  usage?: string;
+  permissions?: string;
+  premium?: boolean;
+}
+
+function entryMatchesTarget(entry: MenuEntry, menuTarget: 'main' | 'group'): boolean {
+  const t = entry.target ?? 'main';
+  return menuTarget === 'group' ? t === 'group' || t === 'both' : t === 'main' || t === 'both';
+}
+
+/** Resolve a nav category's command lines (catalog-driven, fallback-safe). */
+export function navCommandLines(
+  prefix: string,
+  nav: NavCategory,
+  menuTarget: 'main' | 'group',
+  knownCommands: readonly string[]
+): NavCommandLine[] {
+  const lines: NavCommandLine[] = [];
+  for (const cmdName of nav.commands) {
+    const entry = MENU_CATALOG[cmdName];
+    if (entry?.hidden) continue;
+    if (entry && !entryMatchesTarget(entry, menuTarget)) continue;
+    if (!entry && !knownCommands.includes(cmdName)) continue;
+    lines.push({
+      cmd: prefix + (entry?.syntax ?? cmdName),
+      desc: entry?.desc ?? '—',
+      usage: entry?.usage,
+      permissions: entry?.permissions,
+      premium: PREMIUM_COMMANDS.has(cmdName),
+    });
+  }
+  return lines;
+}
+
+function clampPage(page: number, totalPages: number): number {
+  if (!Number.isFinite(page)) return 1;
+  return Math.min(Math.max(page, 1), totalPages);
+}
+
+/** Compact navigation-hub body (no giant borders, WhatsApp-mobile width). */
+export function renderNavHub(
+  prefix: string,
+  menuTarget: 'main' | 'group',
+  knownCommands: readonly string[]
+): string {
+  const safePrefix = prefix && prefix.trim() ? prefix.trim() : '(none)';
+  const lines: string[] = [
+    '⚜ OMEGA • NAVIGATION ⚜',
+    `▸ prefix: ${safePrefix} ▸ status: ONLINE`,
+    '',
+  ];
+  for (const nav of navFor(menuTarget)) {
+    const count = navCommandLines(prefix, nav, menuTarget, knownCommands).length;
+    lines.push(`${nav.emoji} ${nav.label} — ${nav.desc} [${count}]`);
+  }
+  lines.push('');
+  lines.push('Tap a button below to open its section.');
+  lines.push(`╰─ ${getPremiumTip()}`);
+  return lines.join('\n');
+}
+
+/** One category page (5-7 commands) with usage + permissions + premium flag. */
+export function renderNavCategoryPage(
+  prefix: string,
+  navId: string,
+  page: number,
+  menuTarget: 'main' | 'group',
+  knownCommands: readonly string[]
+): { text: string; totalPages: number } {
+  const nav = navCategoryById(menuTarget, navId);
+  if (!nav) return { text: '', totalPages: 0 };
+  const lines = navCommandLines(prefix, nav, menuTarget, knownCommands);
+  if (lines.length === 0) return { text: '', totalPages: 0 };
+  const totalPages = Math.max(1, Math.ceil(lines.length / MENU_PAGE_SIZE));
+  const p = clampPage(page, totalPages);
+  const slice = lines.slice((p - 1) * MENU_PAGE_SIZE, p * MENU_PAGE_SIZE);
+  const body = slice.map((l) => {
+    const meta: string[] = [];
+    if (l.usage) meta.push(`Usage: ${l.usage}`);
+    if (l.permissions) meta.push(`Perm: ${l.permissions}`);
+    return `${l.cmd}${l.premium ? ' 💎' : ''}\n  ${l.desc}${meta.length > 0 ? `\n  ${meta.join(' • ')}` : ''}`;
+  });
+  const text = [
+    `${nav.emoji} ${nav.label.toUpperCase()} — ${p}/${totalPages}`,
+    '─────────────────────',
+    ...body,
+    '',
+    'Use the buttons to navigate.',
+  ].join('\n');
+  return { text, totalPages };
+}
+
+/** Flat, catalog-ordered help lines for the given menu target. */
+export function allHelpLines(
+  prefix: string,
+  menuTarget: 'main' | 'group',
+  knownCommands: readonly string[]
+): NavCommandLine[] {
+  const out: NavCommandLine[] = [];
+  for (const [cmdName, entry] of Object.entries(MENU_CATALOG)) {
+    if (entry.hidden) continue;
+    if (!entryMatchesTarget(entry, menuTarget)) continue;
+    out.push({
+      cmd: prefix + entry.syntax,
+      desc: entry.desc,
+      usage: entry.usage,
+      permissions: entry.permissions,
+      premium: PREMIUM_COMMANDS.has(cmdName),
+    });
+  }
+  const catalogued = new Set(Object.keys(MENU_CATALOG));
+  for (const cmd of knownCommands) {
+    if (!catalogued.has(cmd)) {
+      out.push({ cmd: prefix + cmd, desc: '—', premium: PREMIUM_COMMANDS.has(cmd) });
+    }
+  }
+  return out;
+}
+
+/** Paginated help page — Help 1/N, 5-7 commands, never truncated. */
+export function helpPageText(
+  prefix: string,
+  page: number,
+  menuTarget: 'main' | 'group',
+  knownCommands: readonly string[]
+): { text: string; totalPages: number } {
+  const lines = allHelpLines(prefix, menuTarget, knownCommands);
+  if (lines.length === 0) return { text: 'No commands available.', totalPages: 1 };
+  const totalPages = Math.max(1, Math.ceil(lines.length / MENU_PAGE_SIZE));
+  const p = clampPage(page, totalPages);
+  const slice = lines.slice((p - 1) * MENU_PAGE_SIZE, p * MENU_PAGE_SIZE);
+  const body = slice.map((l) => {
+    const meta: string[] = [];
+    if (l.usage) meta.push(`Usage: ${l.usage}`);
+    if (l.permissions) meta.push(`Perm: ${l.permissions}`);
+    return `${l.cmd}${l.premium ? ' 💎' : ''}\n  ${l.desc}${meta.length > 0 ? `\n  ${meta.join(' • ')}` : ''}`;
+  });
+  const text = [
+    `📖 HELP ${p}/${totalPages}`,
+    '─────────────────────',
+    ...body,
+    '',
+    `Reply ${prefix}help <n> or use the buttons.`,
+  ].join('\n');
+  return { text, totalPages };
+}
+
+// ── Native flow quick_reply button builders ────────────────
+// Verified against @crysnovax/baileys 2.7.0: a `nativeFlow` content
+// key with `quick_reply` buttons becomes an interactiveMessage with
+// body + nativeFlowMessage. Presses arrive as
+// interactiveResponseMessage.nativeFlowResponseMessage.paramsJson.
+
+const quickReply = (displayText: string, id: string): { name: string; buttonParamsJson: string } => ({
+  name: 'quick_reply',
+  buttonParamsJson: JSON.stringify({ display_text: displayText, id }),
+});
+
+const targetTag = (menuTarget: 'main' | 'group'): string => (menuTarget === 'group' ? 'g' : 'm');
+
+export function navHubButtons(menuTarget: 'main' | 'group'): { name: string; buttonParamsJson: string }[] {
+  const t = targetTag(menuTarget);
+  return navFor(menuTarget).map((n) => quickReply(`${n.emoji} ${n.label}`, `menu:cat:${t}:${n.id}`));
+}
+
+export function categoryPageButtons(
+  menuTarget: 'main' | 'group',
+  navId: string,
+  page: number,
+  totalPages: number
+): { name: string; buttonParamsJson: string }[] {
+  const t = targetTag(menuTarget);
+  const buttons: { name: string; buttonParamsJson: string }[] = [];
+  if (page > 1) buttons.push(quickReply('⬅️ Prev', `menu:cat:${t}:${navId}:${page - 1}`));
+  if (page < totalPages) buttons.push(quickReply('Next ➡️', `menu:cat:${t}:${navId}:${page + 1}`));
+  buttons.push(quickReply('🏠 Menu', `menu:home:${t}`));
+  return buttons;
+}
+
+export function helpPageButtons(
+  menuTarget: 'main' | 'group',
+  page: number,
+  totalPages: number
+): { name: string; buttonParamsJson: string }[] {
+  const t = targetTag(menuTarget);
+  const buttons: { name: string; buttonParamsJson: string }[] = [];
+  if (page > 1) buttons.push(quickReply('⬅️ Prev', `menu:help:${t}:${page - 1}`));
+  if (page < totalPages) buttons.push(quickReply('Next ➡️', `menu:help:${t}:${page + 1}`));
+  buttons.push(quickReply('🏠 Menu', `menu:home:${t}`));
+  return buttons;
 }

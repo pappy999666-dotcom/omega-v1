@@ -132,6 +132,11 @@ export interface IMessage {
   listResponseMessage?: { singleSelectReply?: { selectedRowId?: string | null } | null } | null;
   templateMessage?: { hydratedTemplate?: { hydratedContentText?: string | null } | null; contextInfo?: MessageContextInfo | null } | null;
   interactiveMessage?: { contextInfo?: MessageContextInfo | null } | null;
+  /** Native flow button press (e.g. menu navigation) — paramsJson carries the button id. */
+  interactiveResponseMessage?: {
+    nativeFlowResponseMessage?: { name?: string | null; paramsJson?: string | null; version?: number | null } | null;
+    body?: { text?: string | null } | null;
+  } | null;
   contactMessage?: { contextInfo?: MessageContextInfo | null } | null;
   locationMessage?: { contextInfo?: MessageContextInfo | null } | null;
   reactionMessage?: { text?: string | null; key?: Record<string, unknown> | null } | null;

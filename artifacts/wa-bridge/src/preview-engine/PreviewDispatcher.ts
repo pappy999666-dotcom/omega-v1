@@ -17,6 +17,7 @@ import pLimit from 'p-limit';
 import { loadSessionConfig, getGlobalMenuButtons } from '../services/workspace.js';
 import {
   sanitizeMentionJids,
+  syncMentionTokens,
   MENTION_TOKEN_RE,
 } from '../whatsapp/utils/mention-engine.js';
 
@@ -154,6 +155,21 @@ export class PreviewDispatcher {
         if (sanitized.length > 0) mentions = sanitized;
       } catch {
         // keep originals — never fail a send over mention normalization
+      }
+    }
+
+    // ── Structural mention invariant (global) ──
+    // Every @<digits> token in the outgoing text must have its phone JID in
+    // the mentionedJid array, or WhatsApp renders the raw number. Sync any
+    // token that is not already covered so hand-written tokens (moderation
+    // cards, .tag @mention echoes, quoted relaying) always render natively.
+    if (mentions.length > 0 || MENTION_TOKEN_RE.test(sendText)) {
+      try {
+        const synced = await syncMentionTokens(socket as never, sendText, mentions);
+        sendText = synced.text;
+        mentions = synced.mentions;
+      } catch {
+        // keep originals — never fail a send over token sync
       }
     }
 

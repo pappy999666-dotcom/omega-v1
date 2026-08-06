@@ -9,7 +9,7 @@ import type { BridgeWASocket as WASocket, BaileysEventMap, IMessage, WebMessageI
 import { resolvePreviewRoute } from './preview-router.js';
 import { parseCommand, parseStickerCommand, hashSticker } from './command-parser.js';
 import { resolveTarget, resolveTargetNumbers } from './utils/resolve-target.js';
-import { normalizeParticipantUpdateJids } from './utils/identity.js';
+import { normalizeParticipantUpdateJids, getContextInfoAny } from './utils/identity.js';
 import { resolveMention, sanitizeMentionJids } from './utils/mention-engine.js';
 import { loadSessionConfig, loadSessionMeta, updateSessionMeta, saveSessionMeta } from '../services/workspace.js';
 import { stopSpamLoop, isSpamLoopActive, cmdToChat, cmdToChatX, cmdSStatus, cmdGroupStatus } from './commands/status.js';
@@ -41,7 +41,19 @@ import { statusDesignEngine } from '../services/StatusDesignEngine.js';
 import type { SessionMeta } from '../types/index.js';
 import { pendingGcCodes } from '../telegram/bot.js';
 import { ALL_COMMANDS } from './command-parser.js';
-import { buildMenuSections, buildGroupMenuSections } from './menu-registry.js';
+import {
+  buildMenuSections,
+  buildGroupMenuSections,
+  MENU_CATALOG,
+  renderNavHub,
+  navHubButtons,
+  renderNavCategoryPage,
+  categoryPageButtons,
+  helpPageText,
+  helpPageButtons,
+  navFor,
+  navCategoryById,
+} from './menu-registry.js';
 import { addIdea } from '../services/ideas.js';
 // ── Anti System ───────────────────────────────────────────
 import { runAntiChecks, handleParticipantUpdate } from './anti-system/index.js';
@@ -144,6 +156,48 @@ export function isAuthorizedCommandSender(
   if (fromMe) return true;
   const sender = normalizeWhatsAppNumber(senderJid);
   return Boolean(sender && sudoNumbers.some((number) => normalizeWhatsAppNumber(number) === sender));
+}
+
+/**
+ * Pull a `menu:*` navigation id out of a native-flow or legacy button
+ * response message. Native-flow presses arrive as
+ * interactiveResponseMessage.nativeFlowResponseMessage.paramsJson
+ * (verified in @crysnovax/baileys 2.7.0); legacy buttons use
+ * buttonsResponseMessage.selectedButtonId.
+ */
+function extractMenuNav(message: IMessage | null | undefined): string | null {
+  if (!message) return null;
+  const m = message as unknown as Record<string, unknown>;
+  const inner =
+    (m.ephemeralMessage as any)?.message
+    ?? (m.viewOnceMessage as any)?.message
+    ?? (m.viewOnceMessageV2 as any)?.message
+    ?? (m.documentWithCaptionMessage as any)?.message
+    ?? m;
+  const inter = (inner as any)?.interactiveResponseMessage;
+  if (inter?.nativeFlowResponseMessage?.paramsJson) {
+    try {
+      const parsed = JSON.parse(String(inter.nativeFlowResponseMessage.paramsJson));
+      const id = typeof parsed?.id === 'string' ? parsed.id : null;
+      if (id && id.startsWith('menu:')) return id;
+      // Some clients only echo display_text — match the hub label.
+      if (typeof parsed?.display_text === 'string') {
+        const cleaned = String(parsed.display_text)
+          .replace(/^[^\p{L}\p{N}]+/u, '')
+          .trim()
+          .toLowerCase();
+        for (const target of ['main', 'group'] as const) {
+          const nav = navFor(target).find((n) => n.label.toLowerCase() === cleaned);
+          if (nav) return `menu:cat:${target === 'group' ? 'g' : 'm'}:${nav.id}`;
+        }
+      }
+    } catch {
+      // malformed paramsJson — ignore
+    }
+  }
+  const legacy = (inner as any)?.buttonsResponseMessage?.selectedButtonId;
+  if (typeof legacy === 'string' && legacy.startsWith('menu:')) return legacy;
+  return null;
 }
 
 function extractMessageText(message: IMessage | null | undefined): string {
@@ -665,6 +719,72 @@ async function processMessageWithConfig(
   // User sleep mode disables WhatsApp commands without affecting passive collection.
   if (config.sleeping && !replyOverride) return;
 
+  // ── Native-flow menu navigation (button presses) ──────────
+  // The menu is now a button-driven hub: taps arrive as interactive
+  // responses (menu:<target>:<page> ids) with NO text payload, so they are
+  // routed here before command parsing. Rendering only ever shows ONE
+  // category per message — never the whole registry.
+  const handleMenuNav = async (pageId: string): Promise<void> => {
+    const parts = pageId.split(':');
+    if (parts[0] !== 'menu') return;
+    const target: 'main' | 'group' = parts[2] === 'g' ? 'group' : 'main';
+    const known = ALL_COMMANDS;
+
+    let body = '';
+    let buttons: { name: string; buttonParamsJson: string }[] = [];
+
+    if (parts[1] === 'home') {
+      body = renderNavHub(config.prefix, target, known);
+      buttons = navHubButtons(target);
+    } else if (parts[1] === 'cat') {
+      const navId = parts[3];
+      const page = Number(parts[4]) || 1;
+      const res = renderNavCategoryPage(config.prefix, navId, page, target, known);
+      if (!res.totalPages) {
+        // Unknown category — fall back to the hub.
+        body = renderNavHub(config.prefix, target, known);
+        buttons = navHubButtons(target);
+      } else {
+        body = res.text;
+        buttons = categoryPageButtons(target, navId, page, res.totalPages);
+      }
+    } else if (parts[1] === 'help') {
+      const page = Number(parts[3]) || 1;
+      const res = helpPageText(config.prefix, page, target, known);
+      body = res.text;
+      buttons = helpPageButtons(target, page, res.totalPages);
+    } else {
+      return;
+    }
+
+    const meta = loadSessionMeta(telegramId, sessionId);
+    const media = meta?.menuMedia;
+    const options: any = {
+      quoted: msg,
+      sessionId,
+      telegramId,
+      enableButtons: true, // Preserve global URL buttons on every menu page
+    };
+    if (buttons.length > 0) options.extra = { buttons };
+    if (media?.filePath && fs.existsSync(media.filePath)) {
+      options.media = {
+        buffer: fs.readFileSync(media.filePath),
+        type: media.type,
+        mimetype: media.mimeType,
+        caption: body,
+      };
+    }
+    await PreviewManager.send(socket as any, groupJid, body, options);
+  };
+
+  const menuNavId = extractMenuNav(msg.message);
+  if (menuNavId) {
+    await handleMenuNav(menuNavId).catch((err) =>
+      logger.warn('[Menu] navigation failed', { err: String(err), pageId: menuNavId })
+    );
+    return;
+  }
+
   // Parse command. Unknown text and unbound stickers are always ignored.
   let parsed = text ? parseCommand(text, config) : null;
   if (!parsed && stickerMsg) {
@@ -802,7 +922,11 @@ async function processMessageWithConfig(
       caption: (mediaNode.node as any)?.caption,
     };
   };
-  const sendMenuResponse = async (title: string, body: string): Promise<void> => {
+  const sendMenuResponse = async (
+    title: string,
+    body: string,
+    navButtons?: { name: string; buttonParamsJson: string }[]
+  ): Promise<void> => {
     const meta = loadSessionMeta(telegramId, sessionId);
     const media = meta?.menuMedia;
     
@@ -810,8 +934,10 @@ async function processMessageWithConfig(
       quoted: msg,
       sessionId,
       telegramId,
-      enableButtons: true, // Always enable buttons for menu/help
+      enableButtons: true, // Always enable global URL buttons for menu/help
     };
+
+    if (navButtons?.length) options.extra = { buttons: navButtons };
 
     if (media?.filePath && fs.existsSync(media.filePath)) {
       options.media = {
@@ -958,49 +1084,83 @@ async function processMessageWithConfig(
 
     // ── Ping ──
     case 'ping': {
-      const latency = Date.now();
+      // ONE response only. Latency is measured internally (a ⚡ reaction on
+      // the triggering message round-trips to the WhatsApp server) and the
+      // final card is sent in a single message — no fake loading bubble.
       const startTime = Date.now();
-      
-      const getPingData = (l: number, s: string) => {
-        const uptime = process.uptime();
-        const h = Math.floor(uptime / 3600);
-        const m = Math.floor((uptime % 3600) / 60);
-        const s_uptime = Math.floor(uptime % 60);
-        const runtime = `${h}h ${m}m ${s_uptime}s`;
-        
-        const ram = `${(process.memoryUsage().rss / 1024 / 1024).toFixed(2)} MB`;
-        
-        return {
-          latency: l,
-          sessionId,
-          status: s,
-          runtime,
-          ram,
-          platform: process.platform,
-          version: '1.0.0', // From wa-bridge package.json
-        };
-      };
-
-      // Send first, then measure round-trip
-      const updatePing = await createProgressReply(pingCard(getPingData(0, 'MEASURING')));
-      await updatePing(pingCard(getPingData(Date.now() - startTime, isFrozen(sessionId) ? 'FROZEN' : 'ONLINE')));
-      
-      // Reaction audit: Add a reaction to show the engine supports it
+      let latencyMs = 0;
       try {
         await socket.sendMessage(groupJid, {
-          react: { text: '⚡', key: msg.key }
+          react: { text: '⚡', key: msg.key },
         });
-      } catch { /* ignore */ }
+        latencyMs = Date.now() - startTime;
+      } catch {
+        // Reactions unsupported/blocked — fall back to message transit time.
+        const ts = Number(msg.messageTimestamp ?? 0);
+        if (ts > 0) latencyMs = Math.min(Math.max(Date.now() - ts * 1000, 0), 99999);
+      }
+
+      const uptime = process.uptime();
+      const h = Math.floor(uptime / 3600);
+      const m = Math.floor((uptime % 3600) / 60);
+      const s_uptime = Math.floor(uptime % 60);
+
+      await PreviewManager.send(socket as any, groupJid, pingCard({
+        latency: latencyMs,
+        sessionId,
+        status: isFrozen(sessionId) ? 'FROZEN' : 'ONLINE',
+        runtime: `${h}h ${m}m ${s_uptime}s`,
+        ram: `${(process.memoryUsage().rss / 1024 / 1024).toFixed(2)} MB`,
+        platform: process.platform,
+        version: '1.0.0',
+      }), {
+        quoted: msg,
+        sessionId,
+        telegramId,
+      });
       break;
     }
 
     // ── Menu / Help ──
+    // .menu / .gmenu → button-driven navigation hub (ONE category per tap).
+    // .help          → paginated registry pages (Help 1/N, 5-7 commands each).
     case 'menu':
     case 'help':
     case 'gmenu': {
-      const { generateWhatsAppHelp } = await import('../services/help.js');
-      const helpText = generateWhatsAppHelp(config.prefix, isGroup || command === 'gmenu');
-      await sendMenuResponse(command.toUpperCase(), helpText);
+      const menuTarget: 'main' | 'group' = isGroup || command === 'gmenu' ? 'group' : 'main';
+      const known = ALL_COMMANDS;
+
+      if (command === 'help') {
+        const firstArg = args[0] ?? '';
+        const isPageNum = /^\d+$/.test(firstArg);
+
+        // .help <command> → detailed single-command card
+        if (!isPageNum && firstArg && MENU_CATALOG[firstArg.toLowerCase()]) {
+          const { generateWhatsAppHelp } = await import('../services/help.js');
+          const detail = generateWhatsAppHelp(
+            config.prefix,
+            menuTarget === 'group',
+            firstArg.toLowerCase()
+          );
+          await sendMenuResponse(`HELP: ${firstArg.toUpperCase()}`, detail);
+          break;
+        }
+
+        const page = isPageNum ? Number(firstArg) || 1 : 1;
+        const res = helpPageText(config.prefix, page, menuTarget, known);
+        await sendMenuResponse(
+          `HELP ${page}/${res.totalPages}`,
+          res.text,
+          helpPageButtons(menuTarget, page, res.totalPages)
+        );
+      } else {
+        // Navigation hub — one button per category, never the full registry.
+        await sendMenuResponse(
+          'NAVIGATION',
+          renderNavHub(config.prefix, menuTarget, known),
+          navHubButtons(menuTarget)
+        );
+      }
       break;
     }
 
@@ -1445,23 +1605,22 @@ async function processMessageWithConfig(
           : 'Your own session identity',
       };
 
-      await reply(asciiBox(boxOptions));
-
-      // Send profile picture as image if available
+      const infoText = asciiBox(boxOptions);
+      const infoMentions = await getGroupParticipants();
       if (pfpBuffer) {
-        try {
-          await PreviewManager.send(socket as any, groupJid, `📸 Profile picture for +${subjectNumber}`, {
-            media: {
-              buffer: pfpBuffer as any,
-              type: 'image',
-              caption: `📸 Profile picture for +${subjectNumber}`,
-            },
-            sessionId,
-            telegramId,
-          });
-        } catch (picErr) {
-          logger.warn('[GetInfo] Failed to send profile picture', { err: String(picErr), subjectJid });
-        }
+        await PreviewManager.send(socket as any, groupJid, infoText, {
+          media: {
+            buffer: pfpBuffer as any,
+            type: 'image',
+            caption: infoText,
+          },
+          ...(infoMentions.length > 0 ? { extra: { mentions: infoMentions } } : {}),
+          quoted: msg,
+          sessionId,
+          telegramId,
+        });
+      } else {
+        await reply(infoText);
       }
       break;
     }
@@ -1776,11 +1935,13 @@ async function processMessageWithConfig(
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
       const text = commandText('📢');
       const media = await extractMedia();
+      const incomingMentions = getContextInfoAny(msg.message)?.mentionedJid ?? [];
       const res = await cmdTag(socket, telegramId, sessionId, groupJid, text, {
         existingPreview: quotedPreview,
         sourceExt,
         mediaBuffer: media?.buffer,
         mediaType: media?.type,
+        incomingMentions,
       });
       // On success: cmdTag already sent the tagged message — do NOT reply with empty string
       // (reply('') would send a blank WhatsApp bubble as an extra unwanted message).
@@ -1793,11 +1954,13 @@ async function processMessageWithConfig(
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
       const text = commandText('📢');
       const media = await extractMedia();
+      const incomingMentions = getContextInfoAny(msg.message)?.mentionedJid ?? [];
       const res = await cmdMTag(socket, telegramId, sessionId, groupJid, text, {
         existingPreview: quotedPreview,
         sourceExt,
         mediaBuffer: media?.buffer,
         mediaType: media?.type,
+        incomingMentions,
       });
       if (!res.success) {
         await reply(errorCard('MTAG FAILED', res.error ?? 'Could not fetch group participants.'));
