@@ -9,10 +9,15 @@
 //   &gcname        → group subject
 //   &desc          → group description
 //   &getpp         → sender profile picture URL
+//   &pp            → sender profile picture (attached as media by callers)
 //   &membercount   → current member count
 //   &admincount    → current admin count
-//   &date          → current date (locale string)
-//   &time          → current time (locale string)
+//   &date          → current date (configured timezone)
+//   &time          → current time (configured timezone)
+//
+// TIMEZONE: all date/time rendering honours OMEGA_TZ (then TZ, then
+// the server's local zone). This fixes previews being ~1h off when the
+// host runs UTC but the operator lives in UTC+1.
 // ============================================================
 
 import type { BridgeWASocket as WASocket } from '../whatsapp/baileys-types.js';
@@ -25,6 +30,42 @@ export interface ResponseContext {
   groupJid: string;
 }
 
+/** The configured timezone (OMEGA_TZ → TZ → server default). */
+export function configuredTimeZone(): string | undefined {
+  const tz = process.env.OMEGA_TZ ?? process.env.TZ;
+  return tz && tz.trim() ? tz.trim() : undefined;
+}
+
+/** Format a date in the configured timezone. Falls back to locale string. */
+export function formatInTimeZone(
+  date: Date,
+  options: Intl.DateTimeFormatOptions
+): string {
+  const tz = configuredTimeZone();
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone: tz, ...options }).format(date);
+  } catch {
+    return new Intl.DateTimeFormat('en-US', options).format(date);
+  }
+}
+
+/** Current date string in the configured timezone. */
+export function currentDateString(): string {
+  return formatInTimeZone(new Date(), { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+/** Current time string (24h) in the configured timezone. */
+export function currentTimeString(): string {
+  return formatInTimeZone(new Date(), { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+/** True when the template contains a given variable token (e.g. 'pp'). */
+export function hasTemplateVariable(template: string, token: string): boolean {
+  if (!template) return false;
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`&${escaped}`, 'i').test(template);
+}
+
 /**
  * Render a response template string, substituting all supported variables.
  * Async because &desc, &getpp, &membercount, &admincount may require network calls.
@@ -35,7 +76,6 @@ export async function renderTemplate(
 ): Promise<string> {
   const { senderJid, gcName, socket, groupJid } = ctx;
   const phone = senderJid.split('@')[0]?.split(':')[0] ?? 'User';
-  const now = new Date();
 
   let result = template;
 
@@ -43,19 +83,25 @@ export async function renderTemplate(
   // Standard variables
   result = result.replace(/@mention/gi, `@${phone}`);
   result = result.replace(/&gcname/gi, gcName);
-  result = result.replace(/&date/gi,
-    now.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
-  );
-  result = result.replace(/&time/gi,
-    now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-  );
+  result = result.replace(/&date/gi, currentDateString());
+  result = result.replace(/&time/gi, currentTimeString());
 
   // User requested aliases
   result = result.replace(/@user/gi, `@${phone}`);
   result = result.replace(/@group/gi, gcName);
 
+  // Profile picture placeholders are removed from the text here; callers
+  // that can attach media detect &pp / &getpp beforehand via
+  // hasTemplateVariable and attach the image (see welcome/goodbye/preview).
+  result = result.replace(/&pp/gi, '');
+  result = result.replace(/&getpp/gi, '');
+
   // ── Group metadata (single fetch for desc + counts) ───────
-  const needsMeta = result.includes('&desc') || result.includes('&membercount') || result.includes('&admincount') || result.includes('@count');
+  const needsMeta =
+    result.includes('&desc') ||
+    result.includes('&membercount') ||
+    result.includes('&admincount') ||
+    result.includes('@count');
   if (needsMeta) {
     try {
       const meta = await fetchGroupMeta(socket, groupJid);
@@ -74,17 +120,27 @@ export async function renderTemplate(
     }
   }
 
-  // ── Profile picture URL ───────────────────────────────────
-  if (result.includes('&getpp')) {
-    try {
-      const ppUrl = await (socket as unknown as {
-        profilePictureUrl(jid: string, type: string): Promise<string>;
-      }).profilePictureUrl(senderJid, 'image');
-      result = result.replace(/&getpp/gi, ppUrl ?? '');
-    } catch {
-      result = result.replace(/&getpp/gi, '');
-    }
-  }
-
   return result;
+}
+
+/**
+ * Render a LIVE preview of a response template, simulating the event with a
+ * real example member (usually the command sender).
+ *
+ * Used by .setwelcome / .setgoodbye / .setkickmsg / .setwarnmsg / .setbanmsg
+ * so the admin sees EXACTLY what members will receive — not a raw echo of the
+ * template. The sender is used as the example member for @mention / &pp.
+ */
+export async function renderTemplatePreview(
+  template: string,
+  socket: WASocket,
+  groupJid: string,
+  senderJid: string
+): Promise<string> {
+  let gcName = groupJid.split('@')[0] ?? 'Group';
+  try {
+    const meta = await socket.groupMetadata(groupJid);
+    if (meta?.subject) gcName = meta.subject;
+  } catch { /* keep fallback */ }
+  return renderTemplate(template, { senderJid, gcName, socket, groupJid });
 }

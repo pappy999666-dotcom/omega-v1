@@ -257,73 +257,43 @@ export function getPremiumTip(index?: number): string {
   return PREMIUM_TIPS[dayOfYear % PREMIUM_TIPS.length];
 }
 
-// ── COMPACT PAPPY • OMEGA MENU ───────────────────────────
+// ── COMPACT GOTHIC • OMEGA MENU ──────────────────────────
+//
+// Registry-driven: the command list is built from MENU_CATALOG by
+// services/help.ts, so the menu can never drift from the codebase.
+// One command per line (command + one-line purpose), compact separators,
+// no giant ASCII boxes, WhatsApp-mobile-width friendly (~35 chars/line).
 
-const DIVIDER = '╠═════════════════════════╣';
-
-/**
- * Compact WhatsApp menu renderer.
- * Produces the PAPPY • OMEGA design with section boxes
- * that fit within WhatsApp mobile width (~35 chars).
- */
 export function whatsappMenu(
-  _title: string,
-  sections: { heading: string; items: { cmd: string; desc: string }[] }[]
+  title: string,
+  sections: { heading: string; items: { cmd: string; desc: string }[] }[],
+  prefix = '.'
 ): string {
-  const cleanCommand = (cmd: string): string => cmd.trim().split(/\s+/u)[0] ?? cmd.trim();
+  const lines: string[] = [];
 
-  // Gothic Header (Compact)
-  const lines: string[] = [
-    '┏━━ ✠ 𝕺𝕸𝕰𝕲𝕬 • 𝕮𝕺𝕽𝕰 ✠ ━━┓',
-    '┃ 𝕾𝖙𝖆𝖙𝖚𝖘: 𝕺𝖓𝖑𝖎𝖓𝖊 • 𝕻𝖗𝖊𝖋𝖎𝖝: .',
-    '┗━━━━━━━━━━━━━━━━━━━━━━┛',
-  ];
+  // Gothic header (compact, single line)
+  const safePrefix = prefix && prefix.trim() ? prefix.trim() : '(none)';
+  lines.push(`⚜ ${title} ⚜`);
+  lines.push(`▸ prefix: ${safePrefix} ▸ status: ONLINE`);
+  lines.push('');
 
-  // Section rendering
   for (const section of sections) {
+    const heading = section.heading.trim();
+    lines.push(`─── ${heading} ───`);
+
+    for (const item of section.items) {
+      // One line per command: `.cmd — purpose`, truncated to WhatsApp width.
+      const cmd = item.cmd.trim();
+      const maxDesc = Math.max(12, 33 - cmd.length);
+      const desc =
+        item.desc.length > maxDesc
+          ? `${item.desc.slice(0, maxDesc - 1)}…`
+          : item.desc;
+      lines.push(`▸ ${cmd} — ${desc}`);
+    }
     lines.push('');
-    // Heading in Gothic Unicode
-    const gothicHeading = section.heading
-      .replace(/MODERATION/g, '𝕸𝖔𝖉𝖊𝖗𝖆𝖙𝖎𝖔𝖓')
-      .replace(/UTILITY/g, '𝖀𝖙𝖎𝖑𝖎𝖙𝖞')
-      .replace(/CONFIGURATION/g, '𝕮𝖔𝖓𝖋𝖎𝖌𝖚𝖗𝖆𝖙𝖎𝖔𝖓')
-      .replace(/STICKER ENGINE/g, '𝕾𝖙𝖎𝖈𝖐𝖊𝖗 𝕰𝖓𝖌𝖎𝖓𝖊')
-      .replace(/ANTI SYSTEM/g, '𝕬𝖓𝖙𝖎 𝕾𝖞𝖘𝖙𝖊𝖒');
-    
-    lines.push(`⚔ ${gothicHeading}`);
-
-    // Group commands by prefix similarity or just list them compactly
-    const items = section.items;
-    const groups: string[][] = [];
-    
-    // Simple grouping logic for common commands
-    const processed = new Set<number>();
-    for (let i = 0; i < items.length; i++) {
-      if (processed.has(i)) continue;
-      const cmd1 = cleanCommand(items[i]!.cmd);
-      const baseCmd = cmd1.replace(/all|x$/g, '');
-      const group = [cmd1];
-      processed.add(i);
-      
-      for (let j = i + 1; j < items.length; j++) {
-        if (processed.has(j)) continue;
-        const otherCmd = cleanCommand(items[j]!.cmd);
-        if (otherCmd.startsWith(baseCmd) || (cmd1 === '.tag' && otherCmd === '.mtag')) {
-          group.push(otherCmd);
-          processed.add(j);
-        }
-      }
-      groups.push(group);
-    }
-
-    for (const group of groups) {
-      lines.push(group.join(' • '));
-    }
   }
 
-  // Footer
-  lines.push('');
   lines.push(`╰─ ${getPremiumTip()}`);
-
   return lines.join('\n');
 }

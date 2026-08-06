@@ -11,6 +11,7 @@
 
 import type { BridgeWASocket as WASocket, WebMessageInfo, MessageContextInfo } from '../baileys-types.js';
 import type { ResolvedGroupMeta, GroupParticipant } from './group-permissions.js';
+import { resolveIdentity } from './identity.js';
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -140,8 +141,30 @@ export async function resolveTarget(
       });
 
       if (member) {
+        // Central identity resolution: LID → real phone JID + display number.
+        // Guarantees the returned JID/number are never LID-based.
+        const identity = socket
+          ? await resolveIdentity(socket, member.id, participants).catch(() => null)
+          : null;
+
+        const finalJid =
+          identity?.jid ||
+          (isLid(member.id) ? '' : stripDeviceSuffix(member.id));
+        const finalNumber =
+          identity?.number ||
+          normalizeNumber(member.phoneNumber) ||
+          (isLid(member.id) ? '' : number);
+
+        // An unresolved LID cannot be a usable target — fail closed.
+        if (!finalJid || !finalNumber) return null;
+
         const lid = isLid(member.id) ? stripDeviceSuffix(member.id) : undefined;
-        return { jid: stripDeviceSuffix(member.id), number: normalizeNumber(member.phoneNumber) || number, lid, participant: member };
+        return {
+          jid: finalJid,
+          number: finalNumber,
+          lid,
+          participant: member,
+        };
       }
     } catch (err) {
       // Log resolution errors so live-lookup failures are observable.
@@ -158,7 +181,9 @@ export async function resolveTarget(
   if (isLidInput) return null;
 
   if (rawTarget.includes('@')) {
-    return { jid: stripDeviceSuffix(rawTarget), number };
+    const stripped = stripDeviceSuffix(rawTarget);
+    if (isLid(stripped)) return null; // unresolved LID JID — never usable
+    return { jid: stripped, number };
   }
   return { jid: `${number}@s.whatsapp.net`, number };
 }

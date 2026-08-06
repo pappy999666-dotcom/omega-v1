@@ -76,6 +76,7 @@ export type SecurityAction =
   | 'restore_target'   // Re-promote (AntiDemote) or re-demote (AntiPromote) the affected participant(s)
   | 'warn'             // Warn the actor in group
   | 'kick'             // Remove the actor from the group
+  | 'demote'           // Demote the actor from admin
   | 'ban'              // Remove + block the actor
   | 'notify_group'     // Send OMEGA SECURITY card to the group
   | 'notify_owner'     // Notify the session owner (future: Telegram DM)
@@ -134,10 +135,10 @@ export interface AuthorizationResult {
 // ── Legacy Mode Support ────────────────────────────────────
 //
 // Legacy modes are mapped to modern action chains:
-//   dwp → restore + warn actor
-//   dnp → restore only
-//   kwp → kick actor + warn (no restore of victim)
-//   knp → kick actor only   (no restore of victim)
+//   dwp → demote actor, no restore
+//   dnp → demote actor + restore victim
+//   kwp → kick + warn actor, no restore
+//   knp → kick actor only, no restore
 
 export type LegacySecurityMode = 'dwp' | 'dnp' | 'kwp' | 'knp';
 
@@ -159,11 +160,15 @@ export type AntiDemoteMode = LegacySecurityMode;
  *   kick         → restorekick
  *   ban          → restoreban
  *
- * Legacy modes (no-restore variants, kept for existing configs):
- *   dnp          → restore only            (legacy: demote-no-punish)
- *   dwp          → restore + warn actor    (legacy: demote-with-punish)
- *   knp          → kick actor, no restore  (legacy: kick-no-punish)
- *   kwp          → kick + warn, no restore (legacy: kick-with-punish)
+ * Enforcement modes (production semantics):
+ *   knp          — K(ick) N(o-restore) P: kick actor, NO restore
+ *   kwp          — K(ick) W(arn) P: kick + warn actor, NO restore
+ *   dnp          — D(emote) N(o-restore) P: demote actor, restore victim
+ *   dwp          — D(emote) W(arn) P: demote actor, NO restore
+ *   jw           — J(ust) W(arn): warn actor only, NO restore, NO kick
+ *   wnp          — W(arn) N(o-kick) P: warn actor + restore victim
+ *
+ * Restore operations always run BEFORE punishment when applicable.
  */
 export type GroupSecurityMode =
   | 'off'
@@ -177,7 +182,14 @@ export type GroupSecurityMode =
   | 'warn'
   | 'kick'
   | 'ban'
-  // Legacy:
+  // Enforcement modes:
+  | 'knp'
+  | 'kwp'
+  | 'dnp'
+  | 'dwp'
+  | 'jw'
+  | 'wnp'
+  // Legacy alias kept for migration:
   | LegacySecurityMode;
 
 /** Base config shared by every anti module */

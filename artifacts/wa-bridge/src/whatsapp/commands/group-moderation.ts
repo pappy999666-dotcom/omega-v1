@@ -44,7 +44,7 @@ import { runRemoveModerationPipeline } from '../utils/moderation-pipeline.js';
 import { loadSessionConfig } from '../../services/workspace.js';
 import { logger } from '../../utils/logger.js';
 import { bold, italic, successCard, warningCard, errorCard, asciiBox } from '../../utils/ascii-art.js';
-import { renderTemplate } from '../../utils/response-engine.js';
+import { renderTemplate, renderTemplatePreview, hasTemplateVariable } from '../../utils/response-engine.js';
 import {
   loadGroupEventConfig,
   setGroupMessage,
@@ -829,14 +829,15 @@ export async function cmdBlockAll(
 
 // ── Welcome Message ───────────────────────────────────────
 
-export function cmdSetWelcome(
+export async function cmdSetWelcome(
+  socket: WASocket,
   args: string[],
   msg: WebMessageInfo,
   telegramId: string,
   sessionId: string,
   groupJid: string,
   previousMessage?: string
-): string {
+): Promise<string> {
   if (!groupJid.endsWith('@g.us')) {
     return errorCard('Welcome', 'This command must be used inside a WhatsApp group.');
   }
@@ -854,19 +855,36 @@ export function cmdSetWelcome(
         ['Status', current.welcomeEnabled ? '✅ Enabled' : '❌ Disabled'],
         ['Template', current.welcomeMessage?.slice(0, 60) ?? 'Not set'],
         ['Usage', 'Send the message template as args'],
-        ['Variables', '@mention, &gcname, &desc, &membercount, &admincount, &date, &time'],
+        ['Variables', '@mention, &gcname, &desc, &membercount, &admincount, &date, &time, &pp'],
       ],
     });
   }
 
   setWelcomeConfig(telegramId, sessionId, groupJid, true, message);
+
+  // ── LIVE PREVIEW ───────────────────────────────────────────
+  // Simulate the join event using the command sender as the example member
+  // so the admin sees EXACTLY what new members will receive.
+  const senderJid = msg.key?.participant ?? msg.key?.remoteJid ?? '';
+  let livePreview = '';
+  try {
+    livePreview = await renderTemplatePreview(message, socket, groupJid, senderJid);
+  } catch (err) {
+    logger.warn('[Welcome] Live preview render failed', { err: String(err) });
+  }
+  const hasPp = hasTemplateVariable(message, 'pp');
+  const previewSuffix = hasPp ? '\n📷 Profile photo will be attached here' : '';
+
   const rows: [string, string][] = [
     ['New Template', message.slice(0, 60)],
   ];
   if (previousMessage) {
     rows.unshift(['Previous', previousMessage.slice(0, 60)]);
   }
-  return successCard('Welcome Set', `Welcome message saved and enabled.\n${italic('Variables: @mention, &gcname, &desc, &membercount, &admincount, &date, &time')}`, rows);
+  return successCard(
+    'Welcome Set',
+    `Welcome message saved and enabled.\n${italic('Variables: @mention, &gcname, &desc, &membercount, &admincount, &date, &time, &pp')}`, rows
+  ) + (livePreview ? `\n\n${italic('⚡ LIVE PREVIEW')}\n${livePreview}${previewSuffix}` : '');
 }
 
 export function cmdWelcomeToggle(
@@ -884,14 +902,15 @@ export function cmdWelcomeToggle(
 
 // ── Goodbye Message ───────────────────────────────────────
 
-export function cmdSetGoodbye(
+export async function cmdSetGoodbye(
+  socket: WASocket,
   args: string[],
   msg: WebMessageInfo,
   telegramId: string,
   sessionId: string,
   groupJid: string,
   previousMessage?: string
-): string {
+): Promise<string> {
   if (!groupJid.endsWith('@g.us')) {
     return errorCard('Goodbye', 'This command must be used inside a WhatsApp group.');
   }
@@ -909,19 +928,34 @@ export function cmdSetGoodbye(
         ['Status', current.goodbyeEnabled ? '✅ Enabled' : '❌ Disabled'],
         ['Template', current.goodbyeMessage?.slice(0, 60) ?? 'Not set'],
         ['Usage', 'Send the message template as args'],
-        ['Variables', '@mention, &gcname, &desc, &membercount, &admincount, &date, &time'],
+        ['Variables', '@mention, &gcname, &desc, &membercount, &admincount, &date, &time, &pp'],
       ],
     });
   }
 
   setGoodbyeConfig(telegramId, sessionId, groupJid, true, message);
+
+  // ── LIVE PREVIEW ───────────────────────────────────────────
+  const senderJid = msg.key?.participant ?? msg.key?.remoteJid ?? '';
+  let livePreview = '';
+  try {
+    livePreview = await renderTemplatePreview(message, socket, groupJid, senderJid);
+  } catch (err) {
+    logger.warn('[Goodbye] Live preview render failed', { err: String(err) });
+  }
+  const hasPp = hasTemplateVariable(message, 'pp');
+  const previewSuffix = hasPp ? '\n📷 Profile photo will be attached here' : '';
+
   const rows: [string, string][] = [
     ['New Template', message.slice(0, 60)],
   ];
   if (previousMessage) {
     rows.unshift(['Previous', previousMessage.slice(0, 60)]);
   }
-  return successCard('Goodbye Set', `Goodbye message saved and enabled.\n${italic('Variables: @mention, &gcname, &desc, &membercount, &admincount, &date, &time')}`, rows);
+  return successCard(
+    'Goodbye Set',
+    `Goodbye message saved and enabled.\n${italic('Variables: @mention, &gcname, &desc, &membercount, &admincount, &date, &time, &pp')}`, rows
+  ) + (livePreview ? `\n\n${italic('⚡ LIVE PREVIEW')}\n${livePreview}${previewSuffix}` : '');
 }
 
 export function cmdGoodbyeToggle(
@@ -939,7 +973,8 @@ export function cmdGoodbyeToggle(
 
 // ── Moderation Response Templates ────────────────────────
 
-export function cmdSetModerationMsg(
+export async function cmdSetModerationMsg(
+  socket: WASocket,
   key: string,
   label: string,
   args: string[],
@@ -947,7 +982,7 @@ export function cmdSetModerationMsg(
   telegramId: string,
   sessionId: string,
   groupJid: string
-): string {
+): Promise<string> {
   if (!groupJid.endsWith('@g.us')) {
     return errorCard('Response Template', 'This command must be used inside a WhatsApp group.');
   }
@@ -972,6 +1007,17 @@ export function cmdSetModerationMsg(
   const previous = getGroupMessage(telegramId, sessionId, groupJid, key);
   setGroupMessage(telegramId, sessionId, groupJid, key, message);
 
+  // ── LIVE PREVIEW ───────────────────────────────────────────
+  const senderJid = msg.key?.participant ?? msg.key?.remoteJid ?? '';
+  let livePreview = '';
+  try {
+    livePreview = await renderTemplatePreview(message, socket, groupJid, senderJid);
+  } catch (err) {
+    logger.warn(`[${label}] Live preview render failed`, { err: String(err) });
+  }
+  const hasPp = hasTemplateVariable(message, 'pp');
+  const previewSuffix = hasPp ? '\n📷 Profile photo will be attached here' : '';
+
   const rows: [string, string][] = [];
   if (previous) {
     rows.push(['Previous', previous.slice(0, 60)]);
@@ -980,7 +1026,8 @@ export function cmdSetModerationMsg(
   }
   rows.push(['New Template', message.slice(0, 60)]);
 
-  return successCard(`${label} Template Saved`, `Custom response will be used for ${label} actions.\n${italic('Variables: @mention, &gcname, &desc, &membercount, &admincount, &date, &time')}`, rows);
+  return successCard(`${label} Template Saved`, `Custom response will be used for ${label} actions.\n${italic('Variables: @mention, &gcname, &desc, &membercount, &admincount, &date, &time, &pp')}`, rows)
+    + (livePreview ? `\n\n${italic('⚡ LIVE PREVIEW')}\n${livePreview}${previewSuffix}` : '');
 }
 
 // ── Mute / Unmute ────────────────────────────────────────

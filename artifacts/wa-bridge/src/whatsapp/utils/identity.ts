@@ -345,3 +345,138 @@ export function buildQuotedKey(
     participant,
   };
 }
+
+// ═══════════════════════════════════════════════════════════
+// CENTRALIZED IDENTITY RESOLUTION (single source of truth)
+//
+// Every user reference in the codebase must resolve through one of
+// these helpers. They guarantee: no LID leaks, no raw participantAlt
+// exposure, phone-first JIDs, and stable display numbers.
+// ═══════════════════════════════════════════════════════════
+
+/** Minimal group participant shape accepted by the resolvers. */
+export interface IdentityParticipant {
+  id: string;
+  phoneNumber?: string;
+}
+
+/**
+ * Resolve any identifier (LID / phone JID / device JID / raw number)
+ * to a canonical phone JID + display number.
+ *
+ * Resolution order:
+ *   1. Fork lidMapping (authoritative LID → phone)
+ *   2. Group participant list (phoneNumber field / matching real JID)
+ *   3. Direct phone JID passthrough
+ *   4. Fallback: the raw value with a @s.whatsapp.net domain ONLY when
+ *      the input is already a phone JID (never fabricate from LID digits).
+ */
+export async function resolveIdentity(
+  socket: WASocket,
+  rawJid: string | null | undefined,
+  participants?: IdentityParticipant[] | null
+): Promise<{ jid: string; number: string; isLid: boolean }> {
+  const norm = normalizeJid(rawJid);
+  if (!norm) return { jid: '', number: '', isLid: false };
+
+  const isLid = norm.endsWith('@lid');
+
+  // 1. Authoritative fork mapping.
+  if (isLid) {
+    const variants = await identityVariants(socket, norm).catch(() => new Set<string>());
+    const real = [...variants].find(isPhoneJid);
+    if (real) return { jid: real, number: normalizePhone(real), isLid };
+  }
+
+  // 2. Group participant list (phoneNumber field is the reliable source).
+  if (participants?.length) {
+    const lidNum = numericId(norm);
+    const match = participants.find((p) => {
+      if (isLid) {
+        // Match a LID against a real participant via its phoneNumber.
+        return !isLidJid(p.id) && normalizePhone(p.phoneNumber) === lidNum;
+      }
+      return normalizeJid(p.id) === norm;
+    });
+    if (match) {
+      const phone = normalizePhone(match.phoneNumber);
+      if (phone) return { jid: `${phone}@s.whatsapp.net`, number: phone, isLid };
+    }
+  }
+
+  // 3. Already a phone JID — pass through.
+  if (isPhoneJid(norm)) return { jid: norm, number: normalizePhone(norm), isLid };
+
+  // 4. Unresolvable LID: return empty so callers never leak LID digits.
+  if (isLid) return { jid: '', number: '', isLid };
+
+  return { jid: norm, number: normalizePhone(norm), isLid };
+}
+
+/**
+ * The @mention text for a JID — ALWAYS the real phone number, never a LID.
+ * Returns '' when the identity cannot be resolved to a phone number.
+ */
+export async function mentionTextFor(
+  socket: WASocket,
+  rawJid: string | null | undefined,
+  participants?: IdentityParticipant[] | null
+): Promise<string> {
+  const id = await resolveIdentity(socket, rawJid, participants);
+  return id.number ? `@${id.number}` : '';
+}
+
+/**
+ * Display name from the socket contact store (name → notify → number).
+ * Never exposes a LID.
+ */
+export async function displayNameFor(
+  socket: WASocket,
+  rawJid: string | null | undefined
+): Promise<string> {
+  const norm = normalizeJid(rawJid);
+  if (!norm) return 'Unknown';
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sock = socket as any;
+    const contact =
+      sock?.store?.contacts?.[norm] ??
+      sock?.contacts?.[norm] ??
+      sock?.store?.contacts?.[norm.replace('@s.whatsapp.net', '@lid')];
+    if (contact?.name) return contact.name;
+    if (contact?.notify) return contact.notify;
+    if (contact?.verifiedName) return contact.verifiedName;
+  } catch {
+    /* non-critical */
+  }
+  const num = normalizePhone(norm);
+  return num ? num : 'Unknown';
+}
+
+/**
+ * Download a user's profile picture as a Buffer (best-effort).
+ * Returns null when private / unavailable / network failure.
+ */
+export async function profilePicBuffer(
+  socket: WASocket,
+  rawJid: string | null | undefined
+): Promise<Buffer | null> {
+  const jid = normalizeJid(rawJid);
+  if (!jid) return null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ppUrl = await (socket as any)?.profilePictureUrl?.(jid, 'image').catch(() => null);
+    if (!ppUrl) return null;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const res = await fetch(ppUrl, { signal: controller.signal });
+      if (!res.ok) return null;
+      return Buffer.from(await res.arrayBuffer());
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch {
+    return null;
+  }
+}

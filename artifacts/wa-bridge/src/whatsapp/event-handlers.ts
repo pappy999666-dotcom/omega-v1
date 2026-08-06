@@ -631,8 +631,13 @@ async function processMessageWithConfig(
   // Stage 1: Extract existing preview from quoted message via PreviewManager
   const quotedPreview = PreviewManager.extractIncomingPreview(quotedMessage);
 
-  // Extract sticker for macro matching
-  const stickerMsg = msg.message?.stickerMessage;
+  // Extract sticker for macro matching — unwrap ephemeral/viewOnce wrappers so
+  // disappearing-message chats still trigger sticker macros.
+  const _rawMessage = (msg.message ?? {}) as Record<string, any>;
+  const stickerMsg = _rawMessage.ephemeralMessage?.message?.stickerMessage
+    ?? _rawMessage.viewOnceMessage?.message?.stickerMessage
+    ?? _rawMessage.viewOnceMessageV2?.message?.stickerMessage
+    ?? msg.message?.stickerMessage;
 
   // As-is relay: detect sourceExt for chat commands (static import — no dynamic overhead)
   const chatRoute = resolvePreviewRoute(msg, text);
@@ -659,9 +664,29 @@ async function processMessageWithConfig(
 
   // Parse command. Unknown text and unbound stickers are always ignored.
   let parsed = text ? parseCommand(text, config) : null;
-  if (!parsed && stickerMsg?.fileSha256) {
-    // fileSha256 can be Uint8Array or base64 string depending on Baileys version
-    parsed = parseStickerCommand(stickerMsg.fileSha256 as unknown as Buffer, config);
+  if (!parsed && stickerMsg) {
+    // Unified fingerprint: fileSha256 fast path (can be Uint8Array or base64
+    // string depending on Baileys version), then content-hash fallback for
+    // payloads that omit fileSha256 — quoted/forwarded/saved/favourite
+    // stickers all resolve reliably, with no double-execution (dedupe above).
+    if (stickerMsg.fileSha256) {
+      parsed = parseStickerCommand(stickerMsg.fileSha256 as unknown as Buffer, config);
+    }
+    if (!parsed && stickerMsg && !stickerMsg.fileSha256) {
+      try {
+        const baileys = await import('@crysnovax/baileys') as Record<string, any>;
+        const fn = baileys.downloadMediaMessage as ((m: unknown, t: string, o: unknown) => Promise<Buffer>) | undefined;
+        if (fn) {
+          const buffer = await fn(msg, 'buffer', {});
+          if (buffer) parsed = parseStickerCommand(buffer, config);
+        }
+      } catch (err) {
+        logger.warn('[Sticker] content-hash fallback failed', { err: String(err) });
+      }
+    }
+    if (parsed) {
+      logger.info('[Sticker] Macro matched', { command: parsed.command, stickerHash: parsed.stickerHash });
+    }
   }
   if (!parsed) return;
 
@@ -2140,7 +2165,7 @@ async function processMessageWithConfig(
     case 'setwelcome':
     case 'welcomemsg': {
       const prevWelcome = loadGroupEventConfig(telegramId, sessionId, groupJid).welcomeMessage;
-      await reply(cmdSetWelcome(args, msg, telegramId, sessionId, groupJid, prevWelcome), { suppressPreview: true });
+      await reply(await cmdSetWelcome(socket, args, msg, telegramId, sessionId, groupJid, prevWelcome), { suppressPreview: true });
       break;
     }
 
@@ -2149,14 +2174,14 @@ async function processMessageWithConfig(
       if (sub === 'on') { await reply(cmdWelcomeToggle(true, telegramId, sessionId, groupJid), { suppressPreview: true }); break; }
       if (sub === 'off') { await reply(cmdWelcomeToggle(false, telegramId, sessionId, groupJid), { suppressPreview: true }); break; }
       const prevWelcome = loadGroupEventConfig(telegramId, sessionId, groupJid).welcomeMessage;
-      await reply(cmdSetWelcome(args.slice(1), msg, telegramId, sessionId, groupJid, prevWelcome), { suppressPreview: true });
+      await reply(await cmdSetWelcome(socket, args.slice(1), msg, telegramId, sessionId, groupJid, prevWelcome), { suppressPreview: true });
       break;
     }
 
     case 'setgoodbye':
     case 'goodbyemsg': {
       const prevGoodbye = loadGroupEventConfig(telegramId, sessionId, groupJid).goodbyeMessage;
-      await reply(cmdSetGoodbye(args, msg, telegramId, sessionId, groupJid, prevGoodbye), { suppressPreview: true });
+      await reply(await cmdSetGoodbye(socket, args, msg, telegramId, sessionId, groupJid, prevGoodbye), { suppressPreview: true });
       break;
     }
 
@@ -2165,28 +2190,28 @@ async function processMessageWithConfig(
       if (sub === 'on') { await reply(cmdGoodbyeToggle(true, telegramId, sessionId, groupJid), { suppressPreview: true }); break; }
       if (sub === 'off') { await reply(cmdGoodbyeToggle(false, telegramId, sessionId, groupJid), { suppressPreview: true }); break; }
       const prevGoodbye = loadGroupEventConfig(telegramId, sessionId, groupJid).goodbyeMessage;
-      await reply(cmdSetGoodbye(args.slice(1), msg, telegramId, sessionId, groupJid, prevGoodbye), { suppressPreview: true });
+      await reply(await cmdSetGoodbye(socket, args.slice(1), msg, telegramId, sessionId, groupJid, prevGoodbye), { suppressPreview: true });
       break;
     }
 
     // ── Moderation Response Templates ──
     case 'kickmsg': {
-      await reply(cmdSetModerationMsg('kick', 'Kick', args, msg, telegramId, sessionId, groupJid), { suppressPreview: true });
+      await reply(await cmdSetModerationMsg(socket, 'kick', 'Kick', args, msg, telegramId, sessionId, groupJid), { suppressPreview: true });
       break;
     }
 
     case 'warnmsg': {
-      await reply(cmdSetModerationMsg('warn', 'Warn', args, msg, telegramId, sessionId, groupJid), { suppressPreview: true });
+      await reply(await cmdSetModerationMsg(socket, 'warn', 'Warn', args, msg, telegramId, sessionId, groupJid), { suppressPreview: true });
       break;
     }
 
     case 'banmsg': {
-      await reply(cmdSetModerationMsg('ban', 'Ban', args, msg, telegramId, sessionId, groupJid), { suppressPreview: true });
+      await reply(await cmdSetModerationMsg(socket, 'ban', 'Ban', args, msg, telegramId, sessionId, groupJid), { suppressPreview: true });
       break;
     }
 
     case 'unbanmsg': {
-      await reply(cmdSetModerationMsg('unban', 'Unban', args, msg, telegramId, sessionId, groupJid), { suppressPreview: true });
+      await reply(await cmdSetModerationMsg(socket, 'unban', 'Unban', args, msg, telegramId, sessionId, groupJid), { suppressPreview: true });
       break;
     }
 

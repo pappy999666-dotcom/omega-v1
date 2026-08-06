@@ -142,6 +142,8 @@ export interface IMessage {
   pollUpdateMessage?: { pollEncryptedV1?: Record<string, unknown> | null; voterEncryptedV1?: unknown | null } | null;
   groupStatusMessage?: { message?: IMessage | null; contextInfo?: MessageContextInfo | null } | null;
   groupStatusMessageV2?: { message?: IMessage | null; contextInfo?: MessageContextInfo | null } | null;
+  /** Native WhatsApp Status "@Group" mention. Only present with REAL inner content when a user mentions the group from their Status. */
+  groupStatusMentionMessage?: { message?: IMessage | null; contextInfo?: MessageContextInfo | null } | null;
   groupMentionMessage?: { contextInfo?: MessageContextInfo | null } | null;
   keepInChatMessage?: { key?: Record<string, unknown> | null; keepInChatType?: number | null } | null;
   editedMessage?: { message?: IMessage | null; edits?: Array<Record<string, unknown>> | null } | null;

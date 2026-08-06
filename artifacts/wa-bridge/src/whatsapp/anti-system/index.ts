@@ -19,8 +19,9 @@ import { normalizeWhatsAppNumber } from '../event-handlers.js';
 import { executeAction, deleteMessage } from './actions.js';
 import type { ViolationContext } from './types.js';
 import { loadGroupEventConfig } from '../../services/group-config.js';
-import { renderTemplate } from '../../utils/response-engine.js';
+import { renderTemplate, hasTemplateVariable } from '../../utils/response-engine.js';
 import { PreviewManager } from '../../preview-engine/index.js';
+import { resolveIdentity, profilePicBuffer } from '../utils/identity.js';
 import {
   fetchGroupMeta,
   isProtectedJid,
@@ -279,6 +280,22 @@ export async function runAntiChecks(
   return triggered;
 }
 
+// ── Built-in default templates ─────────────────────────────
+// Used whenever a group has the feature enabled but no custom message:
+// the event must NEVER silently skip because a template is empty.
+
+export const DEFAULT_WELCOME_TEMPLATE =
+  `👋 Welcome @mention!\n\n` +
+  `You have joined *&gcname*.\n` +
+  `Members: &membercount • Admins: &admincount\n` +
+  `Read the description (&desc) and enjoy the group.\n` +
+  `— &date &time`;
+
+export const DEFAULT_GOODBYE_TEMPLATE =
+  `👋 @mention has left the group.\n` +
+  `*&gcname* now has &membercount members.\n` +
+  `— &date &time`;
+
 // ── Group Participant Event Handler ───────────────────────
 
 export interface ParticipantUpdateEvent {
@@ -349,9 +366,14 @@ export async function handleParticipantUpdate(
 
   // ── Welcome Message ──────────────────────────────────────
   if (action === 'add') {
-    // Welcome messages
+    // Welcome messages — fire unless explicitly disabled (.welcome off).
+    // A missing custom template falls back to the built-in default so the
+    // event is never silently dropped.
     const eventConfig = loadGroupEventConfig(telegramId, sessionId, groupJid);
-    if (eventConfig.welcomeEnabled && eventConfig.welcomeMessage) {
+    const welcomeTemplate =
+      eventConfig.welcomeMessage?.trim() || DEFAULT_WELCOME_TEMPLATE;
+
+    if (eventConfig.welcomeEnabled !== false) {
       let gcName = groupJid.split('@')[0] ?? 'Group';
       let welcomeMeta: { subject?: string; participants?: { id: string; phoneNumber?: string }[] } | null = null;
       try {
@@ -363,25 +385,41 @@ export async function handleParticipantUpdate(
 
       for (const participantJid of participants) {
         try {
-          // Resolve LID → real JID for the mentions array
-          let mentionJid = participantJid;
-          if (participantJid.endsWith('@lid') && welcomeMeta?.participants) {
-            const lidNum = (participantJid.split('@')[0] ?? '').split(':')[0] ?? '';
-            const matched = welcomeMeta.participants.find(
-              p => !p.id.endsWith('@lid') && ((p.id.split('@')[0] ?? '').split(':')[0] === lidNum || (p.phoneNumber ?? '').replace(/\D/g, '') === lidNum)
-            );
-            if (matched) mentionJid = matched.id;
-          }
-          const rendered = await renderTemplate(eventConfig.welcomeMessage, {
-            senderJid: mentionJid,
+          // Resolve LID → real phone JID through the central identity resolver.
+          // An unresolved LID is NEVER used in a mention (would leak the LID).
+          const resolved = await resolveIdentity(socket, participantJid, welcomeMeta?.participants ?? null);
+          const mentionJid = resolved.jid || (participantJid.endsWith('@lid') ? '' : participantJid);
+          const mentionNumber = resolved.number || '';
+
+          const rendered = await renderTemplate(welcomeTemplate, {
+            senderJid: mentionJid || participantJid,
             gcName,
             socket,
             groupJid,
           });
+
+          // &pp → attach the joining member's profile picture as media.
+          const mentionList = mentionJid ? [mentionJid] : undefined;
+          if (hasTemplateVariable(welcomeTemplate, 'pp')) {
+            const pp = await profilePicBuffer(socket, mentionJid || undefined);
+            if (pp) {
+              await PreviewManager.send(socket as any, groupJid, rendered, {
+                media: { buffer: pp, type: 'image', caption: rendered },
+                ...(mentionList ? { extra: { mentions: mentionList } } : {}),
+                sessionId,
+                telegramId,
+              });
+              continue;
+            }
+          }
+
           await PreviewManager.send(socket as any, groupJid, rendered, {
-            extra: { mentions: [mentionJid] },
+            ...(mentionList ? { extra: { mentions: mentionList } } : {}),
             sessionId,
             telegramId,
+          });
+          logger.info('[GroupEvents] Welcome sent', {
+            sessionId, groupJid, participantJid, mentionJid, mentionNumber,
           });
         } catch (err) {
           logger.warn('[GroupEvents] Welcome send failed', { err: String(err), participantJid });
@@ -421,7 +459,10 @@ export async function handleParticipantUpdate(
   // ── Goodbye Message ──────────────────────────────────────
   if (action === 'remove') {
     const eventConfig = loadGroupEventConfig(telegramId, sessionId, groupJid);
-    if (eventConfig.goodbyeEnabled && eventConfig.goodbyeMessage) {
+    const goodbyeTemplate =
+      eventConfig.goodbyeMessage?.trim() || DEFAULT_GOODBYE_TEMPLATE;
+
+    if (eventConfig.goodbyeEnabled !== false) {
       let gcName = groupJid.split('@')[0] ?? 'Group';
       // Use the pre-remove snapshot captured above so LID resolution can still
       // find the leaving participants (patchGroupMetaCache already removed them
@@ -431,24 +472,38 @@ export async function handleParticipantUpdate(
 
       for (const participantJid of participants) {
         try {
-          let mentionJid = participantJid;
-          if (participantJid.endsWith('@lid') && goodbyeMeta?.participants) {
-            const lidNum = (participantJid.split('@')[0] ?? '').split(':')[0] ?? '';
-            const matched = goodbyeMeta.participants.find(
-              p => !p.id.endsWith('@lid') && ((p.id.split('@')[0] ?? '').split(':')[0] === lidNum || (p.phoneNumber ?? '').replace(/\D/g, '') === lidNum)
-            );
-            if (matched) mentionJid = matched.id;
-          }
-          const rendered = await renderTemplate(eventConfig.goodbyeMessage, {
-            senderJid: mentionJid,
+          // Central identity resolution — never leak a LID.
+          const resolved = await resolveIdentity(socket, participantJid, goodbyeMeta?.participants ?? null);
+          const mentionJid = resolved.jid || (participantJid.endsWith('@lid') ? '' : participantJid);
+
+          const rendered = await renderTemplate(goodbyeTemplate, {
+            senderJid: mentionJid || participantJid,
             gcName,
             socket,
             groupJid,
           });
+
+          const mentionList = mentionJid ? [mentionJid] : undefined;
+          if (hasTemplateVariable(goodbyeTemplate, 'pp')) {
+            const pp = await profilePicBuffer(socket, mentionJid || undefined);
+            if (pp) {
+              await PreviewManager.send(socket as any, groupJid, rendered, {
+                media: { buffer: pp, type: 'image', caption: rendered },
+                ...(mentionList ? { extra: { mentions: mentionList } } : {}),
+                sessionId,
+                telegramId,
+              });
+              continue;
+            }
+          }
+
           await PreviewManager.send(socket as any, groupJid, rendered, {
-            extra: { mentions: [mentionJid] },
+            ...(mentionList ? { extra: { mentions: mentionList } } : {}),
             sessionId,
             telegramId,
+          });
+          logger.info('[GroupEvents] Goodbye sent', {
+            sessionId, groupJid, participantJid, mentionJid,
           });
         } catch (err) {
           logger.warn('[GroupEvents] Goodbye send failed', { err: String(err), participantJid });

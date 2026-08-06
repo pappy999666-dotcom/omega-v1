@@ -74,6 +74,8 @@ import {
 import { loadGroupAntiConfig } from './config.js';
 import { PreviewManager } from '../../preview-engine/index.js';
 import { addPendingRestore, removePendingRestore, loadPendingRestores } from './pending-restores.js';
+import { resolveIdentity, type IdentityParticipant } from '../utils/identity.js';
+import { formatInTimeZone } from '../../utils/response-engine.js';
 import type {
   GroupSecurityMode,
   LegacySecurityMode,
@@ -137,75 +139,68 @@ async function retryGroupUpdate(
 
 // ── Mode Normalization ─────────────────────────────────────
 //
-// Maps backward-compat aliases and legacy modes to canonical behavior.
+// Every mode maps to ONE canonical action plan. Legacy aliases and
+// enforcement modes (KNP/KWP/DNP/DWP/JW/WNP) are all resolved here so
+// the enforcement code never branches on mode strings.
 
-type NormalizedMode =
-  | 'restore'       // restore victim only
-  | 'restorewarn'   // restore victim + warn actor
-  | 'restorekick'   // restore victim + kick actor
-  | 'restoreban'    // restore victim + kick + ban actor
-  | 'knp'           // kick actor only, NO restore (legacy)
-  | 'kwp';          // kick + warn actor, NO restore (legacy)
+const ENFORCEMENT_MODES = new Set<string>(['knp', 'kwp', 'dnp', 'dwp', 'jw', 'wnp']);
 
-const LEGACY_MODES = new Set<string>(['dwp', 'dnp', 'kwp', 'knp']);
-
-function isLegacyMode(mode: string): mode is LegacySecurityMode {
-  return LEGACY_MODES.has(mode);
-}
-
-function normalizeMode(mode: GroupSecurityMode): NormalizedMode {
-  switch (mode) {
-    // Canonical v3
-    case 'restore':      return 'restore';
-    case 'restorewarn':  return 'restorewarn';
-    case 'restorekick':  return 'restorekick';
-    case 'restoreban':   return 'restoreban';
-    // Backward-compat aliases
-    case 'revert':       return 'restore';
-    case 'warn':         return 'restorewarn';
-    case 'kick':         return 'restorekick';
-    case 'ban':          return 'restoreban';
-    // Legacy — mapped to their correct chains
-    case 'dnp':          return 'restore';       // demote-no-punish: restore, no actor punishment
-    case 'dwp':          return 'restorewarn';   // demote-with-punish: restore + warn actor
-    case 'knp':          return 'knp';           // kick-no-punish: kick actor, NO restore
-    case 'kwp':          return 'kwp';           // kick-with-punish: kick + warn, NO restore
-    case 'off':
-    default:
-      logger.error('[SecurityEngine] Unknown or disabled mode — falling back to restore', { mode });
-      return 'restore';
-  }
+function isLegacyMode(mode: string): boolean {
+  return ENFORCEMENT_MODES.has(mode);
 }
 
 // ── Action Plan ────────────────────────────────────────────
 
 interface ActionPlan {
-  restoreVictim: boolean;  // true = re-promote (demote) or re-demote (promote) the targets
+  /** true = re-promote (demote) or re-demote (promote) the targets */
+  restoreVictim: boolean;
   warnActor: boolean;
   kickActor: boolean;
+  /** demote the actor from admin (AntiPromote/AntiDemote enforcement) */
+  demoteActor: boolean;
   banActor: boolean;
   label: string;
   penalty: string;
 }
 
 function buildActionPlan(mode: GroupSecurityMode): ActionPlan {
-  if (isLegacyMode(mode)) {
-    logger.info('[SecurityEngine] Legacy mode — applying compat mapping', { mode });
+  const isEnforcement = isLegacyMode(mode);
+  if (isEnforcement) {
+    logger.info('[SecurityEngine] Enforcement mode — applying action plan', { mode });
   }
-  const norm = normalizeMode(mode);
-  switch (norm) {
+
+  switch (mode) {
+    // ── Canonical v3 ──
     case 'restore':
-      return { restoreVictim: true,  warnActor: false, kickActor: false, banActor: false, label: 'Restored',               penalty: 'None' };
+      return { restoreVictim: true,  warnActor: false, kickActor: false, demoteActor: false, banActor: false, label: 'Victim Restored',   penalty: 'None' };
     case 'restorewarn':
-      return { restoreVictim: true,  warnActor: true,  kickActor: false, banActor: false, label: 'Restored',               penalty: 'Warning' };
+      return { restoreVictim: true,  warnActor: true,  kickActor: false, demoteActor: false, banActor: false, label: 'Victim Restored',   penalty: 'Actor Warned' };
     case 'restorekick':
-      return { restoreVictim: true,  warnActor: false, kickActor: true,  banActor: false, label: 'Restored',               penalty: 'Actor Kicked' };
+      return { restoreVictim: true,  warnActor: false, kickActor: true,  demoteActor: false, banActor: false, label: 'Victim Restored',   penalty: 'Actor Kicked' };
     case 'restoreban':
-      return { restoreVictim: true,  warnActor: false, kickActor: true,  banActor: true,  label: 'Restored',               penalty: 'Actor Kicked & Blocked' };
-    case 'knp':
-      return { restoreVictim: false, warnActor: false, kickActor: true,  banActor: false, label: 'Actor Kicked',           penalty: 'Actor Kicked (legacy: knp)' };
-    case 'kwp':
-      return { restoreVictim: false, warnActor: true,  kickActor: true,  banActor: false, label: 'Actor Kicked + Warning', penalty: 'Actor Kicked + Warning (legacy: kwp)' };
+      return { restoreVictim: true,  warnActor: false, kickActor: true,  demoteActor: false, banActor: true,  label: 'Victim Restored',   penalty: 'Actor Kicked & Blocked' };
+    // ── Backward-compat aliases ──
+    case 'revert': return buildActionPlan('restore');
+    case 'warn':   return buildActionPlan('restorewarn');
+    case 'kick':   return buildActionPlan('restorekick');
+    case 'ban':    return buildActionPlan('restoreban');
+    // ── Enforcement modes ──
+    case 'knp':  // K(ick) N(o-restore) P
+      return { restoreVictim: false, warnActor: false, kickActor: true,  demoteActor: false, banActor: false, label: 'Offender Kicked',       penalty: 'Kick · No restore' };
+    case 'kwp':  // K(ick) W(arn) P
+      return { restoreVictim: false, warnActor: true,  kickActor: true,  demoteActor: false, banActor: false, label: 'Offender Kicked',       penalty: 'Kick + Warn · No restore' };
+    case 'dnp':  // D(emote) N(o-restore) P
+      return { restoreVictim: true,  warnActor: false, kickActor: false, demoteActor: true,  banActor: false, label: 'Victim Restored',       penalty: 'Offender Demoted' };
+    case 'dwp':  // D(emote) W(arn) P
+      return { restoreVictim: false, warnActor: false, kickActor: false, demoteActor: true,  banActor: false, label: 'Offender Demoted',      penalty: 'Demote · No restore' };
+    case 'jw':   // J(ust) W(arn)
+      return { restoreVictim: false, warnActor: true,  kickActor: false, demoteActor: false, banActor: false, label: 'Offender Warned',       penalty: 'Warning only' };
+    case 'wnp':  // W(arn) N(o-kick) P
+      return { restoreVictim: true,  warnActor: true,  kickActor: false, demoteActor: false, banActor: false, label: 'Victim Restored',       penalty: 'Offender Warned' };
+    case 'off':
+    default:
+      logger.error('[SecurityEngine] Unknown or disabled mode — falling back to restore', { mode });
+      return buildActionPlan('restore');
   }
 }
 
@@ -215,16 +210,20 @@ function buildSecurityCard(opts: {
   eventLabel: string;
   actorNumber: string;
   targetNumbers: string[];
+  enforcementMode?: string;
   actionLabel: string;
   penaltyLabel: string;
   skipReason?: string;
 }): string {
-  const time = new Date().toLocaleTimeString('en-US', {
+  const time = formatInTimeZone(new Date(), {
     hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
   });
   const targets = opts.targetNumbers.map((n) => `  ➜ @${n}`).join('\n');
   const skipLine = opts.skipReason
     ? `\nStatus\n  ➜ ${opts.skipReason}\n`
+    : '';
+  const modeLine = opts.enforcementMode
+    ? `\nMode\n  ➜ ${opts.enforcementMode}\n`
     : '';
   return (
     `⟦ OMEGA • SECURITY ⟧\n\n` +
@@ -233,6 +232,7 @@ function buildSecurityCard(opts: {
     `Target\n${targets}\n\n` +
     `Action\n  ➜ ${opts.actionLabel}\n\n` +
     `Penalty\n  ➜ ${opts.penaltyLabel}\n` +
+    modeLine +
     skipLine +
     `\nTime\n  ➜ ${time}`
   );

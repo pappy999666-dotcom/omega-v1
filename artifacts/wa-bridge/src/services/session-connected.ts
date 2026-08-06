@@ -8,6 +8,7 @@
 import type { BridgeWASocket as WASocket } from '../whatsapp/baileys-types.js';
 import { logger } from '../utils/logger.js';
 import { findSessionOwner, updateSessionMeta, loadSessionMeta } from './workspace.js';
+import { formatInTimeZone } from '../utils/response-engine.js';
 
 export interface ConnectedNotification {
   /** Telegram chat ID to notify */
@@ -36,6 +37,16 @@ export interface ConnectedNotification {
   ownerTelegramId?: string;
   /** Force notification even if already delivered (e.g. manual reinit) */
   force?: boolean;
+  /** Workspace name (defaults to the session ID) */
+  workspace?: string;
+  /** Connection time (defaults to now, configured timezone) */
+  connectionTime?: string;
+  /** Device label (defaults to the Baileys user device) */
+  device?: string;
+  /** Runtime status (defaults to process uptime) */
+  runtime?: string;
+  /** Owner display (defaults to the owner Telegram ID) */
+  owner?: string;
 }
 
 // ── Fetch WA Profile ──────────────────────────────────────
@@ -90,16 +101,23 @@ function buildTelegramText(opts: {
   phone: string;
   sessionId: string;
   method: string;
+  workspace: string;
+  owner: string;
+  connectionTime: string;
+  device: string;
 }): string {
-  const { name, phone, sessionId, method } = opts;
+  const { name, phone, sessionId, method, workspace, owner, connectionTime, device } = opts;
   return [
     `🟢 <b>Session Connected!</b>`,
     ``,
+    `🏢 <b>Workspace:</b> ${escapeHtml(workspace)}`,
     `👤 <b>Name:</b> ${escapeHtml(name)}`,
     `📱 <b>Number:</b> <code>${escapeHtml(phone)}</code>`,
     `🔑 <b>Session ID:</b> <code>${escapeHtml(sessionId)}</code>`,
+    `🖥 <b>Device:</b> ${escapeHtml(device)}`,
+    `👑 <b>Owner:</b> ${escapeHtml(owner)}`,
     `🔗 <b>Method:</b> ${escapeHtml(method)}`,
-    `⏰ <b>Time:</b> ${new Date().toLocaleString()}`,
+    `⏰ <b>Time:</b> ${escapeHtml(connectionTime)}`,
     `⚡ <b>Status:</b> ACTIVE`,
     `🤖 <b>Engine:</b> OMEGA CORE`,
     ``,
@@ -111,6 +129,10 @@ function buildWhatsAppText(opts: {
   name: string;
   phone: string;
   sessionName: string;
+  connectionTime: string;
+  device: string;
+  runtime: string;
+  workspace: string;
 }): string {
   return [
     `━━━━━━━━━━━━━━━━━━`,
@@ -121,11 +143,26 @@ function buildWhatsAppText(opts: {
     `Session:`,
     opts.sessionName,
     ``,
+    `Number:`,
+    opts.phone,
+    ``,
+    `Workspace:`,
+    opts.workspace,
+    ``,
+    `Connected:`,
+    opts.connectionTime,
+    ``,
+    `Device:`,
+    opts.device,
+    ``,
+    `Runtime:`,
+    opts.runtime,
+    ``,
     `Status:`,
     `🟢 ACTIVE`,
     ``,
     `Commands:`,
-    `.prefix menu`,
+    `.menu`,
     ``,
     `Engine:`,
     `OMEGA CORE`,
@@ -164,6 +201,29 @@ export async function notifySessionConnected(opts: ConnectedNotification): Promi
     let name = opts.label || opts.phone;
     let sessionName = meta?.sessionName || opts.label || 'Main';
 
+    // Derived notification fields (enriched per the production audit):
+    // workspace, device, runtime, connection time (configured timezone) and owner.
+    const workspace = opts.workspace || sessionId;
+    const device =
+      opts.device ||
+      String((opts.socket as any)?.user?.device || (opts.socket as any)?.user?.platform || 'WhatsApp Web');
+    const runtime =
+      opts.runtime ||
+      (() => {
+        const u = process.uptime();
+        const h = Math.floor(u / 3600);
+        const m = Math.floor((u % 3600) / 60);
+        const s = Math.floor(u % 60);
+        return `${h}h ${m}m ${s}s`;
+      })();
+    const connectionTime =
+      opts.connectionTime ||
+      formatInTimeZone(new Date(), {
+        year: 'numeric', month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: false,
+      });
+    const owner = opts.owner || String(telegramId || 'Owner');
+
     // B. WhatsApp self-DM + Telegram run in parallel.
     //
     //    WA self-DM: socket.user.id may not be populated the instant 'open' fires.
@@ -192,7 +252,15 @@ export async function notifySessionConnected(opts: ConnectedNotification): Promi
             // Fetch profile once we have the JID
             const profile = await fetchWAProfile(opts.socket!, ownJid);
             const resolvedName = profile.name !== 'Unknown' ? profile.name : name;
-            const waText = buildWhatsAppText({ name: resolvedName, phone: opts.phone, sessionName });
+            const waText = buildWhatsAppText({
+              name: resolvedName,
+              phone: opts.phone,
+              sessionName,
+              connectionTime,
+              device,
+              runtime,
+              workspace,
+            });
             await opts.socket!.sendMessage(ownJid, { text: waText });
             logger.info('[ConnectedNotify] WhatsApp DM delivered', { sessionId });
           } catch (err) {
@@ -204,7 +272,10 @@ export async function notifySessionConnected(opts: ConnectedNotification): Promi
     // Telegram send with bounded retry (3 attempts, exponential backoff)
     let telegramDelivered = false;
     if (opts.telegram && opts.telegramChatId) {
-      const tgText = buildTelegramText({ name, phone: opts.phone, sessionId, method });
+      const tgText = buildTelegramText({
+        name, phone: opts.phone, sessionId, method,
+        workspace, owner, connectionTime, device,
+      });
       const tg = opts.telegram;
       const chatId = opts.telegramChatId;
 

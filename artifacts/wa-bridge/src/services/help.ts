@@ -87,5 +87,5 @@ export function generateWhatsAppHelp(prefix: string, isGroup: boolean, commandNa
     });
   }
 
-  return whatsappMenu('OMEGA • CORE', sections);
+  return whatsappMenu('OMEGA • CORE', sections, prefix);
 }
