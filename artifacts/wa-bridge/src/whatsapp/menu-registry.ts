@@ -23,6 +23,8 @@
 // ============================================================
 
 import { getPremiumTip } from '../utils/ascii-art.js';
+import { singleSelectButton } from './utils/native-rich.js';
+import type { NativeListRow, NativeListSection } from './utils/native-rich.js';
 
 export interface MenuEntry {
   /** Section heading (shared entries are grouped together) */
@@ -445,6 +447,9 @@ export function navCategoryById(menuTarget: 'main' | 'group', id: string): NavCa
 }
 
 export interface NavCommandLine {
+  /** Raw command name (registry key, e.g. "kick") — used for routing ids. */
+  name: string;
+  /** Prefixed display form (e.g. ".kick"). */
   cmd: string;
   desc: string;
   usage?: string;
@@ -471,6 +476,7 @@ export function navCommandLines(
     if (entry && !entryMatchesTarget(entry, menuTarget)) continue;
     if (!entry && !knownCommands.includes(cmdName)) continue;
     lines.push({
+      name: cmdName,
       cmd: prefix + (entry?.syntax ?? cmdName),
       desc: entry?.desc ?? '—',
       usage: entry?.usage,
@@ -550,6 +556,7 @@ export function allHelpLines(
     if (entry.hidden) continue;
     if (!entryMatchesTarget(entry, menuTarget)) continue;
     out.push({
+      name: cmdName,
       cmd: prefix + entry.syntax,
       desc: entry.desc,
       usage: entry.usage,
@@ -560,7 +567,7 @@ export function allHelpLines(
   const catalogued = new Set(Object.keys(MENU_CATALOG));
   for (const cmd of knownCommands) {
     if (!catalogued.has(cmd)) {
-      out.push({ cmd: prefix + cmd, desc: '—', premium: PREMIUM_COMMANDS.has(cmd) });
+      out.push({ name: cmd, cmd: prefix + cmd, desc: '—', premium: PREMIUM_COMMANDS.has(cmd) });
     }
   }
   return out;
@@ -637,4 +644,86 @@ export function helpPageButtons(
   if (page < totalPages) buttons.push(quickReply('Next ➡️', `menu:help:${t}:${page + 1}`));
   buttons.push(quickReply('🏠 Menu', `menu:home:${t}`));
   return buttons;
+}
+
+// ═══════════════════════════════════════════════════════════
+// NATIVE INTERACTIVE SHEET (single_select native-flow)
+//
+// The interactive "table" — a single_select native-flow button
+// opening a bottom sheet with selectable rows. Every row carries a
+// routing id consumed by the Central Interaction Router:
+//   menu:*     → navigation
+//   cmd:*      → command help card
+//   run:ping   → executes ping
+// =══════════════════════════════════════════════════════════
+
+/**
+ * The category page's command sheet: 6 commands + Prev/Menu/Next rows.
+ * Returns totalPages 0 for unknown/empty categories (caller falls back).
+ */
+export function categorySheet(
+  prefix: string,
+  menuTarget: 'main' | 'group',
+  navId: string,
+  page: number,
+  knownCommands: readonly string[]
+): { title: string; sections: NativeListSection[]; totalPages: number } {
+  const nav = navCategoryById(menuTarget, navId);
+  if (!nav) return { title: 'Menu', sections: [], totalPages: 0 };
+  const lines = navCommandLines(prefix, nav, menuTarget, knownCommands);
+  if (lines.length === 0) return { title: 'Menu', sections: [], totalPages: 0 };
+
+  const totalPages = Math.max(1, Math.ceil(lines.length / MENU_PAGE_SIZE));
+  const p = clampPage(page, totalPages);
+  const t = targetTag(menuTarget);
+  const slice = lines.slice((p - 1) * MENU_PAGE_SIZE, p * MENU_PAGE_SIZE);
+
+  const rows: NativeListRow[] = slice.map((l) => {
+    const meta: string[] = [];
+    if (l.usage) meta.push(l.usage);
+    if (l.permissions) meta.push(`Perm: ${l.permissions}`);
+    return {
+      title: `${l.cmd}${l.premium ? ' 💎' : ''}`,
+      description: [l.desc, ...meta].filter(Boolean).join(' • '),
+      rowId: l.name === 'ping' ? 'run:ping' : `cmd:${t}:${navId}:${l.name}`,
+    };
+  });
+
+  const navRows: NativeListRow[] = [];
+  if (p > 1) navRows.push({ title: '⬅️ Prev', rowId: `menu:cat:${t}:${navId}:${p - 1}` });
+  navRows.push({ title: '🏠 Menu', rowId: `menu:home:${t}` });
+  if (p < totalPages) navRows.push({ title: 'Next ➡️', rowId: `menu:cat:${t}:${navId}:${p + 1}` });
+
+  return {
+    title: `${nav.emoji} ${nav.label} — ${p}/${totalPages}`,
+    sections: [
+      { title: 'Commands', rows },
+      { title: 'Navigation', rows: navRows },
+    ],
+    totalPages,
+  };
+}
+
+/**
+ * The category page's native single_select button ("table" opener).
+ * Combines the command sheet with the visible Prev/Next/Home buttons.
+ */
+export function categorySheetButton(
+  prefix: string,
+  menuTarget: 'main' | 'group',
+  navId: string,
+  page: number,
+  knownCommands: readonly string[]
+): {
+  buttons: { name: string; buttonParamsJson: string }[];
+  totalPages: number;
+} {
+  const sheet = categorySheet(prefix, menuTarget, navId, page, knownCommands);
+  if (sheet.totalPages === 0) return { buttons: [], totalPages: 0 };
+  const t = targetTag(menuTarget);
+  const buttons = [singleSelectButton(`📂 ${sheet.title}`, sheet.sections)];
+  if (page > 1) buttons.push(quickReply('⬅️ Prev', `menu:cat:${t}:${navId}:${page - 1}`));
+  if (page < sheet.totalPages) buttons.push(quickReply('Next ➡️', `menu:cat:${t}:${navId}:${page + 1}`));
+  buttons.push(quickReply('🏠 Menu', `menu:home:${t}`));
+  return { buttons, totalPages: sheet.totalPages };
 }

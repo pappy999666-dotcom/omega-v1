@@ -26,48 +26,59 @@
 - Updated `whatsappMenu()` to include "◈ PREMIUM HIGHLIGHT" section at bottom
 
 ### 7-9. Anti System Refactor (Early Exits) ✅
-- AntiGM: Added `if (!msg.key.remoteJid?.endsWith('@g.us')) return false;`
-- AntiGroupMention: Added `if (!msg.key.remoteJid?.endsWith('@g.us')) return false;`
-- AntiLink: Added `if (!msg.key.remoteJid?.endsWith('@g.us')) return false;`
-- AntiBot: Added `if (!msg.key.remoteJid?.endsWith('@g.us')) return false;`
-- AntiNSFW: Fixed early exit bug — set `triggered = true` before async check
+- AntiGM / AntiGroupMention / AntiLink / AntiBot: added group-only early exits
+- AntiNSFW: fixed early exit bug — set `triggered = true` before async check
 
-### 10. Welcome/Goodbye via Native Events ✅ (Already implemented)
-- Uses `group-participants.update` with array normalization
-- LID → real JID resolution
-- Protected participant guards
-- `&pp` attaches profile picture as a SINGLE image+caption message via the same Media Renderer as userinfo
-- No changes needed
+### 10. Welcome/Goodbye via Native Events ✅
+- Uses `group-participants.update` with array normalization; LID → real JID resolution
+- `&pp` attaches profile picture as a SINGLE image+caption message
 
 ### 11-12. Centralized Response Pipeline (PreviewDispatcher) ✅
-- Pipeline centralized via PreviewDispatcher/PreviewManager
-- Global URL buttons applied in pipeline
-- Tag Reply policy enforced in pipeline
+- Pipeline centralized via PreviewDispatcher/PreviewManager; global URL buttons + Tag Reply policy enforced
 
 ### 13. NATIVE WHATSAPP MENTIONS — CENTRAL MENTION ENGINE ✅
-- `whatsapp/utils/mention-engine.ts`: `resolveMention` / `sanitizeMentionJids` (LID → real phone JID)
-- `syncMentionTokens()` structural invariant: EVERY `@<digits>` token in outgoing text must have its
-  phone JID in `mentionedJid`, otherwise WhatsApp renders the raw number instead of the contact name
-- PreviewDispatcher applies the token-sync guard on EVERY send (global safety net)
-- `.tag` / `.mtag` union in the user's own `contextInfo.mentionedJid` so a targeted `.tag @John`
-  always renders John as a native mention — never `@234xxxx…`
-- All moderation / anti-system / welcome / goodbye sends force mentions through the pipeline
+- `mention-engine.ts`: `resolveMention` / `sanitizeMentionJids` (LID → real phone JID)
+- `syncMentionTokens()`: every `@<digits>` token in outgoing text must have its phone JID in `mentionedJid`
+- PreviewDispatcher enforces the token↔JID invariant on EVERY send; `.tag`/`.mtag` union the user's
+  own `contextInfo.mentionedJid` so targeted mentions always render natively
 
 ### 14. MESSAGE RENDERER & MENU SYSTEM REDESIGN ✅
-- **Ping**: ONE response only — latency measured via ⚡ reaction round-trip, no fake "MEASURING…" bubble
-- **Userinfo/GetInfo**: single message — profile image + caption (or text-only); never split into two messages
-- **Menu = Navigation Hub** (`menu-registry.ts`): compact hub (no giant ASCII borders), one category per
-  tap, categories derived from MENU_CATALOG + ALL_COMMANDS so new commands appear automatically
-- **Button-driven navigation**: native `nativeFlow` `quick_reply` buttons (verified against
-  @crysnovax/baileys 2.7.0 `prepareNativeFlowButtons` — pre-formatted `{name, buttonParamsJson}`
-  buttons pass through verbatim). Presses arrive as `interactiveResponseMessage.nativeFlowResponseMessage`
-  and are routed before command parsing via `extractMenuNav()` / `handleMenuNav()`
-- **Paginated Help**: `.help` renders `Help 1/N`, 5–7 commands per page with usage + permissions +
-  💎 premium flag; `.help <command>` shows a single-command detail card; Prev / Next / Home native buttons
-- Category pages and help pages both carry native Prev/Next/Home quick_reply buttons
+- **Ping**: ONE response only (latency via ⚡ reaction round-trip, no fake loading bubble)
+- **Userinfo/GetInfo**: single image+caption message (or text-only); never two messages
+- **Menu** = compact navigation hub; **.help** = paginated pages (5–7 commands) with Prev/Next/Home
+
+### 15. NATIVE BAILEYS TABLES & CENTRAL INTERACTION ROUTER ✅
+Verified against the installed @crysnovax/baileys 2.7.0 fork source (generateWAMessageContent,
+prepareNativeFlowButtons, rich-message-utils.js, messages-recv/send.js) with runtime smoke tests
+using the fork's own serializer.
+
+- **Native TABLE (richResponseMessage)** ✅ — `.ping` now sends the fork's `GenATableUXPrimitive`
+  (`botForwardedMessage` → `richResponseMessage`, submessage type TABLE, unifiedResponse.data).
+  Self-heals to the compact card if a client rejects the GenAI payload.
+- **Fork capability note (listMessage)** — the fork's `sections` → `listMessage` branch is
+  UNREACHABLE: any non-media payload falls into the catch-all `prepareWAMessageMedia()` and throws
+  "Invalid media type". So listMessage is not serializable in this fork; the native interactive list
+  is instead delivered as a **`single_select` native-flow button** (bottom sheet with rows) — the
+  supported native interactive "table", verified through `prepareNativeFlowButtons`.
+- **Category pages** now carry a native `single_select` command sheet (6 commands/page with usage +
+  permissions; rows → `cmd:<t>:<navId>:<cmd>` help cards, `run:ping` executes ping) plus visible
+  Prev/Next/Home quick_replies.
+- **Central Interaction Router** (`whatsapp/interaction-router.ts`) — the single chokepoint for
+  EVERY interactive reply:
+  - `parseInteraction()` covers `interactiveResponseMessage.nativeFlowResponseMessage.paramsJson`
+    (single- AND double-encoded), `listResponseMessage.singleSelectReply`, `buttonsResponseMessage`,
+    `templateButtonReplyMessage`, with deep unwrap of every future-proof wrapper the fork's
+    `normalizeMessageContent()` knows.
+  - `routeInteraction()` dispatches `menu:*` navigation, `cmd:*` help cards, `run:ping`.
+- **Root cause of dead buttons fixed** — interactive replies DO arrive via `messages.upsert`
+  (no receive-side filtering in the fork); the old inline parser was narrow and sat behind
+  sleep-mode + anti-checks. The router now runs in `handleMessages()` BEFORE anti-checks so no
+  module can swallow a navigation tap.
+- New types in baileys-types.ts: `selectedDisplayText` on buttons/list responses,
+  `templateButtonReplyMessage`.
 
 ## Remaining Work
-1. Live-field verification of the native-flow menu buttons on a real WhatsApp session
-   (hub tap → category page → prev/next/home taps) and `.help <n>` pages
-2. Verify the 4 pre-existing TS errors listed in replit.md are resolved (typecheck currently passes —
-   confirm replit.md note is stale)
+1. Live-field verification on a real WhatsApp session: menu hub buttons → category sheets →
+   command help cards → Prev/Next/Home; `.ping` native table rendering across Android/Web/iOS.
+2. If a client fails to render the GenAI table, confirm the compact-card fallback fires (it is
+   wired in PreviewDispatcher).

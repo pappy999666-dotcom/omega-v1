@@ -42,18 +42,14 @@ import type { SessionMeta } from '../types/index.js';
 import { pendingGcCodes } from '../telegram/bot.js';
 import { ALL_COMMANDS } from './command-parser.js';
 import {
-  buildMenuSections,
-  buildGroupMenuSections,
   MENU_CATALOG,
   renderNavHub,
   navHubButtons,
-  renderNavCategoryPage,
-  categoryPageButtons,
   helpPageText,
   helpPageButtons,
-  navFor,
-  navCategoryById,
 } from './menu-registry.js';
+import { parseInteraction, routeInteraction } from './interaction-router.js';
+import { pingTableData } from './utils/native-rich.js';
 import { addIdea } from '../services/ideas.js';
 // ── Anti System ───────────────────────────────────────────
 import { runAntiChecks, handleParticipantUpdate } from './anti-system/index.js';
@@ -156,48 +152,6 @@ export function isAuthorizedCommandSender(
   if (fromMe) return true;
   const sender = normalizeWhatsAppNumber(senderJid);
   return Boolean(sender && sudoNumbers.some((number) => normalizeWhatsAppNumber(number) === sender));
-}
-
-/**
- * Pull a `menu:*` navigation id out of a native-flow or legacy button
- * response message. Native-flow presses arrive as
- * interactiveResponseMessage.nativeFlowResponseMessage.paramsJson
- * (verified in @crysnovax/baileys 2.7.0); legacy buttons use
- * buttonsResponseMessage.selectedButtonId.
- */
-function extractMenuNav(message: IMessage | null | undefined): string | null {
-  if (!message) return null;
-  const m = message as unknown as Record<string, unknown>;
-  const inner =
-    (m.ephemeralMessage as any)?.message
-    ?? (m.viewOnceMessage as any)?.message
-    ?? (m.viewOnceMessageV2 as any)?.message
-    ?? (m.documentWithCaptionMessage as any)?.message
-    ?? m;
-  const inter = (inner as any)?.interactiveResponseMessage;
-  if (inter?.nativeFlowResponseMessage?.paramsJson) {
-    try {
-      const parsed = JSON.parse(String(inter.nativeFlowResponseMessage.paramsJson));
-      const id = typeof parsed?.id === 'string' ? parsed.id : null;
-      if (id && id.startsWith('menu:')) return id;
-      // Some clients only echo display_text — match the hub label.
-      if (typeof parsed?.display_text === 'string') {
-        const cleaned = String(parsed.display_text)
-          .replace(/^[^\p{L}\p{N}]+/u, '')
-          .trim()
-          .toLowerCase();
-        for (const target of ['main', 'group'] as const) {
-          const nav = navFor(target).find((n) => n.label.toLowerCase() === cleaned);
-          if (nav) return `menu:cat:${target === 'group' ? 'g' : 'm'}:${nav.id}`;
-        }
-      }
-    } catch {
-      // malformed paramsJson — ignore
-    }
-  }
-  const legacy = (inner as any)?.buttonsResponseMessage?.selectedButtonId;
-  if (typeof legacy === 'string' && legacy.startsWith('menu:')) return legacy;
-  return null;
 }
 
 function extractMessageText(message: IMessage | null | undefined): string {
@@ -628,6 +582,26 @@ async function handleMessages(
       }
     }
 
+    // ── Central Interaction Router ──────────────────────────
+    // Every interactive reply (button presses, native-list row selections)
+    // is routed BEFORE anti-checks so no module can swallow a navigation
+    // tap. Handled replies are consumed (continue).
+    const interaction = parseInteraction(msg.message);
+    if (interaction) {
+      const handled = await routeInteraction({
+        socket,
+        sessionId,
+        telegramId,
+        msg,
+        interaction,
+        frozen: isFrozen(sessionId),
+      }).catch((err) => {
+        logger.warn('[Interaction] routing failed', { err: String(err) });
+        return false;
+      });
+      if (handled) continue;
+    }
+
     // ── Anti System: run BEFORE command dispatch ──────────────
     // Non-throwing; errors in anti modules are isolated internally.
     try {
@@ -719,71 +693,8 @@ async function processMessageWithConfig(
   // User sleep mode disables WhatsApp commands without affecting passive collection.
   if (config.sleeping && !replyOverride) return;
 
-  // ── Native-flow menu navigation (button presses) ──────────
-  // The menu is now a button-driven hub: taps arrive as interactive
-  // responses (menu:<target>:<page> ids) with NO text payload, so they are
-  // routed here before command parsing. Rendering only ever shows ONE
-  // category per message — never the whole registry.
-  const handleMenuNav = async (pageId: string): Promise<void> => {
-    const parts = pageId.split(':');
-    if (parts[0] !== 'menu') return;
-    const target: 'main' | 'group' = parts[2] === 'g' ? 'group' : 'main';
-    const known = ALL_COMMANDS;
-
-    let body = '';
-    let buttons: { name: string; buttonParamsJson: string }[] = [];
-
-    if (parts[1] === 'home') {
-      body = renderNavHub(config.prefix, target, known);
-      buttons = navHubButtons(target);
-    } else if (parts[1] === 'cat') {
-      const navId = parts[3];
-      const page = Number(parts[4]) || 1;
-      const res = renderNavCategoryPage(config.prefix, navId, page, target, known);
-      if (!res.totalPages) {
-        // Unknown category — fall back to the hub.
-        body = renderNavHub(config.prefix, target, known);
-        buttons = navHubButtons(target);
-      } else {
-        body = res.text;
-        buttons = categoryPageButtons(target, navId, page, res.totalPages);
-      }
-    } else if (parts[1] === 'help') {
-      const page = Number(parts[3]) || 1;
-      const res = helpPageText(config.prefix, page, target, known);
-      body = res.text;
-      buttons = helpPageButtons(target, page, res.totalPages);
-    } else {
-      return;
-    }
-
-    const meta = loadSessionMeta(telegramId, sessionId);
-    const media = meta?.menuMedia;
-    const options: any = {
-      quoted: msg,
-      sessionId,
-      telegramId,
-      enableButtons: true, // Preserve global URL buttons on every menu page
-    };
-    if (buttons.length > 0) options.extra = { buttons };
-    if (media?.filePath && fs.existsSync(media.filePath)) {
-      options.media = {
-        buffer: fs.readFileSync(media.filePath),
-        type: media.type,
-        mimetype: media.mimeType,
-        caption: body,
-      };
-    }
-    await PreviewManager.send(socket as any, groupJid, body, options);
-  };
-
-  const menuNavId = extractMenuNav(msg.message);
-  if (menuNavId) {
-    await handleMenuNav(menuNavId).catch((err) =>
-      logger.warn('[Menu] navigation failed', { err: String(err), pageId: menuNavId })
-    );
-    return;
-  }
+  // Interactive replies (button presses / list row selections) were already
+  // routed by the Central Interaction Router in handleMessages().
 
   // Parse command. Unknown text and unbound stickers are always ignored.
   let parsed = text ? parseCommand(text, config) : null;
@@ -1105,15 +1016,30 @@ async function processMessageWithConfig(
       const m = Math.floor((uptime % 3600) / 60);
       const s_uptime = Math.floor(uptime % 60);
 
-      await PreviewManager.send(socket as any, groupJid, pingCard({
+      const status = isFrozen(sessionId) ? 'FROZEN' : 'ONLINE';
+      const runtime = `${h}h ${m}m ${s_uptime}s`;
+      const ram = `${(process.memoryUsage().rss / 1024 / 1024).toFixed(2)} MB`;
+      // Native rich-response table (GenATableUXPrimitive) — the fork's native
+      // table component. Falls back to the compact card if the client rejects
+      // the GenAI payload, so ping ALWAYS produces exactly one response.
+      const card = pingCard({
         latency: latencyMs,
         sessionId,
-        status: isFrozen(sessionId) ? 'FROZEN' : 'ONLINE',
-        runtime: `${h}h ${m}m ${s_uptime}s`,
-        ram: `${(process.memoryUsage().rss / 1024 / 1024).toFixed(2)} MB`,
+        status,
+        runtime,
+        ram,
         platform: process.platform,
         version: '1.0.0',
-      }), {
+      });
+      await PreviewManager.send(socket as any, groupJid, card, {
+        nativeTable: pingTableData(sessionId, status, {
+          latencyMs,
+          runtime,
+          ram,
+          platform: process.platform,
+          version: '1.0.0',
+        }),
+        tableFallbackText: card,
         quoted: msg,
         sessionId,
         telegramId,
@@ -1154,7 +1080,7 @@ async function processMessageWithConfig(
           helpPageButtons(menuTarget, page, res.totalPages)
         );
       } else {
-        // Navigation hub — one button per category, never the full registry.
+        // Navigation hub — one native quick_reply button per category.
         await sendMenuResponse(
           'NAVIGATION',
           renderNavHub(config.prefix, menuTarget, known),

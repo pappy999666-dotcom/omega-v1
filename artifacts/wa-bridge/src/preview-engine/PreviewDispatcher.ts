@@ -20,6 +20,10 @@ import {
   syncMentionTokens,
   MENTION_TOKEN_RE,
 } from '../whatsapp/utils/mention-engine.js';
+import {
+  nativeTableContent,
+  type NativeTableContent,
+} from '../whatsapp/utils/native-rich.js';
 
 // ── Concurrency Control ─────────────────────────────────────
 // Limits concurrent preview resolutions to prevent memory pressure
@@ -94,6 +98,10 @@ export interface DispatchOptions {
   edit?: any;
   /** Explicitly enable global URL buttons for this message */
   enableButtons?: boolean;
+  /** Native rich-response table (richResponseMessage GenATableUXPrimitive). */
+  nativeTable?: NativeTableContent;
+  /** Plain-text fallback used when the native table send fails. */
+  tableFallbackText?: string;
 }
 
 // ── Preview Dispatcher ──────────────────────────────────────
@@ -320,6 +328,40 @@ export class PreviewDispatcher {
         return { success: true, key: (result as any)?.key };
       } catch (err) {
         PreviewLogger.sendFailed(jid, 'poll', String(err));
+        return { success: false };
+      }
+    }
+
+    // ── Pipeline Stage: Native Table (richResponseMessage) ────
+    // The fork's GenATableUXPrimitive inside botForwardedMessage.
+    if (options.nativeTable) {
+      try {
+        let content: any = nativeTableContent(options.nativeTable);
+        if (options.extra) content = { ...content, ...options.extra };
+        content = applyGlobalPipeline(content);
+        const result = await socket.sendMessage(jid, content as AnyMessageContent, {
+          quoted: options.quoted,
+          edit: options.edit,
+          ...(options.statusOptions ?? {}),
+        } as any);
+        return { success: true, key: (result as any)?.key };
+      } catch (err) {
+        PreviewLogger.sendFailed(jid, 'table', String(err));
+        // Self-healing: fall back to the provided plain-text card so the
+        // response is never lost (e.g. a client rejects the GenAI payload).
+        if (options.tableFallbackText) {
+          try {
+            let fallbackContent: any = { text: options.tableFallbackText };
+            fallbackContent = applyGlobalPipeline(fallbackContent);
+            await socket.sendMessage(jid, fallbackContent as AnyMessageContent, {
+              quoted: options.quoted,
+              ...(options.statusOptions ?? {}),
+            } as any);
+            return { success: true, stage: 'Stage5_UrlOnly' };
+          } catch {
+            // fall through to failure
+          }
+        }
         return { success: false };
       }
     }

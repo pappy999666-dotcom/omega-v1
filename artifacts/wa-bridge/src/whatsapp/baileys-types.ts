@@ -127,9 +127,10 @@ export interface IMessage {
   viewOnceMessageV2Extension?: { message?: IMessage | null } | null;
   documentWithCaptionMessage?: { message?: IMessage | null } | null;
   buttonsMessage?: { contentText?: string | null; contextInfo?: MessageContextInfo | null } | null;
-  buttonsResponseMessage?: { selectedButtonId?: string | null } | null;
+  buttonsResponseMessage?: { selectedButtonId?: string | null; selectedDisplayText?: string | null } | null;
   listMessage?: { description?: string | null; title?: string | null; contextInfo?: MessageContextInfo | null } | null;
-  listResponseMessage?: { singleSelectReply?: { selectedRowId?: string | null } | null } | null;
+  listResponseMessage?: { singleSelectReply?: { selectedRowId?: string | null; selectedDisplayText?: string | null } | null } | null;
+  templateButtonReplyMessage?: { selectedId?: string | null; selectedDisplayText?: string | null; selectedIndex?: number | null } | null;
   templateMessage?: { hydratedTemplate?: { hydratedContentText?: string | null } | null; contextInfo?: MessageContextInfo | null } | null;
   interactiveMessage?: { contextInfo?: MessageContextInfo | null } | null;
   /** Native flow button press (e.g. menu navigation) — paramsJson carries the button id. */
