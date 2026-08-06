@@ -44,14 +44,23 @@ export const WORKSPACE_ROOT: string = (() => {
  */
 export function migrateLegacyWorkspaces(): void {
   try {
-    const legacy = path.resolve(__dirname, '../../workspaces');
-    if (legacy === WORKSPACE_ROOT) return;
-    if (!fs.existsSync(legacy)) return;
-    const entries = fs.readdirSync(legacy).filter((f) => f !== '.gitkeep');
-    if (entries.length === 0) return;
+    // The OLD default resolved relative to the module location, which differs
+    // between dev (src/services → wa-bridge/workspaces) and the bundled build
+    // (dist → artifacts/workspaces — the git-tracked path that caused the
+    // session-wipe bug). Scan BOTH candidate legacy roots.
+    const candidates = [
+      path.resolve(__dirname, '../../../workspaces'), // bundled build: artifacts/workspaces
+      path.resolve(__dirname, '../../workspaces'), // dev/tsx: wa-bridge/workspaces
+    ];
+    const legacy = candidates.find((c) => {
+      if (c === WORKSPACE_ROOT || !fs.existsSync(c)) return false;
+      return fs.readdirSync(c).filter((f) => f !== '.gitkeep').length > 0;
+    });
+    if (!legacy) return;
     if (fs.existsSync(WORKSPACE_ROOT) && fs.readdirSync(WORKSPACE_ROOT).length > 0) return;
     fs.mkdirSync(WORKSPACE_ROOT, { recursive: true });
-    for (const entry of entries) {
+    for (const entry of fs.readdirSync(legacy)) {
+      if (entry === '.gitkeep') continue;
       fs.cpSync(path.join(legacy, entry), path.join(WORKSPACE_ROOT, entry), { recursive: true });
     }
     logger.warn(

@@ -171,6 +171,8 @@ export function getContextInfoAny(
     m.viewOnceMessageV2?.message ??
     m.viewOnceMessageV2Extension?.message ??
     m.documentWithCaptionMessage?.message ??
+    m.groupStatusMessage?.message ??
+    m.groupStatusMessageV2?.message ??
     m;
   const ci =
     inner?.extendedTextMessage?.contextInfo ??
