@@ -328,16 +328,20 @@ async function executePunishment(ctx: PunishmentContext): Promise<void> {
 
   // ── Central Mention Engine ────────────────────────────────
   // Resolve the actor + targets to REAL phone identities so the security
-  // card never leaks LID digits and the notify mention is a native mention
-  // (real @<phone> token + matching phone JID in mentionedJid).
+  // card never leaks LID digits and EVERY @<phone> token in the card has a
+  // matching real phone JID in the mentions array — the structural
+  // precondition for native WhatsApp mentions (text ⇄ mentionedJid sync).
   const actorMention = await resolveMention(socket, { jid: actorJid }).catch(() => null);
   const cardActorNumber = actorMention?.number || '';
-  const notifyJid = actorMention?.jid || '';
+  const notifyJids: string[] = [];
+  if (actorMention?.jid) notifyJids.push(actorMention.jid);
   const targetNumbers: string[] = [];
   for (const j of targetJids) {
     const m = await resolveMention(socket, { jid: j }).catch(() => null);
     targetNumbers.push(m?.number || '');
+    if (m?.jid && !notifyJids.includes(m.jid)) notifyJids.push(m.jid);
   }
+  const notifyJid = notifyJids[0] ?? '';
 
   const executedActions: SecurityAction[] = [];
   const ops: Promise<unknown>[] = [];
@@ -385,7 +389,7 @@ async function executePunishment(ctx: PunishmentContext): Promise<void> {
     : card;
   ops.push(
     PreviewManager.send(socket as any, groupJid, cardText, {
-      ...(notifyJid ? { extra: { mentions: [notifyJid] } } : {}),
+      ...(notifyJids.length > 0 ? { extra: { mentions: notifyJids } } : {}),
       forceMentions: true,
       sessionId, telegramId,
     }).catch((err) => {
