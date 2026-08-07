@@ -323,6 +323,48 @@ Validation: `pnpm typecheck` clean; new `tests/global-settings.test.ts` 3/3
 stripped-wrapper + nested-wrapper cases; full suite 89/91 (2 pre-existing env
 failures).
 
+### 21. OMEGA NAVIGATION MENU · PSTATUS RECIPIENT GUARANTEE · STICKER MACRO HARDENING ✅
+
+**OMEGA NAVIGATION hub (requested menu layout)** — `renderNavHub()` rewritten to the exact
+requested design: `𝗢 𝗠 𝗘 𝗚 𝗔 𝄜 𝗡 𝗔 𝗩 𝗜 𝗚 𝗔 𝗧 𝗜 𝗢 𝗡` header, `Status: … • Prefix: …`
+line, then one `✦` row per category with a LIVE command count `[N]` + tagline, the Pair
+row with its own instruction line, and the `· · ───── · ·` divider, rotating 💎 premium
+tip and `· · ——— 𝕻𝕬𝕻𝕻𝖞 ×͜× ——— · ·` brand footer.
+- `MAIN_NAV` restructured to the requested order: Pair → Group [34] → Promotion [4] →
+  **Anti-System** (new top-level main category, [62]) → Info → Utilities → Status →
+  System → Settings → Help. Every command stays reachable; Settings has its own button
+  (setprefix, sudo, mode, media, stickers…).
+- New `NavCategory.showAll` flag lets Group/Promotion/Anti-System categories (group-
+targeted commands) show real counts and pages when opened from the MAIN hub — previously
+they would have rendered empty ([0]). Counts/pages are computed live from the registry.
+- The hub feeds both `.menu`/`.gmenu` and the Home button in the interaction router, so
+  the new design applies everywhere automatically.
+
+**pstatus recipient guarantee** — the fork's status branch throws
+"statusJidList must contain at least one recipient JID" when the resolved list is empty
+(fresh account, zero tracked contacts, socket.user not yet set). `cmdPStatus` now:
+- builds the list via `resolveStatusJidList`, falling back to the session's own JID
+  (`getSelfJid`) whenever it is empty;
+- refuses to post (clean error card) only when NO recipient can be resolved at all;
+- retries the send with `[selfJid]` when the fork still rejects the list — never swallows
+  real send failures.
+
+**Sticker macro hardening** — the content-hash fallback now runs whenever the fast path
+(`fileSha256`) misses, instead of only when `fileSha256` is absent. A binding created
+from a downloaded buffer (quoted sticker without fileSha256) now matches an incoming
+sticker that does carry a fileSha256 and vice versa. Combined with the pending
+`command-parser.ts` null-prefix fix (sticker macros now fire on empty-prefix sessions),
+`.setcmd <cmd>` → send sticker → command executes reliably.
+
+**Global Sudo vs Omni** — verified semantics: Global Sudo is a per-Telegram-user account
+setting (lives in their settings hub) that auto-applies to every session they pair;
+Omni Owner is the highest permission layer, also per-user, checked live on every command.
+Both stay off the WhatsApp command surface; `.sudo`/`.info` never leak them.
+
+Validation: `pnpm typecheck` clean; full suite 89/91 (2 pre-existing workspace-migration
+env failures). Menu hub render smoke-tested (Group [34] · Promotion [4] · Anti-System
+[62] · Info [8] · Utilities [3] …).
+
 ## Remaining Work
 1. Live-field verification on a real WhatsApp session: menu hub buttons → category sheets →
    command help cards → Prev/Next/Home; `.ping` native table rendering across Android/Web/iOS.
@@ -330,3 +372,5 @@ failures).
    wired in PreviewDispatcher).
 3. After the next deploy, confirm `pnpm install` resolves `@crysnovax/baileys@2.7.1` and the
    update-bot summary shows the correct files-changed count.
+4. If Omni Owner should be bot-wide (across ALL Telegram users) rather than per-user, promote
+   `omniOwnerNumbers` to the platform config — currently scoped per Telegram user.

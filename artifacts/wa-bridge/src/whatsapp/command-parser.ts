@@ -102,8 +102,13 @@ export function parseStickerCommand(
 
   if (!macroCmd) return null;
 
-  const parsed = parseCommand(`${config.prefix}${macroCmd}`, {
+  // The stored binding has NO prefix (e.g. "tag"). Use the session prefix, but
+  // fall back to '.' when the session has an empty/null prefix so sticker
+  // macros still fire on null-prefix sessions (matches setcmd validation).
+  const pfx = config.prefix && config.prefix.trim() ? config.prefix : '.';
+  const parsed = parseCommand(`${pfx}${macroCmd}`, {
     ...config,
+    prefix: pfx,
     nullPrefix: false, // Force prefix for sticker macros
   });
 

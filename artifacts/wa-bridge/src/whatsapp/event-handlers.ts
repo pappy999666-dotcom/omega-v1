@@ -878,7 +878,11 @@ async function processMessageWithConfig(
     if (stickerMsg.fileSha256) {
       parsed = parseStickerCommand(stickerMsg.fileSha256 as unknown as Buffer, config);
     }
-    if (!parsed && stickerMsg && !stickerMsg.fileSha256) {
+    // Content-hash fallback runs whenever the fast path misses — a binding
+    // created from a downloaded buffer (quoted sticker without fileSha256)
+    // must still match an incoming sticker that DOES carry a fileSha256, and
+    // vice versa. No sticker is ever executed twice: parsed is only set once.
+    if (!parsed && stickerMsg) {
       try {
         const baileys = await import('@crysnovax/baileys') as Record<string, any>;
         const fn = baileys.downloadMediaMessage as ((m: unknown, t: string, o: unknown) => Promise<Buffer>) | undefined;

@@ -684,10 +684,32 @@ export async function cmdPStatus(
     content = { text };
   }
 
+  // The fork's sendMessage status branch REQUIRES a non-empty statusJidList
+  // (normalizeStatusJidList throws "statusJidList must contain at least one
+  // recipient JID" otherwise). Resolve it, and guarantee at least the
+  // session's own JID so posting NEVER fails on an empty list.
+  let statusJidList = resolveStatusJidList(socket, sessionId);
+  if (statusJidList.length === 0) {
+    const self = getSelfJid(socket, telegramId, sessionId);
+    if (self) statusJidList = [self];
+  }
+  if (statusJidList.length === 0) {
+    return errorCard('PERSONAL STATUS', 'Cannot resolve any recipient for the status. Reconnect the session and try again.');
+  }
+
   try {
-    const res = await socket.sendMessage('status@broadcast', content as any, {
-      statusJidList: resolveStatusJidList(socket, sessionId),
-    } as any);
+    let res: unknown;
+    try {
+      res = await socket.sendMessage('status@broadcast', content as any, { statusJidList } as any);
+    } catch (err) {
+      // Retry with ONLY the session's own JID if the fork still rejects the
+      // list (fresh account with zero tracked contacts). Never swallow real
+      // send failures.
+      if (!String(err).includes('statusJidList')) throw err;
+      const self = getSelfJid(socket, telegramId, sessionId);
+      if (!self) throw err;
+      res = await socket.sendMessage('status@broadcast', content as any, { statusJidList: [self] } as any);
+    }
     const keyId = (res as unknown as { key?: { id?: string } })?.key?.id;
     if (keyId) {
       trackStatus(

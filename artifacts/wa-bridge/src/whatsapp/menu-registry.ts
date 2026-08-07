@@ -481,6 +481,12 @@ export interface NavCategory {
   commands: string[];
   /** Absorb registered-but-uncatalogued commands. */
   fallback?: boolean;
+  /**
+   * Show commands regardless of the menu target. The main-menu hub exposes
+   * Group / Promotion / Anti-System (which are group-targeted) so the hub
+   * counts and the category pages never render empty.
+   */
+  showAll?: boolean;
 }
 
 const GROUP_MODERATION_COMMANDS = [
@@ -510,15 +516,16 @@ const ANTI_COMMANDS = [
 ];
 
 export const MAIN_NAV: NavCategory[] = [
-  { id: 'help', label: 'Help', emoji: '📖', desc: 'Navigation & command index', commands: ['menu', 'help', 'gmenu'] },
-  { id: 'group', label: 'Group', emoji: '⚔️', desc: 'Kick, ban, warn, polls & events', commands: GROUP_MODERATION_COMMANDS },
-  { id: 'promo', label: 'Promotion', emoji: '⬆️', desc: 'Admin promotion, demotion & guards', commands: ['promote', 'demote', 'antipromote', 'antidemote'] },
+  { id: 'pair', label: 'Pair', emoji: '🔗', desc: 'Link a new WhatsApp session', commands: ['pair'] },
+  { id: 'group', label: 'Group', emoji: '⚔️', desc: 'Kick, ban, warn, polls & events', commands: GROUP_MODERATION_COMMANDS, showAll: true },
+  { id: 'promo', label: 'Promotion', emoji: '⬆️', desc: 'Admin promotion, demotion & guards', commands: ['promote', 'demote', 'antipromote', 'antidemote'], showAll: true },
+  { id: 'anti', label: 'Anti-System', emoji: '🛡️', desc: 'Link, spam, media & words', commands: ANTI_COMMANDS, showAll: true },
   { id: 'info', label: 'Info', emoji: 'ℹ️', desc: 'Ping, status, groups & users', commands: ['ping', 'info', 'groups', 'jid', 'userinfo', 'getinfo', 'sudo', 'idea'] },
-  { id: 'system', label: 'System', emoji: '🖥️', desc: 'Status engine, broadcast & sessions', commands: ['godcast', 'statusdesign', 'settheme', 'smedia', 'gstatus', 'tochat', 'togstatus', 'tochatx', 'togstatusx', 'sstatus', 'allstatus', 'allgstatus', 'allstatusx', 'allchat', 'stopspam', 'stop', 'spam', 'join', 'joinall', 'left', 'leave', 'leaveall', 'addlink', 'ls', 'curr', 'switch', 'sinfo', 'restart', 'disconnect', 'delete', 'rename', 'freeze', 'unfreeze'] },
-  { id: 'status', label: 'Status', emoji: '📲', desc: 'View once, anti-delete & status platform', commands: ['vv', 'vvdm', 'autovv', 'antidelete', 'pstatus', 'autosend', 'autodstatus', 'autostatusreact', 'sstatus'] },
-  { id: 'pair', label: 'Pair', emoji: '📱', desc: 'Link a new WhatsApp session', commands: ['pair'] },
-  { id: 'settings', label: 'Settings', emoji: '⚙️', desc: 'Prefix, sudo, media, mode & stickers', commands: ['setprefix', 'prefix', 'public', 'setmode', 'swresponse', 'settimezone', 'publicresponse', 'tagreply', 'setmenupic', 'setmenuvideo', 'delmenumedia', 'setsudo', 'delsudo', 'sudo', 'setpackname', 'setauthor', 'setcmd', 'delcmd', 'listcmd'] },
   { id: 'utils', label: 'Utilities', emoji: '🧰', desc: 'Tag, mtag, stickers & extras', commands: ['tag', 'mtag', 'sticker'], fallback: true },
+  { id: 'status', label: 'Status', emoji: '📲', desc: 'View once, anti-delete & status platform', commands: ['vv', 'vvdm', 'autovv', 'antidelete', 'pstatus', 'autosend', 'autodstatus', 'autostatusreact', 'sstatus'] },
+  { id: 'system', label: 'System', emoji: '🖥️', desc: 'Status engine, broadcast & sessions', commands: ['godcast', 'statusdesign', 'settheme', 'smedia', 'gstatus', 'tochat', 'togstatus', 'tochatx', 'togstatusx', 'sstatus', 'allstatus', 'allgstatus', 'allstatusx', 'allchat', 'stopspam', 'stop', 'spam', 'join', 'joinall', 'left', 'leave', 'leaveall', 'addlink', 'ls', 'curr', 'switch', 'sinfo', 'restart', 'disconnect', 'delete', 'rename', 'freeze', 'unfreeze'] },
+  { id: 'settings', label: 'Settings', emoji: '⚙️', desc: 'Prefix, sudo, media, mode & stickers', commands: ['setprefix', 'prefix', 'public', 'setmode', 'swresponse', 'settimezone', 'publicresponse', 'tagreply', 'setmenupic', 'setmenuvideo', 'delmenumedia', 'setsudo', 'delsudo', 'sudo', 'setpackname', 'setauthor', 'setcmd', 'delcmd', 'listcmd'] },
+  { id: 'help', label: 'Help', emoji: '📖', desc: 'Navigation & command index', commands: ['menu', 'help', 'gmenu'] },
 ];
 
 export const GROUP_NAV: NavCategory[] = [
@@ -565,7 +572,10 @@ export function navCommandLines(
   for (const cmdName of nav.commands) {
     const entry = MENU_CATALOG[cmdName];
     if (entry?.hidden) continue;
-    if (entry && !entryMatchesTarget(entry, menuTarget)) continue;
+    // showAll categories (Group / Promotion / Anti-System in the main hub)
+    // expose their commands regardless of the menu target, so the hub counts
+    // and category pages never render empty.
+    if (entry && !nav.showAll && !entryMatchesTarget(entry, menuTarget)) continue;
     if (!entry && !knownCommands.includes(cmdName)) continue;
     lines.push({
       name: cmdName,
@@ -621,33 +631,41 @@ export function formatInTimezone(
   }
 }
 
-/** Compact navigation-hub body (no giant borders, WhatsApp-mobile width). */
+/**
+ * OMEGA NAVIGATION hub — compact category dashboard, WhatsApp-mobile width.
+ * Header + Status/Prefix line, then one ✦ category row per nav entry with a
+ * live command count (computed from the registry) and the category tagline.
+ * Pair is special-cased to its own instruction line (no count). The footer
+ * carries the rotating premium tip + the PAPPY ×͜× brand line.
+ */
 export function renderNavHub(
   prefix: string,
   menuTarget: 'main' | 'group',
   knownCommands: readonly string[],
   opts: NavHubOptions = {}
 ): string {
-  const safePrefix = prefix && prefix.trim() ? prefix.trim() : '(none)';
+  const safePrefix = prefix && prefix.trim() ? prefix.trim() : 'None';
   const status = opts.status ?? 'ONLINE';
-  const response = opts.responseMode === 'table' ? '📊 TABLE' : '📝 TXT';
-  const tz = formatInTimezone(opts.timezone);
-  const who = opts.userName ? `▸ user: ${opts.userName}` : '';
   const lines: string[] = [
-    '⚜ OMEGA • NAVIGATION ⚜',
-    `▸ status: ${status} ▸ prefix: ${safePrefix}`,
-    `▸ response: ${response} ▸ tz: ${tz.timezone}`,
-    `▸ ${tz.date} • ${tz.time}`,//
-    ...(who ? [who] : []),
+    '𝗢 𝗠 𝗘 𝗚 𝗔 𝄜 𝗡 𝗔 𝗩 𝗜 𝗚 𝗔 𝗧 𝗜 𝗢 𝗡',
+    '',
+    `Status: ${status}  •  Prefix: ${safePrefix}`,
     '',
   ];
   for (const nav of navFor(menuTarget)) {
-    const count = navCommandLines(prefix, nav, menuTarget, knownCommands).length;
-    lines.push(`${nav.emoji} ${nav.label} — ${nav.desc} [${count}]`);
+    if (nav.id === 'pair') {
+      lines.push('✦ 🔗 Pair');
+      lines.push('Use any prefix then pair your number e.g 234XXXXXXXXXX');
+    } else {
+      const count = navCommandLines(prefix, nav, menuTarget, knownCommands).length;
+      lines.push(`✦ ${nav.emoji} ${nav.label} ── [${count}]`);
+      lines.push(nav.desc);
+    }
+    lines.push('');
   }
-  lines.push('');
-  lines.push('Tap a button below to open its section.');
-  lines.push(`╰─ ${getPremiumTip()}`);
+  lines.push('· · ────────────────────── · ·');
+  lines.push(getPremiumTip());
+  lines.push('· · ——— 𝕻𝕬𝕻𝕻𝖞 ×͜× ——— · ·');
   return lines.join('\n');
 }
 
