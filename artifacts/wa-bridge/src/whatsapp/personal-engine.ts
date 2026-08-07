@@ -165,12 +165,30 @@ export function getSelfJid(
 const VIEW_ONCE_KEYS = ['viewOnceMessage', 'viewOnceMessageV2', 'viewOnceMessageV2Extension'] as const;
 
 function unwrap(raw: unknown): { inner: any; viewOnce: boolean } {
-  const r = (raw ?? {}) as Record<string, any>;
-  const viewOnce = VIEW_ONCE_KEYS.some((k) => Boolean(r[k]));
-  const inner = viewOnce
-    ? (r.viewOnceMessage?.message ?? r.viewOnceMessageV2?.message ?? r.viewOnceMessageV2Extension?.message)
-    : r;
-  return { inner, viewOnce };
+  let r: any = (raw ?? {}) as Record<string, any>;
+  let viewOnce = false;
+  // Descend through every supported wrapper (view-once V1 / V2 / V2Extension
+  // + ephemeral) so nested or combined wrappers always resolve to the real
+  // content message.
+  for (let i = 0; i < 8; i++) {
+    if (!r || typeof r !== 'object') break;
+    const vo = VIEW_ONCE_KEYS.find((k) => Boolean(r[k]));
+    if (vo) {
+      viewOnce = true;
+      r = r[vo]?.message ?? r[vo];
+      continue;
+    }
+    if (r.ephemeralMessage?.message) {
+      r = r.ephemeralMessage.message;
+      continue;
+    }
+    break;
+  }
+  // Some clients strip the view-once wrapper inside quotedMessage but keep
+  // the media flagged viewOnce:true — treat that as view-once too.
+  const mediaNode = r?.imageMessage ?? r?.videoMessage ?? r?.audioMessage;
+  if (!viewOnce && mediaNode && mediaNode.viewOnce === true) viewOnce = true;
+  return { inner: r, viewOnce };
 }
 
 /**
@@ -414,15 +432,20 @@ const DELETED_CACHE_MAX = 500;
 export function cacheMessage(sessionId: string, msg: WebMessageInfo): void {
   const id = msg?.key?.id;
   if (!id) return;
+  // Skip messages that can never be resurrected: our own sends and status
+  // broadcasts. Keeps the cache small and the hot path O(1).
+  if (msg.key?.fromMe) return;
+  if (msg.key?.remoteJid === 'status@broadcast') return;
   let map = deletedCache.get(sessionId);
   if (!map) {
     map = new Map();
     deletedCache.set(sessionId, map);
   }
   map.set(id, { msg, ts: Date.now() });
+  // O(1) eviction: Map preserves insertion order, so the first key is oldest.
   if (map.size > DELETED_CACHE_MAX) {
-    const oldest = [...map.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
-    if (oldest) map.delete(oldest[0]);
+    const oldestKey = map.keys().next().value;
+    if (oldestKey !== undefined) map.delete(oldestKey);
   }
 }
 
@@ -497,12 +520,16 @@ export async function handleDeletedKey(
     : entry.ts;
 
   let chatName = chatJid.endsWith('@g.us') ? chatJid.split('@')[0] ?? chatJid : chatJid;
-  try {
-    const meta = await (socket as unknown as {
-      groupMetadata(jid: string): Promise<{ subject?: string }>;
-    }).groupMetadata(chatJid);
-    chatName = meta?.subject ?? chatName;
-  } catch { /* non-critical */ }
+  // Only fetch group metadata for actual groups — avoids a network round-trip
+  // on every DM recovery.
+  if (chatJid.endsWith('@g.us')) {
+    try {
+      const meta = await (socket as unknown as {
+        groupMetadata(jid: string): Promise<{ subject?: string }>;
+      }).groupMetadata(chatJid);
+      chatName = meta?.subject ?? chatName;
+    } catch { /* non-critical */ }
+  }
 
   const header = [
     '🕵️ DELETED MESSAGE RECOVERED',
@@ -637,6 +664,9 @@ export async function cmdPStatus(
   if (media) {
     if (media.type === 'sticker') {
       return errorCard('PERSONAL STATUS', "Sticker statuses aren't supported by WhatsApp Status. Post the image instead.");
+    }
+    if (media.type === 'document') {
+      return errorCard('PERSONAL STATUS', "Document statuses aren't supported by WhatsApp Status. Use an image, video or audio instead.");
     }
     const caption = text && !media.caption ? text : (media.caption ?? (text ?? ''));
     kind = media.type as MyStatusEntry['kind'];

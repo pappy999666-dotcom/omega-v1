@@ -279,6 +279,50 @@ Validation: `pnpm typecheck` clean; new tests/status-fixes.test.ts 7/7 (quoted
 key resolution, statusJidList fallback/tracking/dedupe, cmdPStatus option
 wiring, view-once quoted path); full suite 84/86 (2 pre-existing env failures).
 
+### 20. GLOBAL SETTINGS ON TELEGRAM · VIEW ONCE HARDENING · PSTATUS & ANTIDELETE PERF ✅
+
+**Global Sudo & Omni Owner → Telegram Settings (per Telegram user)** — both are
+now GLOBAL ACCOUNT settings, never WhatsApp commands:
+- Removed every Global Sudo command from WhatsApp (parser, menu catalog,
+  dispatch). Omni Owner was already Telegram-only.
+- Storage moved from the platform-wide `_platform/config.json` to each
+  Telegram USER's workspace config (`workspace.ts` functions now take
+  `telegramId`; `UserConfig` gained `globalSudoNumbers` / `omniOwnerNumbers`).
+- Restored the 👑 Global Sudo + 🛡 Omni Owner panels in the Telegram Settings
+  (admin) with per-user add/remove input flow.
+- New sessions inherit Global Sudo at load (merged in `loadSessionConfig`);
+  EXISTING sessions re-check the per-user list LIVE on every command (gate
+  includes `getGlobalSudoNumbers(telegramId)`), so updates synchronize without
+  a reload. Omni Owner is also checked live per user.
+- Session info never leaks them: `.sudo` filters global/omni numbers from the
+  visible list and the `.info` card's sudoCount excludes them.
+
+**View Once Engine hardening** — `.vv`/`.vvdm` false negatives fixed:
+- `unwrap()` now descends recursively through every wrapper
+  (viewOnceMessage V1 / V2 / V2Extension + ephemeralMessage) so nested or
+  combined wrappers always resolve to the content.
+- A quoted media whose view-once WRAPPER was stripped but whose media is
+  flagged `viewOnce:true` is now correctly detected (the reported
+  "Reply to a View Once image or video" false-negative).
+- `.pstatus` quote/direct media uses the same unwrap; unsupported status
+  types (sticker, document) get explicit error cards instead of silent
+  failure. Status posts always carry a non-empty `statusJidList` (central
+  resolver from the previous batch).
+
+**AntiDelete performance** — the bot-lag source was the cache eviction:
+`cacheMessage` sorted up to 500 entries (O(n log n)) synchronously on EVERY
+incoming message. Now:
+- O(1) eviction via Map insertion-order cursor (first key = oldest).
+- Skips bot-own messages and status broadcasts entirely (never recoverable).
+- `handleDeletedKey` only fetches group metadata for actual groups.
+- Revoke recovery remains async fire-and-forget (no event-loop blocking);
+  default mode is OFF until `.antidelete on|dm|link` is explicitly set.
+
+Validation: `pnpm typecheck` clean; new `tests/global-settings.test.ts` 3/3
+(per-user isolation, idempotence, omni scoping); view-once tests 9/9 incl.
+stripped-wrapper + nested-wrapper cases; full suite 89/91 (2 pre-existing env
+failures).
+
 ## Remaining Work
 1. Live-field verification on a real WhatsApp session: menu hub buttons → category sheets →
    command help cards → Prev/Next/Home; `.ping` native table rendering across Android/Web/iOS.

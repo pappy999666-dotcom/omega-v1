@@ -57,6 +57,7 @@ import {
   handleMasterBucket,
   handleOmniBridge,
   executeOmniCommand,
+  handleGlobalSudoPanel,
   handleOmniOwnerPanel,
   handlePermissionInput,
   handleGlobalPause,
@@ -1296,7 +1297,7 @@ export function createBot(): Telegraf<BotContext> {
       return;
     }
 
-    // ── Awaiting Permission Input (Omni Owner) ──
+    // ── Awaiting Permission Input (Global Sudo / Omni Owner) ──
     if (ctx.session?.awaitingPermissionInput) {
       const action = ctx.session.pendingPermissionAction ?? '';
       ctx.session.awaitingPermissionInput = false;
@@ -2983,6 +2984,16 @@ async function routeCallback(
       ).catch(() => {});
       return;
     }
+    if (sub === 'globalsudo' && (params[1] === 'add' || params[1] === 'rm')) {
+      ctx.session.awaitingPermissionInput = true;
+      ctx.session.pendingPermissionAction = `gs-${params[1]}`;
+      await ctx.editMessageText(
+        card('Global Sudo', 'G', [['Action', params[1] === 'add' ? 'Add number' : 'Remove number']], `Send the WhatsApp number to ${params[1] === 'add' ? 'grant' : 'revoke'} Global Sudo — applies to every session you pair.`),
+        { parse_mode: 'HTML', reply_markup: backKeyboard('admin:globalsudo') }
+      ).catch(() => {});
+      return;
+    }
+    if (sub === 'globalsudo') { await handleGlobalSudoPanel(ctx); return; }
     if (sub === 'omniowner' && (params[1] === 'add' || params[1] === 'rm')) {
       ctx.session.awaitingPermissionInput = true;
       ctx.session.pendingPermissionAction = `omni-${params[1]}`;

@@ -356,10 +356,6 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
   stopjoin: { section: '⚔ MODERATION', syntax: 'stopjoin [on|off]', desc: 'Disable automatic join approvals', target: 'group' },
   gmpermit: { section: '🛡 ANTI SYSTEM', syntax: 'gmpermit [user]', desc: 'Permit a user for group mentions', target: 'group' },
   rmgmpermit: { section: '🛡 ANTI SYSTEM', syntax: 'rmgmpermit [user]', desc: 'Revoke a group-mention permit', target: 'group' },
-  // ── Global Sudo (hidden — only the configuring admin sees it) ──
-  globalsudo: { section: '⚙ CONFIGURATION', syntax: 'globalsudo', desc: 'View Global Sudo (admin only)', target: 'main', hidden: true },
-  setglobalsudo: { section: '⚙ CONFIGURATION', syntax: 'setglobalsudo [num]', desc: 'Grant Global Sudo — applies to every session', target: 'main', hidden: true },
-  delglobalsudo: { section: '⚙ CONFIGURATION', syntax: 'delglobalsudo [num]', desc: 'Revoke Global Sudo', target: 'main', hidden: true },
 
   // ── Join Approval ─────────────────────────────────────────
   // Mirror of the Telegram per-group dashboard approval features,

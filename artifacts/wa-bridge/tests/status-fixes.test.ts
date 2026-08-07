@@ -112,6 +112,67 @@ test('cmdPStatus recovers quoted media via the quoted key (unreachable url → c
   assert.ok(out.includes('Could not download the replied media'), 'explicit unrecoverable-media error: ' + out);
 });
 
+test('cmdViewOnce detects a quote whose view-once WRAPPER was stripped (media flagged viewOnce)', async () => {
+  // Some clients deliver the quoted message WITHOUT the viewOnceMessage
+  // wrapper but keep the media flagged viewOnce:true — this is the reported
+  // "Reply to a View Once image or video" false-negative.
+  const socket: any = {
+    user: { id: '2348012345678:1@s.whatsapp.net' },
+    updateMediaMessage: async (m: any) => m,
+    sendMessage: async () => ({ key: { id: 'k' } }),
+  };
+  const msg: any = {
+    key: { id: 'cmd', remoteJid: '123@g.us', fromMe: true },
+    message: {
+      extendedTextMessage: {
+        text: '.vv',
+        contextInfo: {
+          stanzaId: 'orig-stripped-1',
+          participant: '2348012345678@s.whatsapp.net',
+          remoteJid: '123@g.us',
+          quotedMessage: { imageMessage: { url: 'http://127.0.0.1:1/z', mimetype: 'image/jpeg', viewOnce: true } },
+        },
+      },
+    },
+  };
+  const out = await cmdViewOnce(socket, 'sess-1', 'tg-1', '123@g.us', msg, false, '.');
+  assert.ok(!out.includes('Reply to a View Once image or video'), 'stripped view-once detected: ' + out);
+  assert.ok(out.includes('VIEW ONCE'), out);
+});
+
+test('cmdViewOnce detects nested view-once wrappers (V2Extension > V2 > content)', async () => {
+  const socket: any = {
+    user: { id: '2348012345678:1@s.whatsapp.net' },
+    updateMediaMessage: async (m: any) => m,
+    sendMessage: async () => ({ key: { id: 'k' } }),
+  };
+  const msg: any = {
+    key: { id: 'cmd', remoteJid: '123@g.us', fromMe: true },
+    message: {
+      extendedTextMessage: {
+        text: '.vv',
+        contextInfo: {
+          stanzaId: 'orig-nested-1',
+          participant: '2348012345678@s.whatsapp.net',
+          remoteJid: '123@g.us',
+          quotedMessage: {
+            viewOnceMessageV2Extension: {
+              message: {
+                viewOnceMessageV2: {
+                  message: { videoMessage: { url: 'http://127.0.0.1:1/v', mimetype: 'video/mp4', viewOnce: true } },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+  const out = await cmdViewOnce(socket, 'sess-1', 'tg-1', '123@g.us', msg, false, '.');
+  assert.ok(!out.includes('Reply to a View Once image or video'), 'nested view-once detected: ' + out);
+  assert.ok(out.includes('VIEW ONCE'), out);
+});
+
 test('cmdViewOnce reaches the quoted view-once path', async () => {
   const socket: any = {
     user: { id: '2348012345678:1@s.whatsapp.net' },

@@ -140,7 +140,6 @@ export const ALL_COMMANDS = [
   'stop', 'stopspam', 'spam',
   // Settings
   'setprefix', 'setcmd', 'delcmd', 'setmenupic', 'setmenuvideo', 'delmenumedia', 'setsudo', 'delsudo', 'sudo', 'prefix', 'public', 'setmode', 'publicresponse', 'tagreply',
-  'globalsudo', 'setglobalsudo', 'delglobalsudo',
   // Response Mode + Timezone
   'swresponse', 'settimezone',
   // Info

@@ -27,20 +27,44 @@ import { header, H, kv, bucketCard, noticeCard, escape, card } from '../../utils
 import { logger } from '../../utils/logger.js';
 import { runDeployment } from '../../services/deployment.js';
 
-// ── Platform Permissions: Omni Owner ─────────────────────
-// Omni Owner is the highest permission layer and is managed
-// EXCLUSIVELY from the Telegram admin panel.
-// Global Sudo is a USER-facing permission managed on WhatsApp
-// (.setglobalsudo / .delglobalsudo) — it is NOT an admin-panel
-// concept.
+// ── Global Settings: Global Sudo & Omni Owner (per Telegram user) ──
+// These are GLOBAL account settings stored per Telegram USER (not per
+// session, not platform-wide). Every WhatsApp session paired by this
+// Telegram account inherits them automatically and existing sessions pick
+// changes up live. They are NEVER exposed inside WhatsApp session info.
 
-export async function handleOmniOwnerPanel(ctx: Context): Promise<void> {
-  const { getOmniOwnerNumbers } = await import('../../services/workspace.js');
-  const numbers = getOmniOwnerNumbers();
+export async function handleGlobalSudoPanel(ctx: Context & { telegramId: string }): Promise<void> {
+  const { getGlobalSudoNumbers } = await import('../../services/workspace.js');
+  const numbers = getGlobalSudoNumbers(ctx.telegramId);
   const text = [
-    header('Omni Owner', '🛡'),
+    header('Global Sudo', 'G'),
+    '',
+    kv('Purpose:', 'Auto-sudo on every session'),
+    kv('Scope:', 'This Telegram account'),
+    kv('Count:', String(numbers.length)),
+    '',
+    ...(numbers.length > 0
+      ? numbers.map((n, i) => `${i + 1}. <code>${H.code(n)}</code>`)
+      : ['No Global Sudo numbers configured yet.']),
+    '',
+    noticeCard('Hint', 'Global Sudo applies to every session you pair and is hidden from normal session users.', 'success'),
+  ].join('\n');
+  const keyboard = permissionPanelKeyboard('globalsudo', numbers);
+  if (ctx.callbackQuery) {
+    await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard }).catch(() => {});
+  } else {
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+  }
+}
+
+export async function handleOmniOwnerPanel(ctx: Context & { telegramId: string }): Promise<void> {
+  const { getOmniOwnerNumbers } = await import('../../services/workspace.js');
+  const numbers = getOmniOwnerNumbers(ctx.telegramId);
+  const text = [
+    header('Omni Owner', 'O'),
     '',
     kv('Purpose:', 'Bypasses every permission check'),
+    kv('Scope:', 'This Telegram account'),
     kv('Count:', String(numbers.length)),
     '',
     ...(numbers.length > 0
@@ -67,23 +91,35 @@ export async function handlePermissionInput(
     await ctx.reply(noticeCard('Invalid Number', 'Send a valid WhatsApp number (digits only, with country code).', 'warning'), { parse_mode: 'HTML' });
     return;
   }
+  const isGlobalSudo = action.startsWith('gs-');
   const isAdd = action.endsWith('-add');
-  const { addOmniOwnerNumbers, removeOmniOwnerNumbers } = await import('../../services/workspace.js');
+  const {
+    addGlobalSudoNumbers,
+    removeGlobalSudoNumbers,
+    addOmniOwnerNumbers,
+    removeOmniOwnerNumbers,
+  } = await import('../../services/workspace.js');
   const next = isAdd
-    ? addOmniOwnerNumbers([number])
-    : removeOmniOwnerNumbers([number]);
+    ? (isGlobalSudo
+      ? addGlobalSudoNumbers(ctx.telegramId, [number])
+      : addOmniOwnerNumbers(ctx.telegramId, [number]))
+    : (isGlobalSudo
+      ? removeGlobalSudoNumbers(ctx.telegramId, [number])
+      : removeOmniOwnerNumbers(ctx.telegramId, [number]));
+  const label = isGlobalSudo ? 'Global Sudo' : 'Omni Owner';
   const text = [
     header(isAdd ? 'Granted' : 'Revoked', isAdd ? '+' : '-'),
     '',
-    kv('Layer:', 'Omni Owner'),
+    kv('Layer:', label),
     kv('Number:', H.code(number)),
     kv('Total:', String(next.length)),
     '',
-    noticeCard('Note', 'Omni Owner bypasses every permission check and is hidden from normal users.', 'success'),
+    noticeCard('Note', 'Applies to every session paired by this Telegram account; hidden from normal users.', 'success'),
   ].join('\n');
-  const keyboard = backKeyboard('admin:omniowner');
+  const keyboard = backKeyboard(isGlobalSudo ? 'admin:globalsudo' : 'admin:omniowner');
   await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
 }
+
 
 // ── Admin Panel ───────────────────────────────────────────
 

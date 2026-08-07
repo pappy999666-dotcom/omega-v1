@@ -11,6 +11,10 @@ export interface UserConfig {
   nullPrefix: boolean;          // Always-listen mode
   stickerMacros: Record<string, string>; // sticker hash → command
   sudoNumbers?: string[];           // normalized WhatsApp numbers allowed to run commands
+  /** Per-Telegram-user Global Sudo numbers — sudo on EVERY session this user pairs. */
+  globalSudoNumbers?: string[];
+  /** Per-Telegram-user Omni Owner numbers — highest permission layer for this user. */
+  omniOwnerNumbers?: string[];
   ownerWaNumbers?: string[];        // WA numbers classified as Session/Workspace Owner by security engine
   trustedAdminNumbers?: string[];   // WA numbers classified as Trusted Admin by security engine
   defaultLinkCollection?: boolean;

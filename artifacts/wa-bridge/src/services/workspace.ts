@@ -267,7 +267,7 @@ export function loadSessionConfig(telegramId: string, sessionId: string): UserCo
   // ── GLOBAL SUDO (platform layer) ─────────────────────────────
   // Global Sudo numbers are merged into EVERY session automatically, so a
   // newly paired session inherits them without any per-session setup.
-  const globalSudo = getGlobalSudoNumbers();
+  const globalSudo = getGlobalSudoNumbers(telegramId);
   const mergedSudo = [...new Set([...(base.sudoNumbers ?? []), ...(storedSudoNumbers(telegramId, sessionId, p)), ...globalSudo])];
 
   if (!fs.existsSync(p)) {
@@ -315,65 +315,69 @@ function storedSudoNumbers(
   }
 }
 
-// ── Global Sudo / Omni Owner (platform permission layers) ──
+// ── Global Sudo / Omni Owner (per-Telegram-user global settings) ──
+// Stored in the TELEGRAM USER's config (workspace config.json), NOT per
+// session and NOT platform-wide: each Telegram account owns its own lists.
+// Every newly paired WhatsApp session inherits them automatically (merged in
+// loadSessionConfig) and existing sessions re-check them live on each command.
 
-/** Platform-wide Global Sudo numbers — sudo on every session. */
-export function getGlobalSudoNumbers(): string[] {
-  return loadPlatformConfig().globalSudoNumbers ?? [];
+/** Per-user Global Sudo numbers — sudo on every session of this Telegram user. */
+export function getGlobalSudoNumbers(telegramId: string): string[] {
+  return loadConfig(telegramId).globalSudoNumbers ?? [];
 }
 
-/** Replace the platform-wide Global Sudo list. */
-export function setGlobalSudoNumbers(numbers: string[]): void {
-  updatePlatformConfig({ globalSudoNumbers: [...new Set(numbers)] });
+/** Replace the per-user Global Sudo list. */
+export function setGlobalSudoNumbers(telegramId: string, numbers: string[]): void {
+  updateConfig(telegramId, { globalSudoNumbers: [...new Set(numbers)] });
 }
 
-/** Add one or more numbers to the Global Sudo list (idempotent). */
-export function addGlobalSudoNumbers(numbers: string[]): string[] {
-  const next = [...new Set([...getGlobalSudoNumbers(), ...numbers])];
-  setGlobalSudoNumbers(next);
+/** Add numbers to the per-user Global Sudo list (idempotent). */
+export function addGlobalSudoNumbers(telegramId: string, numbers: string[]): string[] {
+  const next = [...new Set([...getGlobalSudoNumbers(telegramId), ...numbers])];
+  setGlobalSudoNumbers(telegramId, next);
   return next;
 }
 
-/** Remove numbers from the Global Sudo list. */
-export function removeGlobalSudoNumbers(numbers: string[]): string[] {
-  const set = new Set(getGlobalSudoNumbers());
+/** Remove numbers from the per-user Global Sudo list. */
+export function removeGlobalSudoNumbers(telegramId: string, numbers: string[]): string[] {
+  const set = new Set(getGlobalSudoNumbers(telegramId));
   for (const n of numbers) set.delete(n);
   const next = [...set];
-  setGlobalSudoNumbers(next);
+  setGlobalSudoNumbers(telegramId, next);
   return next;
 }
 
-/** Platform-wide Omni Owner numbers — highest permission layer. */
-export function getOmniOwnerNumbers(): string[] {
-  return loadPlatformConfig().omniOwnerNumbers ?? [];
+/** Per-user Omni Owner numbers — highest permission layer. */
+export function getOmniOwnerNumbers(telegramId: string): string[] {
+  return loadConfig(telegramId).omniOwnerNumbers ?? [];
 }
 
-/** Replace the platform-wide Omni Owner list. */
-export function setOmniOwnerNumbers(numbers: string[]): void {
-  updatePlatformConfig({ omniOwnerNumbers: [...new Set(numbers)] });
+/** Replace the per-user Omni Owner list. */
+export function setOmniOwnerNumbers(telegramId: string, numbers: string[]): void {
+  updateConfig(telegramId, { omniOwnerNumbers: [...new Set(numbers)] });
 }
 
-/** Add one or more Omni Owner numbers (idempotent). */
-export function addOmniOwnerNumbers(numbers: string[]): string[] {
-  const next = [...new Set([...getOmniOwnerNumbers(), ...numbers])];
-  setOmniOwnerNumbers(next);
+/** Add numbers to the per-user Omni Owner list (idempotent). */
+export function addOmniOwnerNumbers(telegramId: string, numbers: string[]): string[] {
+  const next = [...new Set([...getOmniOwnerNumbers(telegramId), ...numbers])];
+  setOmniOwnerNumbers(telegramId, next);
   return next;
 }
 
-/** Remove numbers from the Omni Owner list. */
-export function removeOmniOwnerNumbers(numbers: string[]): string[] {
-  const set = new Set(getOmniOwnerNumbers());
+/** Remove numbers from the per-user Omni Owner list. */
+export function removeOmniOwnerNumbers(telegramId: string, numbers: string[]): string[] {
+  const set = new Set(getOmniOwnerNumbers(telegramId));
   for (const n of numbers) set.delete(n);
   const next = [...set];
-  setOmniOwnerNumbers(next);
+  setOmniOwnerNumbers(telegramId, next);
   return next;
 }
 
-/** True when the given WhatsApp number is an Omni Owner. */
-export function isOmniOwnerNumber(number: string): boolean {
+/** True when the given WhatsApp number is an Omni Owner for this Telegram user. */
+export function isOmniOwnerNumber(telegramId: string, number: string): boolean {
   const clean = String(number).replace(/\D/g, '');
   if (!clean) return false;
-  return getOmniOwnerNumbers().some((n) => String(n).replace(/\D/g, '') === clean);
+  return getOmniOwnerNumbers(telegramId).some((n) => String(n).replace(/\D/g, '') === clean);
 }
 
 export function saveSessionConfig(telegramId: string, sessionId: string, config: UserConfig): void {

@@ -17,13 +17,7 @@ import {
   updateSessionMeta,
   saveSessionMeta,
   getGlobalSudoNumbers,
-  setGlobalSudoNumbers,
-  addGlobalSudoNumbers,
-  removeGlobalSudoNumbers,
   getOmniOwnerNumbers,
-  setOmniOwnerNumbers,
-  addOmniOwnerNumbers,
-  removeOmniOwnerNumbers,
   isOmniOwnerNumber,
 } from '../services/workspace.js';
 import { stopSpamLoop, isSpamLoopActive, cmdToChat, cmdToChatX, cmdSStatus, cmdGroupStatus } from './commands/status.js';
@@ -1138,10 +1132,17 @@ async function processMessageWithConfig(
   const sudoCheckJid = senderPhoneOverride ? `${senderPhoneOverride}@s.whatsapp.net` : senderJid;
   const senderNumber = normalizeWhatsAppNumber(sudoCheckJid);
   // Omni Owner bypasses EVERY permission layer automatically (highest tier).
-  const isOmniSender = isOmniOwnerNumber(senderNumber);
+  // Scoped per Telegram user (global account setting, never a session setting).
+  const isOmniSender = isOmniOwnerNumber(telegramId, senderNumber);
+  // Live Global Sudo check: per-user Global Sudo changes apply to EXISTING
+  // sessions immediately (new sessions merge the list at load time).
+  const isGlobalSudoSender = getGlobalSudoNumbers(telegramId).some(
+    (n) => String(n).replace(/\D/g, '') === senderNumber
+  );
   const isAuthorized = replyOverride
     || isAuthorizedCommandSender(isOwnerSender, sudoCheckJid, config.sudoNumbers)
-    || isOmniSender;
+    || isOmniSender
+    || isGlobalSudoSender;
 
   if (!isAuthorized) {
     // PRIVATE MODE: Only owners, sudo and authorized users may use commands.
@@ -1320,7 +1321,12 @@ async function processMessageWithConfig(
         prefix: config.prefix || 'null',
         nullMode: config.nullPrefix,
         spamLoop: isSpamLoopActive(sessionId),
-        sudoCount: (config.sudoNumbers ?? []).length,
+        sudoCount: (config.sudoNumbers ?? []).filter((n) => {
+          const clean = String(n).replace(/\D/g, '');
+          // Global Sudo / Omni Owner counts stay hidden from session info.
+          return !getGlobalSudoNumbers(telegramId).some((g) => String(g).replace(/\D/g, '') === clean)
+            && !getOmniOwnerNumbers(telegramId).some((o) => String(o).replace(/\D/g, '') === clean);
+        }).length,
       }));
       break;
     }
@@ -1682,8 +1688,8 @@ async function processMessageWithConfig(
     case 'sudo': {
       // Show session sudo only — Global Sudo and Omni Owner are hidden from
       // normal session users (visible only to the admin who configured them).
-      const global = getGlobalSudoNumbers();
-      const omni = getOmniOwnerNumbers();
+      const global = getGlobalSudoNumbers(telegramId);
+      const omni = getOmniOwnerNumbers(telegramId);
       const hidden = new Set([...global, ...omni].map((n) => n.replace(/\D/g, '')));
       const sudo = (config.sudoNumbers ?? []).filter((n) => !hidden.has(n.replace(/\D/g, '')));
       const isAdminView = isOmniSender || isOwnerSender;
@@ -1692,39 +1698,12 @@ async function processMessageWithConfig(
       break;
     }
 
-    // ── Global Sudo (platform layer — user-facing) ──
-    // Grants users sudo on EVERY session automatically. Managed here on
-    // WhatsApp by the session owner / Omni; hidden from normal session users.
-    case 'globalsudo': {
-      if (!isOwnerSender && !replyOverride && !isOmniSender) {
-        await reply(errorCard('RESTRICTED', 'Only the paired session owner can view Global Sudo.'));
-        break;
-      }
-      await reply(sudoListCard(getGlobalSudoNumbers()));
-      break;
-    }
-
-    case 'setglobalsudo':
-    case 'delglobalsudo': {
-      if (!isOwnerSender && !replyOverride && !isOmniSender) {
-        await reply(errorCard('RESTRICTED', 'Only the paired session owner can manage Global Sudo.'));
-        break;
-      }
-      const targets = resolveTargetNumbers(args, msg);
-      if (targets.length === 0) {
-        await reply(warningCard('NO TARGET FOUND', `Usage: ${config.prefix}${command} +2348012345678`));
-        break;
-      }
-      const next = command === 'setglobalsudo'
-        ? addGlobalSudoNumbers(targets)
-        : removeGlobalSudoNumbers(targets);
-      await reply(successCard(
-        command === 'setglobalsudo' ? 'GLOBAL SUDO GRANTED' : 'GLOBAL SUDO REVOKED',
-        'Applies to every session automatically.',
-        [['Total', String(next.length)], ['Numbers', next.slice(0, 5).join(', ') + (next.length > 5 ? '…' : '')]]
-      ));
-      break;
-    }
+    // ── Global Sudo & Omni Owner ──
+    // These are GLOBAL account settings and live ONLY in the Telegram
+    // Settings panel (stored per Telegram user, applied to every session
+    // they pair). They are intentionally NOT exposed as WhatsApp commands:
+    // a WhatsApp session only controls itself; the Telegram account owns
+    // the global layers. Never shown in public session information.
 
     case 'setsudo':
     case 'delsudo': {
