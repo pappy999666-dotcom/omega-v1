@@ -56,7 +56,7 @@ type ModuleKey =
   | 'antilink' | 'antibot' | 'antispam' | 'antipic' | 'antivid' | 'antiaud'
   | 'antivn' | 'antitxt' | 'antiemoji' | 'antisticker' | 'antigroupcall'
   | 'antinsfw' | 'antigroupmention' | 'antigm' | 'antiwords' | 'antipoll'
-  | 'antiforward' | 'antichannel';
+  | 'antiforward' | 'antichannel' | 'antigstatus';
 
 /** Check if sender is in a module's permit list */
 function isPermitted(moduleConfig: AntiModuleConfig, senderNumber: string): boolean {
@@ -198,6 +198,25 @@ export async function runAntiChecks(
 
   // Load group anti-config once
   const gc = loadGroupAntiConfig(telegramId, sessionId, groupJid);
+
+  // ── AntiGStatus: Group Status Protection ────────────────────────────
+  // Detect Group Status posting events (raw groupStatusMessage/V2 wrapper
+  // OR contextInfo.isGroupStatus from the fork's group-status send path).
+  // Respects the permit list and the protected-participant guard above.
+  const rawAny = (msg.message ?? {}) as Record<string, any>;
+  const isGroupStatusPost = Boolean(rawAny.groupStatusMessageV2 || rawAny.groupStatusMessage)
+    || Boolean((rawAny.extendedTextMessage as any)?.contextInfo?.isGroupStatus);
+  if (isGroupStatusPost) {
+    const gs = gc.antigstatus;
+    if (gs?.enabled && !isPermitted(gs, senderNumber)) {
+      logger.info('[AntiGStatus] Group status post flagged', { sessionId, groupJid, senderNumber });
+      await triggerViolation(
+        socket, msg, sessionId, telegramId, groupJid, senderJid, senderNumber,
+        'antigstatus', 'AntiGStatus', gs, 'antigstatus'
+      );
+      return true; // consumed — never reaches command parsing
+    }
+  }
 
   const violations: Promise<void>[] = [];
   let triggered = false;

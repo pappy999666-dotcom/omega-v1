@@ -57,6 +57,9 @@ import {
   handleMasterBucket,
   handleOmniBridge,
   executeOmniCommand,
+  handleGlobalSudoPanel,
+  handleOmniOwnerPanel,
+  handlePermissionInput,
   handleGlobalPause,
   handleMaintenanceToggle,
   handlePlatformStats,
@@ -167,6 +170,8 @@ interface BotContext extends Context {
     bridgeSessionId?: string;
     awaitingGlobalBridge?: boolean;
     awaitingOmniCommand?: boolean;
+    awaitingPermissionInput?: boolean;
+    pendingPermissionAction?: string;
     awaitingSupport?: boolean;
     awaitingProfilePhotoSessionId?: string;
     awaitingGcPfpSessionId?: string;
@@ -1292,6 +1297,15 @@ export function createBot(): Telegraf<BotContext> {
       return;
     }
 
+    // ── Awaiting Permission Input (Global Sudo / Omni Owner) ──
+    if (ctx.session?.awaitingPermissionInput) {
+      const action = ctx.session.pendingPermissionAction ?? '';
+      ctx.session.awaitingPermissionInput = false;
+      ctx.session.pendingPermissionAction = undefined;
+      await handlePermissionInput(ctx as BotContext, action, text.trim());
+      return;
+    }
+
     if (ctx.session?.awaitingGlobalBridge) {
     ctx.session.awaitingGlobalBridge = false;
     const sessionIds = getUserSockets(ctx.telegramId);
@@ -1628,6 +1642,8 @@ function clearAllAwaitingStates(ctx: BotContext): void {
   delete ctx.session.awaitingPrefix;
   delete ctx.session.awaitingGlobalBridge;
   delete ctx.session.awaitingOmniCommand;
+  delete ctx.session.awaitingPermissionInput;
+  delete ctx.session.pendingPermissionAction;
   delete ctx.session.awaitingSupport;
   delete ctx.session.awaitingBroadcast;
   delete ctx.session.awaitingForceJoin;
@@ -2968,6 +2984,26 @@ async function routeCallback(
       ).catch(() => {});
       return;
     }
+    if (sub === 'globalsudo' && (params[1] === 'add' || params[1] === 'rm')) {
+      ctx.session.awaitingPermissionInput = true;
+      ctx.session.pendingPermissionAction = `gs-${params[1]}`;
+      await ctx.editMessageText(
+        card('Global Sudo', '👑', [['Action', params[1] === 'add' ? 'Add number' : 'Remove number']], `Send the WhatsApp number to ${params[1] === 'add' ? 'grant' : 'revoke'} Global Sudo — applies to every session automatically.`),
+        { parse_mode: 'HTML', reply_markup: backKeyboard('admin:globalsudo') }
+      ).catch(() => {});
+      return;
+    }
+    if (sub === 'globalsudo') { await handleGlobalSudoPanel(ctx); return; }
+    if (sub === 'omniowner' && (params[1] === 'add' || params[1] === 'rm')) {
+      ctx.session.awaitingPermissionInput = true;
+      ctx.session.pendingPermissionAction = `omni-${params[1]}`;
+      await ctx.editMessageText(
+        card('Omni Owner', '🛡', [['Action', params[1] === 'add' ? 'Add number' : 'Remove number']], `Send the WhatsApp number to ${params[1] === 'add' ? 'grant' : 'revoke'} Omni Owner — bypasses every permission check.`),
+        { parse_mode: 'HTML', reply_markup: backKeyboard('admin:omniowner') }
+      ).catch(() => {});
+      return;
+    }
+    if (sub === 'omniowner') { await handleOmniOwnerPanel(ctx); return; }
     if (sub === 'omni') { await handleOmniBridge(ctx); return; }
     if (sub === 'autopromo') {
       const { loadAdminJobs, removeAdminLink, clearAdminJobs } = await import('../services/auto-promote.js');

@@ -66,6 +66,22 @@ import { errorReportText, errorReportTable, BOT_VERSION, platformLabel } from '.
 import { addIdea } from '../services/ideas.js';
 // ── Anti System ───────────────────────────────────────────
 import { runAntiChecks, handleParticipantUpdate } from './anti-system/index.js';
+// ── Personal Engine (View Once · Anti Delete · Status Platform) ──
+import {
+  cacheMessage,
+  maybeAutoViewOnce,
+  maybeAutoSend,
+  maybeAutoDownloadStatus,
+  handleDeletedKey,
+  cmdViewOnce,
+  cmdAutoVV,
+  cmdAntiDelete,
+  cmdPStatus,
+  cmdAutoSend,
+  cmdAutoDStatus,
+  cmdAutoStatusReact,
+  cmdSStatusSave,
+} from './personal-engine.js';
 // ── Runtime stores (dedupe, getMessage, contacts, presence, status) ──
 import {
   markSeen,
@@ -252,14 +268,31 @@ export async function handleWAEvent(
       return;
     }
 
-    // ── messages.update: delivery/read/played status changes ──
+    // ── messages.update: delivery/read/played + DELETE-FOR-EVERYONE revokes ──
+    // protocolMessage.type === 0 (REVOKE) carries the ORIGINAL message key —
+    // the AntiDelete engine recovers the cached content from it.
     case 'messages.update': {
       const updates = Array.isArray(data)
-        ? (data as Array<{ key?: { id?: string; remoteJid?: string }; update?: { status?: number } }>)
+        ? (data as Array<{
+            key?: { id?: string; remoteJid?: string };
+            update?: {
+              status?: number;
+              protocolMessage?: { type?: number; key?: { remoteJid?: string; id?: string; participant?: string } };
+            };
+          }>)
         : [];
       for (const u of updates) {
         if (u?.key?.id) {
           logger.debug('[Events] messages.update', { sessionId, id: u.key.id, status: u.update?.status });
+        }
+        const proto = u?.update?.protocolMessage;
+        if (proto?.type === 0 && proto.key?.id) {
+          const ownerId = sessionOwnerMap.get(sessionId);
+          if (ownerId) {
+            await handleDeletedKey(socket, sessionId, ownerId, proto.key).catch((err) => {
+              logger.warn('[AntiDelete] revoke recovery error', { err: String(err) });
+            });
+          }
         }
       }
       return;
@@ -279,20 +312,30 @@ export async function handleWAEvent(
     }
 
     // ── messages.delete: message deleted (self / everyone) ──
+    // Keys are also fed to the AntiDelete cache recovery — the fork emits both
+    // messages.update (REVOKE) and messages.delete for delete-for-everyone.
     case 'messages.delete': {
       const payload = data as unknown;
-      let deletedIds: string[] = [];
+      const keys: Array<{ remoteJid?: string; id?: string; participant?: string }> = [];
       if (Array.isArray(payload)) {
-        deletedIds = (payload as Array<{ key?: { id?: string } }>)
-          .map((d) => d?.key?.id)
-          .filter((v): v is string => Boolean(v));
+        keys.push(
+          ...(payload as Array<{ key?: { remoteJid?: string; id?: string; participant?: string } }>)
+            .map((d) => d?.key ?? {})
+        );
       } else {
-        const single = payload as { keys?: Array<{ id?: string }> };
-        deletedIds = (single?.keys ?? [])
-          .map((k) => k?.id)
-          .filter((v): v is string => Boolean(v));
+        const single = payload as { keys?: Array<{ remoteJid?: string; id?: string; participant?: string }> };
+        keys.push(...(single?.keys ?? []));
       }
+      const deletedIds = keys.map((k) => k?.id).filter((v): v is string => Boolean(v));
       if (deletedIds.length > 0) logger.info('[Events] messages.delete', { sessionId, ids: deletedIds });
+      const ownerId = sessionOwnerMap.get(sessionId);
+      for (const k of keys) {
+        if (k?.id && ownerId) {
+          await handleDeletedKey(socket, sessionId, ownerId, k).catch((err) => {
+            logger.warn('[AntiDelete] delete-event recovery error', { err: String(err) });
+          });
+        }
+      }
       return;
     }
 
@@ -523,6 +566,9 @@ async function autoHandleStatus(
         .sendMessage('status@broadcast', { react: { text: config.statusEmoji, key: msg.key } }, {})
         .catch(() => undefined);
     }
+
+    // ── Personal Engine: auto-download to Saved Messages + native auto-react ──
+    await maybeAutoDownloadStatus(socket, sessionId, telegramId, msg);
   } catch (err) {
     logger.debug('[Status] autoHandleStatus error', { err: String(err) });
   }
@@ -550,9 +596,38 @@ async function handleMessages(
     if (!markSeen(sessionId, msg.key?.id)) continue;
     rememberMessage(sessionId, msg);
 
+    // AntiDelete cache — keep every message so a later revoke can be recovered
+    cacheMessage(sessionId, msg);
+
+    // ── Status pipeline: auto-view / auto-like / auto-download / auto-react ──
+    // Incoming status posts arrive with remoteJid === 'status@broadcast'. They are
+    // consumed here BEFORE anti-checks and command parsing (a contact status must
+    // never trigger a command or leak into moderation).
+    if (msg.key?.remoteJid === 'status@broadcast') {
+      await autoHandleStatus(sessionId, telegramId, msg, socket);
+      continue;
+    }
+
+    // ── Auto View Once (per chat) ──
+    if (!msg.key?.fromMe) {
+      await maybeAutoViewOnce(socket, sessionId, telegramId, msg).catch((err) => {
+        logger.warn('[AutoVV] handler error', { err: String(err) });
+      });
+    }
+
+    // ── AutoSend: replies to my statuses asking for the content ──
+    if (!msg.key?.fromMe && !msg.key?.remoteJid?.endsWith('@g.us')) {
+      const autoSendText = extractMessageText(msg.message);
+      if (autoSendText) {
+        await maybeAutoSend(socket, sessionId, telegramId, msg, autoSendText).catch((err) => {
+          logger.warn('[AutoSend] handler error', { err: String(err) });
+        });
+      }
+    }
+
     // ── Auto-read incoming 1:1 messages (marks DMs as read instantly) ──
     // Gate off with WA_AUTO_READ=0 if undesired. Status posts are handled
-    // separately by the status pipeline below.
+    // by the status pipeline above.
     if (!msg.key?.fromMe && msg.key?.remoteJid?.endsWith('@s.whatsapp.net')) {
       if (process.env.WA_AUTO_READ !== '0') {
         (socket as unknown as { readMessages?: (keys: unknown[]) => Promise<unknown> })
@@ -670,10 +745,6 @@ async function handleMessages(
       }
     });
 
-    // ── Status pipeline: auto-view / auto-like incoming status posts ──
-    if (msg.key?.remoteJid === 'status@broadcast') {
-      await autoHandleStatus(sessionId, telegramId, msg, socket);
-    }
   }
 }
 
@@ -1580,73 +1651,9 @@ async function processMessageWithConfig(
       break;
     }
 
-    // ── Global Sudo (platform layer) ──
-    // Automatically becomes sudo on every newly paired session.
-    // Hidden from normal session users — only the configuring admin sees it.
-    case 'globalsudo': {
-      if (!isOwnerSender && !replyOverride && !isOmniSender) {
-        await reply(errorCard('RESTRICTED', 'Only the administrator who configured this can view Global Sudo.'));
-        break;
-      }
-      await reply(sudoListCard(getGlobalSudoNumbers()));
-      break;
-    }
-
-    case 'setglobalsudo':
-    case 'delglobalsudo': {
-      if (!isOwnerSender && !replyOverride && !isOmniSender) {
-        await reply(errorCard('RESTRICTED', 'Only the administrator who configured this can manage Global Sudo.'));
-        break;
-      }
-      const targets = resolveTargetNumbers(args, msg);
-      if (targets.length === 0) {
-        await reply(warningCard('NO TARGET FOUND', `Usage: ${config.prefix}${command} +2348012345678`));
-        break;
-      }
-      const next = command === 'setglobalsudo'
-        ? addGlobalSudoNumbers(targets)
-        : removeGlobalSudoNumbers(targets);
-      await reply(successCard(
-        command === 'setglobalsudo' ? 'GLOBAL SUDO GRANTED' : 'GLOBAL SUDO REVOKED',
-        `Global Sudo updated — applies to every session automatically.`,
-        [['Total', String(next.length)], ['Numbers', next.slice(0, 5).join(', ') + (next.length > 5 ? '…' : '')]]
-      ));
-      break;
-    }
-
-    // ── Omni Owner (highest permission layer) ──
-    // Bypasses every permission check, inherits every Global Sudo capability.
-    // Invisible to ordinary users — never listed in public session info.
-    case 'omni': {
-      if (!isOwnerSender && !replyOverride && !isOmniSender) {
-        await reply(errorCard('RESTRICTED', 'Only an existing Omni Owner or the session owner can view this.'));
-        break;
-      }
-      await reply(sudoListCard(getOmniOwnerNumbers()));
-      break;
-    }
-
-    case 'setomni':
-    case 'delomni': {
-      if (!isOwnerSender && !replyOverride && !isOmniSender) {
-        await reply(errorCard('RESTRICTED', 'Only an existing Omni Owner or the session owner can manage this.'));
-        break;
-      }
-      const targets = resolveTargetNumbers(args, msg);
-      if (targets.length === 0) {
-        await reply(warningCard('NO TARGET FOUND', `Usage: ${config.prefix}${command} +2348012345678`));
-        break;
-      }
-      const next = command === 'setomni'
-        ? addOmniOwnerNumbers(targets)
-        : removeOmniOwnerNumbers(targets);
-      await reply(successCard(
-        command === 'setomni' ? 'OMNI OWNER GRANTED' : 'OMNI OWNER REVOKED',
-        `Omni Owner bypasses every permission layer.`,
-        [['Total', String(next.length)], ['Numbers', next.slice(0, 5).join(', ') + (next.length > 5 ? '…' : '')]]
-      ));
-      break;
-    }
+    // ── Global Sudo & Omni Owner ──
+    // Managed EXCLUSIVELY from the Telegram admin panel (never on WhatsApp).
+    // The platform layers still auto-merge into every session via workspace.ts.
 
     case 'setsudo':
     case 'delsudo': {
@@ -1880,14 +1887,65 @@ async function processMessageWithConfig(
       break;
     }
 
-    // ── sstatus ──
-    case 'sstatus':
+    // ── sstatus: save a replied contact status ──
+    case 'sstatus': {
+      const dm = args[0]?.toLowerCase() === 'dm';
+      await reply(await cmdSStatusSave(socket, telegramId, sessionId, groupJid, msg, dm, config.prefix));
+      break;
+    }
+
+    // ── spam: infinite status-posting loop (the former .sstatus behavior) ──
     case 'spam': {
       const text = args.join(' ');
-      if (!text) { await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}sstatus [message]\nStop: ${config.prefix}stop spam`)); break; }
+      if (!text) { await reply(warningCard('MESSAGE REQUIRED', `Usage: ${config.prefix}spam [message]\nStop: ${config.prefix}stop spam`)); break; }
       if (isSpamLoopActive(sessionId)) { await reply(warningCard('LOOP ACTIVE', `A spam loop is already running. Use ${config.prefix}stop spam to kill it.`)); break; }
       await reply(successCard('STATUS LOOP STARTED', `Use ${config.prefix}stop spam to stop it.`, [['Message', text.slice(0, 40)]]));
       cmdSStatus(socket, telegramId, sessionId, text, { theme: config.statusDesignTheme, existingPreview: quotedPreview }).catch(() => { /* background */ });
+      break;
+    }
+
+    // ── View Once Engine ──
+    case 'vv':
+    case 'vvdm': {
+      await reply(await cmdViewOnce(socket, sessionId, telegramId, groupJid, msg, command === 'vvdm', config.prefix));
+      break;
+    }
+
+    case 'autovv': {
+      await reply(cmdAutoVV(telegramId, sessionId, groupJid, args, config.prefix));
+      break;
+    }
+
+    // ── Anti Delete Engine ──
+    case 'antidelete': {
+      await reply(await cmdAntiDelete(socket, telegramId, sessionId, groupJid, args, config.prefix));
+      break;
+    }
+
+    // ── Personal Status Platform ──
+    case 'pstatus': {
+      await reply(await cmdPStatus(socket, telegramId, sessionId, msg, args.join(' '), config.prefix));
+      break;
+    }
+
+    case 'autosend': {
+      await reply(cmdAutoSend(telegramId, sessionId, args, config.prefix));
+      break;
+    }
+
+    case 'autodstatus': {
+      await reply(cmdAutoDStatus(telegramId, sessionId, args, config.prefix));
+      break;
+    }
+
+    case 'autostatusreact': {
+      await reply(cmdAutoStatusReact(telegramId, sessionId, args, config.prefix));
+      break;
+    }
+
+    // ── AntiGStatus (Group Status Protection) ──
+    case 'antigstatus': {
+      await reply(handleAntiCommand('antigstatus', 'antigstatus', args, telegramId, sessionId, groupJid, config.prefix));
       break;
     }
 

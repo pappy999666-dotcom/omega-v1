@@ -142,8 +142,6 @@ export const ALL_COMMANDS = [
   'setprefix', 'setcmd', 'delcmd', 'setmenupic', 'setmenuvideo', 'delmenumedia', 'setsudo', 'delsudo', 'sudo', 'prefix', 'public', 'setmode', 'publicresponse', 'tagreply',
   // Response Mode + Timezone
   'swresponse', 'settimezone',
-  // Global Sudo & Omni Owner (platform permission layers)
-  'globalsudo', 'setglobalsudo', 'delglobalsudo', 'omni', 'setomni', 'delomni',
   // Info
   'menu', 'help', 'gmenu', 'ping', 'info', 'groups', 'jid', 'userinfo', 'getinfo', 'idea',
   // Bucket
@@ -211,6 +209,11 @@ export const ALL_COMMANDS = [
   'antidemote',
   // Join Approval (WhatsApp-side)
   'pendingjoin', 'approveall', 'rejectall', 'approveamt', 'approvecountry',
+  // ── Personal Engine (View Once · Anti Delete · Status Platform) ──
+  'vv', 'vvdm', 'autovv',
+  'antidelete',
+  'pstatus', 'autosend', 'autodstatus', 'autostatusreact',
+  'antigstatus',
 ] as const;
 
 export type CommandName = typeof ALL_COMMANDS[number];

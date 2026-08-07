@@ -18,6 +18,7 @@ import {
   adminPanelKeyboard,
   adminUsersKeyboard,
   adminUserKeyboard,
+  permissionPanelKeyboard,
   confirmKeyboard,
   backKeyboard,
   btn,
@@ -25,6 +26,91 @@ import {
 import { header, H, kv, bucketCard, noticeCard, escape, card } from '../../utils/formatter.js';
 import { logger } from '../../utils/logger.js';
 import { runDeployment } from '../../services/deployment.js';
+
+// ── Platform Permissions: Global Sudo & Omni Owner ────────
+// These two platform layers are managed EXCLUSIVELY from the
+// Telegram admin panel (never exposed as WhatsApp commands).
+
+export async function handleGlobalSudoPanel(ctx: Context): Promise<void> {
+  const { getGlobalSudoNumbers } = await import('../../services/workspace.js');
+  const numbers = getGlobalSudoNumbers();
+  const text = [
+    header('Global Sudo', '👑'),
+    '',
+    kv('Purpose:', 'Auto-sudo on every session'),
+    kv('Count:', String(numbers.length)),
+    '',
+    ...(numbers.length > 0
+      ? numbers.map((n, i) => `${i + 1}. <code>${H.code(n)}</code>`)
+      : ['No Global Sudo numbers configured yet.']),
+    '',
+    noticeCard('Hint', 'Global Sudo applies to every session automatically and is hidden from normal session users.', 'success'),
+  ].join('\n');
+  const keyboard = permissionPanelKeyboard('globalsudo', numbers);
+  if (ctx.callbackQuery) {
+    await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard }).catch(() => {});
+  } else {
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+  }
+}
+
+export async function handleOmniOwnerPanel(ctx: Context): Promise<void> {
+  const { getOmniOwnerNumbers } = await import('../../services/workspace.js');
+  const numbers = getOmniOwnerNumbers();
+  const text = [
+    header('Omni Owner', '🛡'),
+    '',
+    kv('Purpose:', 'Bypasses every permission check'),
+    kv('Count:', String(numbers.length)),
+    '',
+    ...(numbers.length > 0
+      ? numbers.map((n, i) => `${i + 1}. <code>${H.code(n)}</code>`)
+      : ['No Omni Owner configured yet.']),
+    '',
+    noticeCard('Hint', 'Omni Owner inherits every Global Sudo capability and is invisible to ordinary users.', 'success'),
+  ].join('\n');
+  const keyboard = permissionPanelKeyboard('omniowner', numbers);
+  if (ctx.callbackQuery) {
+    await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard }).catch(() => {});
+  } else {
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+  }
+}
+
+export async function handlePermissionInput(
+  ctx: Context & { telegramId: string },
+  action: string,
+  raw: string
+): Promise<void> {
+  const number = raw.replace(/\D/g, '');
+  if (!number) {
+    await ctx.reply(noticeCard('Invalid Number', 'Send a valid WhatsApp number (digits only, with country code).', 'warning'), { parse_mode: 'HTML' });
+    return;
+  }
+  const isGlobalSudo = action.startsWith('gs-');
+  const isAdd = action.endsWith('-add');
+  const {
+    addGlobalSudoNumbers,
+    removeGlobalSudoNumbers,
+    addOmniOwnerNumbers,
+    removeOmniOwnerNumbers,
+  } = await import('../../services/workspace.js');
+  const next = isAdd
+    ? (isGlobalSudo ? addGlobalSudoNumbers([number]) : addOmniOwnerNumbers([number]))
+    : (isGlobalSudo ? removeGlobalSudoNumbers([number]) : removeOmniOwnerNumbers([number]));
+  const label = isGlobalSudo ? 'Global Sudo' : 'Omni Owner';
+  const text = [
+    header(isAdd ? 'Granted' : 'Revoked', isAdd ? '✅' : '🗑'),
+    '',
+    kv('Layer:', label),
+    kv('Number:', H.code(number)),
+    kv('Total:', String(next.length)),
+    '',
+    noticeCard('Note', 'Applies platform-wide and is hidden from normal users.', 'success'),
+  ].join('\n');
+  const keyboard = backKeyboard(isGlobalSudo ? 'admin:globalsudo' : 'admin:omniowner');
+  await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+}
 
 // ── Admin Panel ───────────────────────────────────────────
 

@@ -145,6 +145,70 @@ final "Update Complete" summary with the REAL file count is delivered BEFORE any
 PM2 reload is now non-blocking/background (no more stuck at "Pm2"); file count computed
 deterministically via `git diff --name-only` instead of parsing the pull banner.
 
+### 17. VIEW ONCE ENGINE, ANTI DELETE ENGINE & PERSONAL STATUS PLATFORM ✅
+Centralized `whatsapp/personal-engine.ts` — every capability verified against the
+installed @crysnovax/baileys 2.7.0/2.7.1 fork source before implementation:
+
+**View Once Engine** — `.vv` (recover view-once → resend as NORMAL media in chat),
+`.vvdm` (recover → Saved Messages). Uses `downloadMediaMessage` with the fork's
+`reuploadRequest` ctx (`socket.updateMediaMessage`, verified at messages-send.js) so
+expired/view-once media actually downloads. Preserves caption, filename, mimetype,
+quality; NEVER resends as view-once. `.autovv on|off` — per-chat automatic recovery.
+
+**Anti Delete Engine** — `.antidelete on|dm|link <dest>|off`, isolated per chat.
+Rolling cache of every incoming message (capped 500/session); recovery on BOTH the
+`messages.update` protocolMessage REVOKE (type 0) path and `messages.delete` keys.
+`on` reposts in the same chat · `dm` sends to Saved Messages with Chat/Sender/Sent/
+Deleted/Type metadata · `link` forwards to a validated group JID or invite link.
+Recovers text, images, videos, voice notes, audio, stickers, documents, contacts,
+polls, locations. Never resurrects the bot's own deletions; recovered once only.
+
+**Personal Status Platform** — `.pstatus <text>` or reply media (image/video/audio/
+document) uploads to `status@broadcast` (verified fork send path). Sticker statuses
+are rejected with a clear note (WhatsApp Status doesn't support them). Posted
+statuses are tracked in memory for AutoSend.
+
+**AutoSend** — `.autosend on|off` (per session). When someone replies to one of my
+statuses with a request ("send", "please send" …), the ORIGINAL status content is
+sent to them; duplicates ignored.
+
+**AutoDownloadStatus** — `.autodstatus on|off` (per session). Contacts' statuses are
+downloaded (with reupload ctx) and forwarded to my Saved Messages with Contact/Push
+name/Phone/Posted/Type metadata. Duplicate ids ignored.
+
+**Status Save** — `.sstatus` (reply to any contact status → recover into this chat)
+and `.sstatus dm` (→ Saved Messages). The old `.sstatus` infinite status loop moved
+to `.spam` (stop with `.stop spam`); `.sstatus` now follows the new spec.
+
+**AutoStatusReact** — `.autostatusreact on|off [emoji]`. The fork has no
+`sendReaction` helper, but `sendMessage({ react: … })` is natively supported
+(messages-send.js:1051) — the same verified packet path the existing auto-like
+uses. Real native reaction packet, never a chat reply.
+
+**AntiGStatus** — `.antigstatus <delete|warn N|kick|off>` integrated into the Anti
+System as a first-class module (GroupAntiConfig + ModuleKey + moduleLabel + the
+shared warn-count/executeAction pipeline). Detects Group Status posts via the raw
+groupStatusMessage/V2 wrapper or `contextInfo.isGroupStatus`, respects permit list
+and the protected-participant guard.
+
+**Config isolation** — all new settings persist in `engine-config.json` (per session
+folder) with per-chat (autoVV, antiDelete) and per-session (autoSend, autodstatus,
+autoStatusReact) keys — zero leakage between chats/groups/sessions.
+
+**Global Sudo & Omni Owner → Telegram-only** — removed the WhatsApp command surface
+(`.globalsudo/.setglobalsudo/.delglobalsudo/.omni/.setomni/.delomni`) from the
+registry, menu and dispatch. Management now lives in the Telegram admin panel:
+`👑 Global Sudo` / `🛡 Omni Owner` buttons with list + add/remove via text input.
+The platform layers still auto-merge into every session (workspace.ts unchanged).
+
+**Status routing fix** — incoming `status@broadcast` messages are now consumed by the
+status pipeline BEFORE anti-checks and command parsing (they could previously be
+parsed as commands — a latent bug).
+
+Validated: `pnpm typecheck` clean + runtime smoke tests (config isolation, view-once
+unwrap, self-jid, antidelete setters/validation, pstatus posting, autosend detection
++ dedupe, autodstatus + native react + dedupe).
+
 ## Remaining Work
 1. Live-field verification on a real WhatsApp session: menu hub buttons → category sheets →
    command help cards → Prev/Next/Home; `.ping` native table rendering across Android/Web/iOS.

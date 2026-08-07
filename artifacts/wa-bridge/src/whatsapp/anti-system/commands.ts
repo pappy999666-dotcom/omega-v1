@@ -58,6 +58,7 @@ function moduleLabel(key: string): string {
     antisticker: 'AntiSticker', antigroupcall: 'AntiGroupCall',
     antinsfw: 'AntiNSFW', antigroupmention: 'AntiGroupMention', antigm: 'AntiGM',
     antiwords: 'AntiWords', antipoll: 'AntiPoll', antiforward: 'AntiForward',
+    antigstatus: 'AntiGStatus',
     antichannel: 'AntiChannel', antipromote: 'AntiPromote', antidemote: 'AntiDemote',
   };
   return labels[key] ?? key;

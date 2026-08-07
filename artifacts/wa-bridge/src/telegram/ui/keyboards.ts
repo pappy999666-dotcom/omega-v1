@@ -259,6 +259,7 @@ export function adminPanelKeyboard(paused = false, maintenance = false): InlineK
       [btn('📋 All Sessions', 'admin:allsessions', 'primary'), btn('🔗 Menu URL', 'admin:menuurl', 'primary')],
       [btn('📢 Release Settings', 'admin:release:menu', 'primary')],
       [btn('📅 Auto-Promote (All)', 'admin:autopromo', 'primary'), btn('🔄 Update Bot', 'admin:update', 'success')],
+      [btn('👑 Global Sudo', 'admin:globalsudo', 'primary'), btn('🛡 Omni Owner', 'admin:omniowner', 'primary')],
       [btn('💡 Idea Inbox', 'admin:ideas:0', 'primary'), btn('📋 Logs', 'admin:logs', 'primary')],
       [btn('🔙 Back', 'menu:main', 'primary')],
     ],
@@ -383,6 +384,18 @@ export function supportKeyboard(): InlineKeyboardMarkup {
 // ── Global Menu URL Manager ──────────────────────────────
 
 import type { MenuButton } from '../../types/index.js';
+
+export function permissionPanelKeyboard(
+  kind: 'globalsudo' | 'omniowner',
+  numbers: string[]
+): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [btn('➕ Add Number', `admin:${kind}:add`, 'success'), btn('➖ Remove Number', `admin:${kind}:rm`, 'danger')],
+      [btn('🔙 Back', 'admin:panel', 'primary')],
+    ],
+  };
+}
 
 export function adminMenuUrlManagerKeyboard(buttons: MenuButton[]): InlineKeyboardMarkup {
   const rows: IKB[][] = buttons.map((b) => {

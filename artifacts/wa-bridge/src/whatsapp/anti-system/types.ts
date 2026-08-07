@@ -277,6 +277,8 @@ export interface GroupAntiConfig {
   antichannel?: AntiModuleConfig;
   antipromote?: AntiPromoteConfig;
   antidemote?: AntiDemoteConfig;
+  /** AntiGStatus — blocks unauthorized Group Status posts */
+  antigstatus?: AntiModuleConfig;
   // Per-module custom response overrides
   messages?: Record<string, string>;
 }
