@@ -259,7 +259,7 @@ export function adminPanelKeyboard(paused = false, maintenance = false): InlineK
       [btn('📋 All Sessions', 'admin:allsessions', 'primary'), btn('🔗 Menu URL', 'admin:menuurl', 'primary')],
       [btn('📢 Release Settings', 'admin:release:menu', 'primary')],
       [btn('📅 Auto-Promote (All)', 'admin:autopromo', 'primary'), btn('🔄 Update Bot', 'admin:update', 'success')],
-      [btn('👑 Global Sudo', 'admin:globalsudo', 'primary'), btn('🛡 Omni Owner', 'admin:omniowner', 'primary')],
+      [btn('🛡 Omni Owner', 'admin:omniowner', 'primary')],
       [btn('💡 Idea Inbox', 'admin:ideas:0', 'primary'), btn('📋 Logs', 'admin:logs', 'primary')],
       [btn('🔙 Back', 'menu:main', 'primary')],
     ],

@@ -347,6 +347,19 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
   // AntiPromote / AntiDemote
   antipromote: { section: '🛡 ANTI SYSTEM', syntax: 'antipromote <kick|warn N|delete|off>', desc: 'React to unauthorized admin promotions', target: 'group' },
   antidemote: { section: '🛡 ANTI SYSTEM', syntax: 'antidemote <dwp|dnp|kwp|knp|off>', desc: 'React to unauthorized admin demotions', target: 'group' },
+  // ── Missing-catalog registrations (kept out of the ◈ OTHER bucket) ──
+  allgstatus: { section: '📊 UTILITY', syntax: 'allgstatus [msg]', desc: 'Post to ALL group statuses', target: 'main' },
+  mute: { section: '⚔ MODERATION', syntax: 'mute', desc: 'Mute the group', target: 'group' },
+  unmute: { section: '⚔ MODERATION', syntax: 'unmute', desc: 'Unmute the group', target: 'group' },
+  block: { section: '⚔ MODERATION', syntax: 'block [user]', desc: 'Block a user (reply / mention / number)', target: 'both' },
+  deleteall: { section: '⚔ MODERATION', syntax: 'deleteall', desc: 'Delete recent bot messages', target: 'group' },
+  stopjoin: { section: '⚔ MODERATION', syntax: 'stopjoin [on|off]', desc: 'Disable automatic join approvals', target: 'group' },
+  gmpermit: { section: '🛡 ANTI SYSTEM', syntax: 'gmpermit [user]', desc: 'Permit a user for group mentions', target: 'group' },
+  rmgmpermit: { section: '🛡 ANTI SYSTEM', syntax: 'rmgmpermit [user]', desc: 'Revoke a group-mention permit', target: 'group' },
+  // ── Global Sudo (hidden — only the configuring admin sees it) ──
+  globalsudo: { section: '⚙ CONFIGURATION', syntax: 'globalsudo', desc: 'View Global Sudo (admin only)', target: 'main', hidden: true },
+  setglobalsudo: { section: '⚙ CONFIGURATION', syntax: 'setglobalsudo [num]', desc: 'Grant Global Sudo — applies to every session', target: 'main', hidden: true },
+  delglobalsudo: { section: '⚙ CONFIGURATION', syntax: 'delglobalsudo [num]', desc: 'Revoke Global Sudo', target: 'main', hidden: true },
 
   // ── Join Approval ─────────────────────────────────────────
   // Mirror of the Telegram per-group dashboard approval features,
@@ -496,7 +509,8 @@ const ANTI_COMMANDS = [
   'antiwords', 'antiaddword', 'antirmword', 'antiwordlist', 'antiwordsmsg',
   'antipoll', 'pollpermit', 'rmpollpermit', 'antiforward', 'fwdpermit',
   'rmfwdpermit', 'antichannel', 'chanpermit', 'rmchanpermit',
-  'antipromote', 'antidemote',
+  'antipromote', 'antidemote', 'antigstatus',
+  'setantiwords', 'rmantiwords', 'clearantiwords',
 ];
 
 export const MAIN_NAV: NavCategory[] = [
@@ -504,9 +518,10 @@ export const MAIN_NAV: NavCategory[] = [
   { id: 'group', label: 'Group', emoji: '⚔️', desc: 'Kick, ban, warn, polls & events', commands: GROUP_MODERATION_COMMANDS },
   { id: 'promo', label: 'Promotion', emoji: '⬆️', desc: 'Admin promotion, demotion & guards', commands: ['promote', 'demote', 'antipromote', 'antidemote'] },
   { id: 'info', label: 'Info', emoji: 'ℹ️', desc: 'Ping, status, groups & users', commands: ['ping', 'info', 'groups', 'jid', 'userinfo', 'getinfo', 'sudo', 'idea'] },
-  { id: 'system', label: 'System', emoji: '🖥️', desc: 'Status engine, broadcast & sessions', commands: ['godcast', 'statusdesign', 'settheme', 'smedia', 'gstatus', 'tochat', 'togstatus', 'tochatx', 'togstatusx', 'sstatus', 'allstatus', 'allstatusx', 'allchat', 'stopspam', 'stop', 'spam', 'join', 'joinall', 'left', 'leave', 'leaveall', 'addlink', 'ls', 'curr', 'switch', 'sinfo', 'restart', 'disconnect', 'delete', 'rename', 'freeze', 'unfreeze'] },
+  { id: 'system', label: 'System', emoji: '🖥️', desc: 'Status engine, broadcast & sessions', commands: ['godcast', 'statusdesign', 'settheme', 'smedia', 'gstatus', 'tochat', 'togstatus', 'tochatx', 'togstatusx', 'sstatus', 'allstatus', 'allgstatus', 'allstatusx', 'allchat', 'stopspam', 'stop', 'spam', 'join', 'joinall', 'left', 'leave', 'leaveall', 'addlink', 'ls', 'curr', 'switch', 'sinfo', 'restart', 'disconnect', 'delete', 'rename', 'freeze', 'unfreeze'] },
+  { id: 'status', label: 'Status', emoji: '📲', desc: 'View once, anti-delete & status platform', commands: ['vv', 'vvdm', 'autovv', 'antidelete', 'pstatus', 'autosend', 'autodstatus', 'autostatusreact', 'sstatus'] },
   { id: 'pair', label: 'Pair', emoji: '📱', desc: 'Link a new WhatsApp session', commands: ['pair'] },
-  { id: 'settings', label: 'Settings', emoji: '⚙️', desc: 'Prefix, sudo, media & stickers', commands: ['setprefix', 'prefix', 'public', 'publicresponse', 'tagreply', 'setmenupic', 'setmenuvideo', 'delmenumedia', 'setsudo', 'delsudo', 'setpackname', 'setauthor', 'setcmd', 'delcmd', 'listcmd'] },
+  { id: 'settings', label: 'Settings', emoji: '⚙️', desc: 'Prefix, sudo, media, mode & stickers', commands: ['setprefix', 'prefix', 'public', 'setmode', 'swresponse', 'settimezone', 'publicresponse', 'tagreply', 'setmenupic', 'setmenuvideo', 'delmenumedia', 'setsudo', 'delsudo', 'sudo', 'setpackname', 'setauthor', 'setcmd', 'delcmd', 'listcmd'] },
   { id: 'utils', label: 'Utilities', emoji: '🧰', desc: 'Tag, mtag, stickers & extras', commands: ['tag', 'mtag', 'sticker'], fallback: true },
 ];
 
@@ -514,6 +529,7 @@ export const GROUP_NAV: NavCategory[] = [
   { id: 'group', label: 'Group', emoji: '⚔️', desc: 'Kick, ban, warn, polls & events', commands: GROUP_MODERATION_COMMANDS },
   { id: 'promo', label: 'Promotion', emoji: '⬆️', desc: 'Admin promotion, demotion & guards', commands: ['promote', 'demote', 'antipromote', 'antidemote'] },
   { id: 'anti', label: 'Anti', emoji: '🛡️', desc: 'Full Anti System — link, spam, media, words', commands: ANTI_COMMANDS },
+  { id: 'status', label: 'Status', emoji: '📲', desc: 'View once, anti-delete & status platform', commands: ['vv', 'vvdm', 'autovv', 'antidelete', 'pstatus', 'autosend', 'autodstatus', 'autostatusreact', 'sstatus'] },
   { id: 'info', label: 'Info', emoji: 'ℹ️', desc: 'Ping, status, groups & users', commands: ['ping', 'info', 'groups', 'jid', 'userinfo', 'getinfo', 'sudo', 'idea'] },
   { id: 'utils', label: 'Utilities', emoji: '🧰', desc: 'Tag, mtag, stickers & extras', commands: ['tag', 'mtag', 'sticker'], fallback: true },
 ];

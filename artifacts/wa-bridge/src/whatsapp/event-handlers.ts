@@ -61,6 +61,7 @@ import {
   navHubButtons,
 } from './menu-registry.js';
 import { parseInteraction, routeInteraction } from './interaction-router.js';
+import { rememberStatusContact } from './utils/status-jids.js';
 import { pingTableData, nativeTableContent, tableFromCard } from './utils/native-rich.js';
 import { errorReportText, errorReportTable, BOT_VERSION, platformLabel } from '../utils/error-report.js';
 import { addIdea } from '../services/ideas.js';
@@ -269,14 +270,21 @@ export async function handleWAEvent(
     }
 
     // ── messages.update: delivery/read/played + DELETE-FOR-EVERYONE revokes ──
-    // protocolMessage.type === 0 (REVOKE) carries the ORIGINAL message key —
-    // the AntiDelete engine recovers the cached content from it.
+    // Verified against the installed @crysnovax/baileys fork (Utils/process-message.js
+    // REVOKE case): delete-for-everyone arrives here as
+    //   { key: { ...originalKey, id: protocolMsg.key.id },
+    //     update: { message: null, messageStubType: WAMessageStubType.REVOKE } }
+    // NOT as update.protocolMessage. The top-level key carries the ORIGINAL message
+    // id — matching the AntiDelete cache — so recovery is keyed off it.
+    // The update.protocolMessage shape is kept as a cross-version fallback.
     case 'messages.update': {
       const updates = Array.isArray(data)
         ? (data as Array<{
-            key?: { id?: string; remoteJid?: string };
+            key?: { id?: string; remoteJid?: string; participant?: string };
             update?: {
               status?: number;
+              message?: unknown;
+              messageStubType?: number;
               protocolMessage?: { type?: number; key?: { remoteJid?: string; id?: string; participant?: string } };
             };
           }>)
@@ -285,11 +293,20 @@ export async function handleWAEvent(
         if (u?.key?.id) {
           logger.debug('[Events] messages.update', { sessionId, id: u.key.id, status: u.update?.status });
         }
-        const proto = u?.update?.protocolMessage;
-        if (proto?.type === 0 && proto.key?.id) {
+        const update = u?.update;
+        // Fork-native revoke: message nulled + stub type set; top-level key = original.
+        const isForkRevoke = update?.message === null && update?.messageStubType !== undefined && !!u?.key?.id;
+        // Cross-version revoke: update.protocolMessage.type === 0 (REVOKE).
+        const proto = update?.protocolMessage;
+        const revokeKey = isForkRevoke
+          ? { remoteJid: u.key?.remoteJid, id: u.key?.id, participant: u.key?.participant }
+          : proto?.type === 0
+            ? proto.key
+            : null;
+        if (revokeKey?.id) {
           const ownerId = sessionOwnerMap.get(sessionId);
           if (ownerId) {
-            await handleDeletedKey(socket, sessionId, ownerId, proto.key).catch((err) => {
+            await handleDeletedKey(socket, sessionId, ownerId, revokeKey).catch((err) => {
               logger.warn('[AntiDelete] revoke recovery error', { err: String(err) });
             });
           }
@@ -400,6 +417,12 @@ export async function handleWAEvent(
     case 'contacts.upsert': {
       const contacts = Array.isArray(data) ? (data as Array<Record<string, unknown>>) : [];
       if (contacts.length > 0) upsertContacts(sessionId, contacts);
+      // Feed the status-jid tracker (contacts.update carries the active-status
+      // flag; contacts.upsert contributes known contacts as a fallback list).
+      for (const c of contacts) {
+        const cid = String((c as { id?: unknown }).id ?? '');
+        if (cid) rememberStatusContact(sessionId, cid, Boolean((c as { status?: unknown }).status));
+      }
       return;
     }
 
@@ -598,6 +621,19 @@ async function handleMessages(
 
     // AntiDelete cache — keep every message so a later revoke can be recovered
     cacheMessage(sessionId, msg);
+
+    // ── AntiDelete: REVOKE arriving via messages.upsert (protocolMessage) ──
+    // The fork delivers delete-for-everyone BOTH as a messages.update revoke
+    // (handled in the update listener) AND as the raw protocol message here.
+    // Its .protocolMessage.key holds the ORIGINAL message key. Recover-once is
+    // guaranteed by the engine's cache eviction; consumed before commands.
+    const protoMsg = (msg.message as { protocolMessage?: { type?: number; key?: { remoteJid?: string; id?: string; participant?: string } } } | undefined)?.protocolMessage;
+    if (protoMsg?.type === 0 && protoMsg.key?.id) {
+      await handleDeletedKey(socket, sessionId, telegramId, protoMsg.key).catch((err) => {
+        logger.warn('[AntiDelete] upsert-revoke recovery error', { err: String(err) });
+      });
+      continue;
+    }
 
     // ── Status pipeline: auto-view / auto-like / auto-download / auto-react ──
     // Incoming status posts arrive with remoteJid === 'status@broadcast'. They are
@@ -1114,15 +1150,20 @@ async function processMessageWithConfig(
     // PUBLIC MODE: Anyone may use commands.
     //
     // EXCEPTION: Pair is ALWAYS accessible regardless of mode.
+    // PUBLIC MODE is NOT full bot access: ordinary users may only use Pair,
+    // Help and Menu navigation. Every other command requires an authorized
+    // sender (owner / sudo / omni / authorized list).
+    const publicOnlyCommands = new Set(['pair', 'help', 'menu', 'gmenu']);
     const pairAlways = command === 'pair';
-    const publicAllowed = config.publicMode;
+    const publicAllowed = config.publicMode && publicOnlyCommands.has(command);
 
     if (!pairAlways && !publicAllowed) {
       // COMPLETELY SILENT for everything else
-      logger.warn('[EventHandler] Silently ignored unauthorized WhatsApp command (Private Mode)', {
+      logger.warn('[EventHandler] Silently ignored unauthorized WhatsApp command', {
         sessionId,
         command,
         sender: normalizeWhatsAppNumber(senderJid),
+        mode: config.publicMode ? 'public (pair/help/menu only)' : 'private',
       });
       return;
     }
@@ -1395,9 +1436,9 @@ async function processMessageWithConfig(
         : undefined;
       if (enabled !== undefined) {
         updateSessionConfig(telegramId, sessionId, { publicMode: enabled });
-        await reply(successCard('RESPONSE MODE', `Session is now ${bold(enabled ? 'PUBLIC' : 'PRIVATE')}.`, [
+        await reply(successCard('ACCESS MODE', `Session is now ${bold(enabled ? 'PUBLIC' : 'PRIVATE')}.`, [
           ['Mode', enabled ? '🌍 Public' : '🔒 Private'],
-          ['Access', enabled ? 'Anyone may use commands' : 'Owners, sudo & authorized only'],
+          ['Access', enabled ? 'Pair, Help & Menu for everyone' : 'Owners, sudo & authorized only'],
           ['Pair', 'Always accessible'],
         ]));
       } else {
@@ -1407,7 +1448,7 @@ async function processMessageWithConfig(
           rows: [
             ['Current', config.publicMode ? '🌍 PUBLIC' : '🔒 PRIVATE'],
             ['Usage', `${config.prefix}setmode <public|private>`],
-            ['Public', 'Anyone may use commands'],
+            ['Public', 'Pair, Help & Menu only'],
             ['Private', 'Owners, sudo & authorized only'],
             ['Pair', 'Always accessible in both modes'],
           ],
@@ -1651,9 +1692,39 @@ async function processMessageWithConfig(
       break;
     }
 
-    // ── Global Sudo & Omni Owner ──
-    // Managed EXCLUSIVELY from the Telegram admin panel (never on WhatsApp).
-    // The platform layers still auto-merge into every session via workspace.ts.
+    // ── Global Sudo (platform layer — user-facing) ──
+    // Grants users sudo on EVERY session automatically. Managed here on
+    // WhatsApp by the session owner / Omni; hidden from normal session users.
+    case 'globalsudo': {
+      if (!isOwnerSender && !replyOverride && !isOmniSender) {
+        await reply(errorCard('RESTRICTED', 'Only the paired session owner can view Global Sudo.'));
+        break;
+      }
+      await reply(sudoListCard(getGlobalSudoNumbers()));
+      break;
+    }
+
+    case 'setglobalsudo':
+    case 'delglobalsudo': {
+      if (!isOwnerSender && !replyOverride && !isOmniSender) {
+        await reply(errorCard('RESTRICTED', 'Only the paired session owner can manage Global Sudo.'));
+        break;
+      }
+      const targets = resolveTargetNumbers(args, msg);
+      if (targets.length === 0) {
+        await reply(warningCard('NO TARGET FOUND', `Usage: ${config.prefix}${command} +2348012345678`));
+        break;
+      }
+      const next = command === 'setglobalsudo'
+        ? addGlobalSudoNumbers(targets)
+        : removeGlobalSudoNumbers(targets);
+      await reply(successCard(
+        command === 'setglobalsudo' ? 'GLOBAL SUDO GRANTED' : 'GLOBAL SUDO REVOKED',
+        'Applies to every session automatically.',
+        [['Total', String(next.length)], ['Numbers', next.slice(0, 5).join(', ') + (next.length > 5 ? '…' : '')]]
+      ));
+      break;
+    }
 
     case 'setsudo':
     case 'delsudo': {

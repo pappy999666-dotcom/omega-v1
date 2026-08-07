@@ -142,6 +142,19 @@ export class PreviewDispatcher {
     const traceId = PreviewLogger.createTraceId();
     const start = Date.now();
 
+    // ── Status JID List (status@broadcast) ──
+    // The fork's sendMessage status branch REQUIRES a non-empty statusJidList
+    // (normalizeStatusJidList throws "statusJidList must contain at least one
+    // recipient JID" otherwise). Resolve it centrally so every status post
+    // (pstatus, godcast, statusdesign, smedia, gstatus, spam, omni status)
+    // always carries a valid recipient list — even on fresh sessions with no
+    // contacts synced (self-JID fallback).
+    if (jid === 'status@broadcast') {
+      const { resolveStatusJidList } = await import('../whatsapp/utils/status-jids.js');
+      const list = resolveStatusJidList(socket, options.sessionId);
+      options.statusOptions = { ...(options.statusOptions ?? {}), statusJidList: list };
+    }
+
     // ── Pipeline Stage: Session Config & Policy ──
     // Central Mention Engine: normalize every mention JID to a REAL phone JID
     // (@s.whatsapp.net). LID entries are resolved through the fork's lidMapping

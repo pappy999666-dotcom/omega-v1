@@ -27,32 +27,12 @@ import { header, H, kv, bucketCard, noticeCard, escape, card } from '../../utils
 import { logger } from '../../utils/logger.js';
 import { runDeployment } from '../../services/deployment.js';
 
-// ── Platform Permissions: Global Sudo & Omni Owner ────────
-// These two platform layers are managed EXCLUSIVELY from the
-// Telegram admin panel (never exposed as WhatsApp commands).
-
-export async function handleGlobalSudoPanel(ctx: Context): Promise<void> {
-  const { getGlobalSudoNumbers } = await import('../../services/workspace.js');
-  const numbers = getGlobalSudoNumbers();
-  const text = [
-    header('Global Sudo', '👑'),
-    '',
-    kv('Purpose:', 'Auto-sudo on every session'),
-    kv('Count:', String(numbers.length)),
-    '',
-    ...(numbers.length > 0
-      ? numbers.map((n, i) => `${i + 1}. <code>${H.code(n)}</code>`)
-      : ['No Global Sudo numbers configured yet.']),
-    '',
-    noticeCard('Hint', 'Global Sudo applies to every session automatically and is hidden from normal session users.', 'success'),
-  ].join('\n');
-  const keyboard = permissionPanelKeyboard('globalsudo', numbers);
-  if (ctx.callbackQuery) {
-    await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard }).catch(() => {});
-  } else {
-    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
-  }
-}
+// ── Platform Permissions: Omni Owner ─────────────────────
+// Omni Owner is the highest permission layer and is managed
+// EXCLUSIVELY from the Telegram admin panel.
+// Global Sudo is a USER-facing permission managed on WhatsApp
+// (.setglobalsudo / .delglobalsudo) — it is NOT an admin-panel
+// concept.
 
 export async function handleOmniOwnerPanel(ctx: Context): Promise<void> {
   const { getOmniOwnerNumbers } = await import('../../services/workspace.js');
@@ -87,28 +67,21 @@ export async function handlePermissionInput(
     await ctx.reply(noticeCard('Invalid Number', 'Send a valid WhatsApp number (digits only, with country code).', 'warning'), { parse_mode: 'HTML' });
     return;
   }
-  const isGlobalSudo = action.startsWith('gs-');
   const isAdd = action.endsWith('-add');
-  const {
-    addGlobalSudoNumbers,
-    removeGlobalSudoNumbers,
-    addOmniOwnerNumbers,
-    removeOmniOwnerNumbers,
-  } = await import('../../services/workspace.js');
+  const { addOmniOwnerNumbers, removeOmniOwnerNumbers } = await import('../../services/workspace.js');
   const next = isAdd
-    ? (isGlobalSudo ? addGlobalSudoNumbers([number]) : addOmniOwnerNumbers([number]))
-    : (isGlobalSudo ? removeGlobalSudoNumbers([number]) : removeOmniOwnerNumbers([number]));
-  const label = isGlobalSudo ? 'Global Sudo' : 'Omni Owner';
+    ? addOmniOwnerNumbers([number])
+    : removeOmniOwnerNumbers([number]);
   const text = [
-    header(isAdd ? 'Granted' : 'Revoked', isAdd ? '✅' : '🗑'),
+    header(isAdd ? 'Granted' : 'Revoked', isAdd ? '+' : '-'),
     '',
-    kv('Layer:', label),
+    kv('Layer:', 'Omni Owner'),
     kv('Number:', H.code(number)),
     kv('Total:', String(next.length)),
     '',
-    noticeCard('Note', 'Applies platform-wide and is hidden from normal users.', 'success'),
+    noticeCard('Note', 'Omni Owner bypasses every permission check and is hidden from normal users.', 'success'),
   ].join('\n');
-  const keyboard = backKeyboard(isGlobalSudo ? 'admin:globalsudo' : 'admin:omniowner');
+  const keyboard = backKeyboard('admin:omniowner');
   await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
 }
 

@@ -26,6 +26,7 @@
 import fs from 'fs';
 import path from 'path';
 import { sessionDir, loadSessionConfig } from '../services/workspace.js';
+import { resolveStatusJidList } from './utils/status-jids.js';
 import { logger } from '../utils/logger.js';
 import { errorCard, successCard, warningCard } from '../utils/ascii-art.js';
 import type { BridgeWASocket as WASocket, WebMessageInfo } from './baileys-types.js';
@@ -267,6 +268,29 @@ export function quotedMessageOf(msg: WebMessageInfo): any {
   return contextInfoOf(msg.message)?.quotedMessage ?? null;
 }
 
+/**
+ * Build a WebMessageInfo for the QUOTED message that carries the ORIGINAL
+ * message key (contextInfo.stanzaId / participant / remoteJid).
+ *
+ * CRITICAL for view-once recovery: the fork's downloadMediaMessage reupload
+ * flow (Utils/messages.js) matches the media-retry response by
+ * message.key.id. Using the command's own key makes the retry request
+ * unresolvable and recovery silently fails — the quoted key must be used.
+ */
+export function quotedSourceOf(msg: WebMessageInfo): WebMessageInfo | null {
+  const ctx = contextInfoOf(msg.message);
+  if (!ctx?.quotedMessage) return null;
+  return {
+    key: {
+      id: String(ctx.stanzaId ?? ''),
+      remoteJid: String(ctx.remoteJid ?? msg.key?.remoteJid ?? ''),
+      participant: ctx.participant,
+      fromMe: false,
+    },
+    message: ctx.quotedMessage,
+  } as unknown as WebMessageInfo;
+}
+
 function extractTextOf(message: unknown): string {
   const { inner } = unwrap(message);
   if (!inner) return '';
@@ -305,13 +329,16 @@ export async function cmdViewOnce(
   toSelf: boolean,
   prefix: string
 ): Promise<string> {
-  const candidates = [quotedMessageOf(msg), msg.message];
+  const candidates = [
+    quotedSourceOf(msg), // quoted view-once → carries the ORIGINAL key (stanzaId)
+    msg.message ? ({ key: msg.key, message: msg.message } as unknown as WebMessageInfo) : null,
+  ];
   for (const cand of candidates) {
-    const { inner, viewOnce } = unwrap(cand);
+    if (!cand) continue;
+    const { inner, viewOnce } = unwrap(cand.message as unknown);
     if (!viewOnce) continue;
     if (!inner?.imageMessage && !inner?.videoMessage) continue;
-    const source = { key: msg.key, message: cand } as unknown as WebMessageInfo;
-    const media = await recoverMedia(socket, source);
+    const media = await recoverMedia(socket, cand);
     if (!media) {
       return errorCard('VIEW ONCE', 'Could not recover the media. It may have expired.');
     }
@@ -599,14 +626,9 @@ export async function cmdPStatus(
   text: string,
   prefix: string
 ): Promise<string> {
-  const quoted = quotedMessageOf(msg);
   const { inner } = unwrap(msg.message as unknown);
   const directMedia = Boolean(inner?.imageMessage || inner?.videoMessage || inner?.audioMessage || inner?.documentMessage);
-  const sourceMedia = directMedia
-    ? msg
-    : quoted
-      ? ({ key: msg.key, message: quoted } as unknown as WebMessageInfo)
-      : null;
+  const sourceMedia = directMedia ? msg : quotedSourceOf(msg);
 
   const media = sourceMedia ? await recoverMedia(socket, sourceMedia) : null;
   let content: Record<string, unknown>;
@@ -620,6 +642,11 @@ export async function cmdPStatus(
     kind = media.type as MyStatusEntry['kind'];
     content = mediaContent(media, caption);
   } else {
+    if (sourceMedia && !text) {
+      // A quoted/direct media was detected but its bytes could not be
+      // downloaded (expired, view-once, or stale URL) — be explicit.
+      return errorCard('PERSONAL STATUS', 'Could not download the replied media — it may have expired.');
+    }
     if (!text) {
       return errorCard('PERSONAL STATUS', `Reply to media or send text.\nUsage: ${prefix}pstatus <text>`);
     }
@@ -628,7 +655,9 @@ export async function cmdPStatus(
   }
 
   try {
-    const res = await socket.sendMessage('status@broadcast', content as any);
+    const res = await socket.sendMessage('status@broadcast', content as any, {
+      statusJidList: resolveStatusJidList(socket, sessionId),
+    } as any);
     const keyId = (res as unknown as { key?: { id?: string } })?.key?.id;
     if (keyId) {
       trackStatus(

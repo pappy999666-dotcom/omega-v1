@@ -209,6 +209,76 @@ Validated: `pnpm typecheck` clean + runtime smoke tests (config isolation, view-
 unwrap, self-jid, antidelete setters/validation, pstatus posting, autosend detection
 + dedupe, autodstatus + native react + dedupe).
 
+### 18. ANTIDELETE HARDENING — FORK REVOKE DELIVERY FIX ✅
+AntiDelete was "not working" because the handler expected the standard Baileys
+REVOKE shape (update.protocolMessage), but the installed @crysnovax/baileys fork
+delivers delete-for-everyone differently (verified in Utils/process-message.js
+REVOKE case):
+
+```js
+ev.emit('messages.update', [{
+  key: { ...message.key, id: protocolMsg.key.id },   // ORIGINAL message id
+  update: { message: null, messageStubType: WAMessageStubType.REVOKE }
+}]);
+```
+
+Fixes in `whatsapp/event-handlers.ts`:
+- `messages.update` handler now detects the fork-native revoke
+  (`update.message === null` + `messageStubType` set) and recovers via the
+  top-level `key` (which carries the original id, matching the cache).
+  The old `update.protocolMessage` shape is kept as a cross-version fallback.
+- `messages.upsert` handler now also catches REVOKE protocolMessages arriving
+  as messages themselves (`.protocolMessage.key` = original key) and consumes
+  them before command parsing. Recover-once is guaranteed by cache eviction.
+- All three modes (on / dm / link <dest> / off) verified: same-chat repost,
+  Saved-Messages DM, forwarded to destination group; bot's own deletions never
+  resurrected; unknown ids ignored.
+
+New test: `tests/antidelete.test.ts` (8/8 passing) covering every mode, the
+fork revoke key shape, fromMe guard, uncached ids, and recover-once semantics.
+
+### 19. STATUS PLATFORM FIXES — STATUSJIDLIST, VIEW-ONCE QUOTES, PUBLIC MODE, GLOBAL SUDO ✅
+Fixes for the reported production issues, all verified against the installed
+@crysnovax/baileys fork source:
+
+**pstatus "statusJidList must contain at least one recipient JID"** — the fork has
+NO fetchStatusJidList; its sendMessage status branch REQUIRES a non-empty
+statusJidList (Socket/messages-send.js normalizeStatusJidList). New
+`whatsapp/utils/status-jids.ts` is the single resolver: contacts with active
+status (fed from contacts.update/upsert) + every known contact + the session's
+own JID fallback, so posting NEVER throws. Wired centrally into
+PreviewDispatcher.send for ALL status posts (pstatus, godcast, statusdesign,
+smedia, gstatus, spam, omni status) and into cmdPStatus directly.
+
+**.vv / .pstatus quote "nothing happens" / "Reply to media or send text"** — root
+cause: the quoted message was passed to downloadMediaMessage/updateMediaMessage
+with the COMMAND's key instead of the original message key. The fork matches the
+media-retry response by message.key.id (Utils/messages.js + messages-send.js
+encryptMediaRetryRequest), so the retry never resolved. New `quotedSourceOf()`
+builds the source with contextInfo.stanzaId/participant/remoteJid. cmdPStatus now
+also distinguishes "no media replied" from "media undownloadable" with an
+explicit error card.
+
+**Public mode** — no longer full bot access: ordinary users may ONLY use pair,
+help, menu & gmenu. Everything else is silent for unauthorized senders (owner /
+sudo / omni / authorized list still pass). Private mode unchanged (pair only).
+
+**Global Sudo → user-facing (WhatsApp)** — removed from the Telegram admin panel
+(button, panel handler, callbacks, input flow). Restored on WhatsApp:
+`.globalsudo` / `.setglobalsudo <num>` / `.delglobalsudo <num>` (owner/omni
+gated, hidden from normal users). Omni Owner stays the Telegram-only admin layer.
+
+**Menu completeness** — every registered command now appears: added 8 missing
+catalog entries (allgstatus, mute, unmute, block, deleteall, stopjoin,
+gmpermit, rmgmpermit), new 📲 Status nav category (vv, vvdm, autovv, antidelete,
+pstatus, autosend, autodstatus, autostatusreact, sstatus) in both main and group
+menus, Settings category expanded (setmode, swresponse, settimezone, sudo),
+Anti category expanded (antigstatus, setantiwords, rmantiwords, clearantiwords).
+
+Validation: `pnpm typecheck` clean; new tests/status-fixes.test.ts 7/7 (quoted
+key resolution, statusJidList fallback/tracking/dedupe, cmdPStatus option
+wiring, view-once quoted path); full suite 84/86 (2 pre-existing env failures).
+
 ## Remaining Work
 1. Live-field verification on a real WhatsApp session: menu hub buttons → category sheets →
    command help cards → Prev/Next/Home; `.ping` native table rendering across Android/Web/iOS.
