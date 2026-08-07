@@ -315,11 +315,15 @@ function storedSudoNumbers(
   }
 }
 
-// ── Global Sudo / Omni Owner (per-Telegram-user global settings) ──
-// Stored in the TELEGRAM USER's config (workspace config.json), NOT per
-// session and NOT platform-wide: each Telegram account owns its own lists.
-// Every newly paired WhatsApp session inherits them automatically (merged in
-// loadSessionConfig) and existing sessions re-check them live on each command.
+// ── Global Sudo / Omni Owner ────────────────────────────────────
+// GLOBAL SUDO = PER-TELEGRAM-USER (their main hub): sudo on every session
+// this Telegram account pairs. Stored in the user's workspace config.json,
+// merged into every session at load (loadSessionConfig) and re-checked live
+// on each command, so updates synchronize without a reload.
+//
+// OMNI OWNER = BOT-WIDE (platform): the highest permission layer, applies to
+// EVERY session of EVERY Telegram user. Stored in _platform/config.json
+// (PlatformConfig.omniOwnerNumbers). Never a session or per-user setting.
 
 /** Per-user Global Sudo numbers — sudo on every session of this Telegram user. */
 export function getGlobalSudoNumbers(telegramId: string): string[] {
@@ -347,37 +351,83 @@ export function removeGlobalSudoNumbers(telegramId: string, numbers: string[]): 
   return next;
 }
 
-/** Per-user Omni Owner numbers — highest permission layer. */
-export function getOmniOwnerNumbers(telegramId: string): string[] {
-  return loadConfig(telegramId).omniOwnerNumbers ?? [];
+// ── OMNI OWNER (bot-wide platform layer) ───────────────────────
+// Omni Owner is the highest permission layer and is BOT-WIDE: it applies to
+// every session of every Telegram user. It is stored in the platform config
+// (_platform/config.json), never per-user and never per-session.
+
+let omniMigrationDone = false;
+
+/**
+ * One-time migration: legacy per-user `omniOwnerNumbers` (from the pre-
+ * promotion era where Omni lived in each user's config) are swept up into
+ * the platform config so existing owners keep their bot-wide access, then
+ * removed from the per-user configs. Idempotent; runs lazily on first
+ * Omni read (after the platform config constants are initialized).
+ */
+function migrateLegacyOmniOwnersToPlatform(): void {
+  if (omniMigrationDone) return;
+  omniMigrationDone = true;
+  try {
+    const platform = loadPlatformConfig();
+    const existing = new Set((platform.omniOwnerNumbers ?? []).map((n) => n.replace(/\D/g, '')));
+    let changed = false;
+    for (const uid of getAllUserIds()) {
+      const cfg = loadConfig(uid);
+      const legacy = cfg.omniOwnerNumbers ?? [];
+      if (legacy.length === 0) continue;
+      for (const n of legacy) {
+        const clean = String(n).replace(/\D/g, '');
+        if (clean && !existing.has(clean)) {
+          existing.add(clean);
+          platform.omniOwnerNumbers = [...(platform.omniOwnerNumbers ?? []), n];
+          changed = true;
+        }
+      }
+      delete cfg.omniOwnerNumbers;
+      saveConfig(uid, cfg);
+    }
+    if (changed) {
+      savePlatformConfig(platform);
+      logger.info('[Workspace] Migrated legacy per-user Omni Owner numbers to the bot-wide platform config');
+    }
+  } catch (err) {
+    logger.warn('[Workspace] Legacy Omni Owner migration failed', { err: String(err) });
+  }
 }
 
-/** Replace the per-user Omni Owner list. */
-export function setOmniOwnerNumbers(telegramId: string, numbers: string[]): void {
-  updateConfig(telegramId, { omniOwnerNumbers: [...new Set(numbers)] });
+/** BOT-WIDE Omni Owner numbers — highest permission layer (all sessions, all users). */
+export function getOmniOwnerNumbers(_telegramId?: string): string[] {
+  migrateLegacyOmniOwnersToPlatform();
+  return loadPlatformConfig().omniOwnerNumbers ?? [];
 }
 
-/** Add numbers to the per-user Omni Owner list (idempotent). */
-export function addOmniOwnerNumbers(telegramId: string, numbers: string[]): string[] {
-  const next = [...new Set([...getOmniOwnerNumbers(telegramId), ...numbers])];
-  setOmniOwnerNumbers(telegramId, next);
+/** Replace the BOT-WIDE Omni Owner list (platform config). */
+export function setOmniOwnerNumbers(_telegramId: string | undefined, numbers: string[]): void {
+  updatePlatformConfig({ omniOwnerNumbers: [...new Set(numbers)] });
+}
+
+/** Add numbers to the BOT-WIDE Omni Owner list (idempotent). */
+export function addOmniOwnerNumbers(_telegramId: string | undefined, numbers: string[]): string[] {
+  const next = [...new Set([...(getOmniOwnerNumbers()), ...numbers])];
+  setOmniOwnerNumbers(undefined, next);
   return next;
 }
 
-/** Remove numbers from the per-user Omni Owner list. */
-export function removeOmniOwnerNumbers(telegramId: string, numbers: string[]): string[] {
-  const set = new Set(getOmniOwnerNumbers(telegramId));
+/** Remove numbers from the BOT-WIDE Omni Owner list. */
+export function removeOmniOwnerNumbers(_telegramId: string | undefined, numbers: string[]): string[] {
+  const set = new Set(getOmniOwnerNumbers());
   for (const n of numbers) set.delete(n);
   const next = [...set];
-  setOmniOwnerNumbers(telegramId, next);
+  setOmniOwnerNumbers(undefined, next);
   return next;
 }
 
-/** True when the given WhatsApp number is an Omni Owner for this Telegram user. */
-export function isOmniOwnerNumber(telegramId: string, number: string): boolean {
+/** True when the given WhatsApp number is a BOT-WIDE Omni Owner (any Telegram user). */
+export function isOmniOwnerNumber(_telegramId: string | undefined, number: string): boolean {
   const clean = String(number).replace(/\D/g, '');
   if (!clean) return false;
-  return getOmniOwnerNumbers(telegramId).some((n) => String(n).replace(/\D/g, '') === clean);
+  return getOmniOwnerNumbers().some((n) => String(n).replace(/\D/g, '') === clean);
 }
 
 export function saveSessionConfig(telegramId: string, sessionId: string, config: UserConfig): void {

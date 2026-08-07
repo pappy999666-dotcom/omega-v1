@@ -27,11 +27,11 @@ import { header, H, kv, bucketCard, noticeCard, escape, card } from '../../utils
 import { logger } from '../../utils/logger.js';
 import { runDeployment } from '../../services/deployment.js';
 
-// ── Global Settings: Global Sudo & Omni Owner (per Telegram user) ──
-// These are GLOBAL account settings stored per Telegram USER (not per
-// session, not platform-wide). Every WhatsApp session paired by this
-// Telegram account inherits them automatically and existing sessions pick
-// changes up live. They are NEVER exposed inside WhatsApp session info.
+// ── Global Settings ──
+// GLOBAL SUDO = per-Telegram-user account setting (lives in each user's
+// Settings hub). Applies to every session THIS Telegram account pairs.
+// OMNI OWNER = BOT-WIDE platform layer (admin panel only). Applies to every
+// session of every Telegram user. Both are never exposed in WhatsApp info.
 
 export async function handleGlobalSudoPanel(ctx: Context & { telegramId: string }): Promise<void> {
   const { getGlobalSudoNumbers } = await import('../../services/workspace.js');
@@ -49,7 +49,7 @@ export async function handleGlobalSudoPanel(ctx: Context & { telegramId: string 
     '',
     noticeCard('Hint', 'Global Sudo applies to every session you pair and is hidden from normal session users.', 'success'),
   ].join('\n');
-  const keyboard = permissionPanelKeyboard('globalsudo', numbers);
+  const keyboard = permissionPanelKeyboard('globalsudo', numbers, 'settings:globalsudo');
   if (ctx.callbackQuery) {
     await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard }).catch(() => {});
   } else {
@@ -64,16 +64,16 @@ export async function handleOmniOwnerPanel(ctx: Context & { telegramId: string }
     header('Omni Owner', 'O'),
     '',
     kv('Purpose:', 'Bypasses every permission check'),
-    kv('Scope:', 'This Telegram account'),
+    kv('Scope:', 'ALL sessions (bot-wide)'),
     kv('Count:', String(numbers.length)),
     '',
     ...(numbers.length > 0
       ? numbers.map((n, i) => `${i + 1}. <code>${H.code(n)}</code>`)
       : ['No Omni Owner configured yet.']),
     '',
-    noticeCard('Hint', 'Omni Owner inherits every Global Sudo capability and is invisible to ordinary users.', 'success'),
+    noticeCard('Hint', 'Omni Owner is the highest bot-wide layer — grants full access on every session of every Telegram user. Invisible to ordinary users.', 'success'),
   ].join('\n');
-  const keyboard = permissionPanelKeyboard('omniowner', numbers);
+  const keyboard = permissionPanelKeyboard('omniowner', numbers, 'admin:panel');
   if (ctx.callbackQuery) {
     await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard }).catch(() => {});
   } else {
@@ -102,11 +102,14 @@ export async function handlePermissionInput(
   const next = isAdd
     ? (isGlobalSudo
       ? addGlobalSudoNumbers(ctx.telegramId, [number])
-      : addOmniOwnerNumbers(ctx.telegramId, [number]))
+      : addOmniOwnerNumbers(undefined, [number]))
     : (isGlobalSudo
       ? removeGlobalSudoNumbers(ctx.telegramId, [number])
-      : removeOmniOwnerNumbers(ctx.telegramId, [number]));
+      : removeOmniOwnerNumbers(undefined, [number]));
   const label = isGlobalSudo ? 'Global Sudo' : 'Omni Owner';
+  const scope = isGlobalSudo
+    ? 'Applies to every session paired by this Telegram account; hidden from normal users.'
+    : 'BOT-WIDE: applies to every session of every Telegram user; hidden from normal users.';
   const text = [
     header(isAdd ? 'Granted' : 'Revoked', isAdd ? '+' : '-'),
     '',
@@ -114,9 +117,9 @@ export async function handlePermissionInput(
     kv('Number:', H.code(number)),
     kv('Total:', String(next.length)),
     '',
-    noticeCard('Note', 'Applies to every session paired by this Telegram account; hidden from normal users.', 'success'),
+    noticeCard('Note', scope, 'success'),
   ].join('\n');
-  const keyboard = backKeyboard(isGlobalSudo ? 'admin:globalsudo' : 'admin:omniowner');
+  const keyboard = backKeyboard(isGlobalSudo ? 'settings:globalsudo' : 'admin:omniowner');
   await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
 }
 

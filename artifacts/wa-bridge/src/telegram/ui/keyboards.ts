@@ -259,7 +259,9 @@ export function adminPanelKeyboard(paused = false, maintenance = false): InlineK
       [btn('📋 All Sessions', 'admin:allsessions', 'primary'), btn('🔗 Menu URL', 'admin:menuurl', 'primary')],
       [btn('📢 Release Settings', 'admin:release:menu', 'primary')],
       [btn('📅 Auto-Promote (All)', 'admin:autopromo', 'primary'), btn('🔄 Update Bot', 'admin:update', 'success')],
-      [btn('👑 Global Sudo', 'admin:globalsudo', 'primary'), btn('🛡 Omni Owner', 'admin:omniowner', 'primary')],
+      // Omni Owner is the BOT-WIDE platform layer — managed only here.
+      // Global Sudo is per-Telegram-user and lives in each user's Settings hub.
+      [btn('🛡 Omni Owner (Bot-wide)', 'admin:omniowner', 'primary')],
       [btn('💡 Idea Inbox', 'admin:ideas:0', 'primary'), btn('📋 Logs', 'admin:logs', 'primary')],
       [btn('🔙 Back', 'menu:main', 'primary')],
     ],
@@ -362,6 +364,9 @@ export function settingsKeyboard(
   return {
     inline_keyboard: [
       [btn('Change Prefix', 'settings:prefix', 'primary'), btn('Sticker Macros', 'settings:macros', 'primary')],
+      // Global Sudo is a per-Telegram-user account setting — each user manages
+      // their own list from their main hub (applies to every session they pair).
+      [btn('👑 Global Sudo', 'settings:globalsudo', 'primary')],
       [btn(`Notifications: ${config?.notificationsEnabled === false ? 'Off' : 'On'}`, 'settings:notifications', 'primary')],
       [btn(`Default Collection: ${config?.defaultLinkCollection ? 'On' : 'Off'}`, 'settings:collection', 'primary')],
       [btn(`Auto Validation: ${config?.autoValidationEnabled ? 'On' : 'Off'}`, 'settings:validation', 'primary')],
@@ -387,12 +392,13 @@ import type { MenuButton } from '../../types/index.js';
 
 export function permissionPanelKeyboard(
   kind: 'globalsudo' | 'omniowner',
-  numbers: string[]
+  numbers: string[],
+  backTarget = 'admin:panel'
 ): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
-      [btn('➕ Add Number', `admin:${kind}:add`, 'success'), btn('➖ Remove Number', `admin:${kind}:rm`, 'danger')],
-      [btn('🔙 Back', 'admin:panel', 'primary')],
+      [btn('➕ Add Number', `${kind === 'globalsudo' ? 'settings' : 'admin'}:${kind}:add`, 'success'), btn('➖ Remove Number', `${kind === 'globalsudo' ? 'settings' : 'admin'}:${kind}:rm`, 'danger')],
+      [btn('🔙 Back', backTarget, 'primary')],
     ],
   };
 }

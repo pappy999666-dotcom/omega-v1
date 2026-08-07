@@ -672,16 +672,23 @@ export async function cmdPStatus(
     kind = media.type as MyStatusEntry['kind'];
     content = mediaContent(media, caption);
   } else {
-    if (sourceMedia && !text) {
+    // Quoted TEXT: if the command is used while replying to a message, detect
+    // the quoted content and publish THAT text as the status (spec: "publish
+    // that exact message"). Command text takes priority when both exist.
+    const quotedText = sourceMedia ? extractTextOf(quotedMessageOf(sourceMedia)) : '';
+    if (!text && quotedText) {
+      kind = 'text';
+      content = { text: quotedText };
+    } else if (sourceMedia && !text) {
       // A quoted/direct media was detected but its bytes could not be
       // downloaded (expired, view-once, or stale URL) — be explicit.
       return errorCard('PERSONAL STATUS', 'Could not download the replied media — it may have expired.');
-    }
-    if (!text) {
+    } else if (!text) {
       return errorCard('PERSONAL STATUS', `Reply to media or send text.\nUsage: ${prefix}pstatus <text>`);
+    } else {
+      kind = 'text';
+      content = { text };
     }
-    kind = 'text';
-    content = { text };
   }
 
   // The fork's sendMessage status branch REQUIRES a non-empty statusJidList

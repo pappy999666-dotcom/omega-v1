@@ -22,7 +22,6 @@
 // Set hidden: true for aliases / internal commands to suppress them.
 // ============================================================
 
-import { getPremiumTip } from '../utils/ascii-art.js';
 import { singleSelectButton } from './utils/native-rich.js';
 import type { NativeListRow, NativeListSection } from './utils/native-rich.js';
 
@@ -516,7 +515,7 @@ const ANTI_COMMANDS = [
 ];
 
 export const MAIN_NAV: NavCategory[] = [
-  { id: 'pair', label: 'Pair', emoji: '🔗', desc: 'Link a new WhatsApp session', commands: ['pair'] },
+  { id: 'pair', label: 'Pair', emoji: '🔗', desc: 'Use any prefix then pair your number', commands: ['pair'] },
   { id: 'group', label: 'Group', emoji: '⚔️', desc: 'Kick, ban, warn, polls & events', commands: GROUP_MODERATION_COMMANDS, showAll: true },
   { id: 'promo', label: 'Promotion', emoji: '⬆️', desc: 'Admin promotion, demotion & guards', commands: ['promote', 'demote', 'antipromote', 'antidemote'], showAll: true },
   { id: 'anti', label: 'Anti-System', emoji: '🛡️', desc: 'Link, spam, media & words', commands: ANTI_COMMANDS, showAll: true },
@@ -635,8 +634,8 @@ export function formatInTimezone(
  * OMEGA NAVIGATION hub — compact category dashboard, WhatsApp-mobile width.
  * Header + Status/Prefix line, then one ✦ category row per nav entry with a
  * live command count (computed from the registry) and the category tagline.
- * Pair is special-cased to its own instruction line (no count). The footer
- * carries the rotating premium tip + the PAPPY ×͜× brand line.
+ * Pair is special-cased to its own instruction + example block (no count).
+ * The footer carries the premium line + the OMEGA • V1 brand line.
  */
 export function renderNavHub(
   prefix: string,
@@ -645,9 +644,9 @@ export function renderNavHub(
   opts: NavHubOptions = {}
 ): string {
   const safePrefix = prefix && prefix.trim() ? prefix.trim() : 'None';
-  const status = opts.status ?? 'ONLINE';
+  const status = (opts.status ?? 'ONLINE') === 'ONLINE' ? 'Online' : (opts.status ?? 'ONLINE');
   const lines: string[] = [
-    '𝗢 𝗠 𝗘 𝗚 𝗔 𝄜 𝗡 𝗔 𝗩 𝗜 𝗚 𝗔 𝗧 𝗜 𝗢 𝗡',
+    '𝗢 𝗠 𝗘 𝗚 𝗔  𝄜  𝗡 𝗔 𝗩 𝗜 𝗚 𝗔 𝗧 𝗜 𝑶 𝑵',
     '',
     `Status: ${status}  •  Prefix: ${safePrefix}`,
     '',
@@ -655,7 +654,9 @@ export function renderNavHub(
   for (const nav of navFor(menuTarget)) {
     if (nav.id === 'pair') {
       lines.push('✦ 🔗 Pair');
-      lines.push('Use any prefix then pair your number e.g 234XXXXXXXXXX');
+      lines.push('Use any prefix then pair your number.');
+      lines.push('Example:');
+      lines.push('23470288288288');
     } else {
       const count = navCommandLines(prefix, nav, menuTarget, knownCommands).length;
       lines.push(`✦ ${nav.emoji} ${nav.label} ── [${count}]`);
@@ -664,8 +665,9 @@ export function renderNavHub(
     lines.push('');
   }
   lines.push('· · ────────────────────── · ·');
-  lines.push(getPremiumTip());
-  lines.push('· · ——— 𝕻𝕬𝕻𝕻𝖞 ×͜× ——— · ·');
+  lines.push('💎 Premium:');
+  lines.push('Unlimited Bucket Capacity.');
+  lines.push('· · ——— 𝗢𝗠𝗘𝗚𝗔 • 𝗩𝟭 ——— · ·');
   return lines.join('\n');
 }
 

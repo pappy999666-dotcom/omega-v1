@@ -1136,10 +1136,12 @@ async function processMessageWithConfig(
   const sudoCheckJid = senderPhoneOverride ? `${senderPhoneOverride}@s.whatsapp.net` : senderJid;
   const senderNumber = normalizeWhatsAppNumber(sudoCheckJid);
   // Omni Owner bypasses EVERY permission layer automatically (highest tier).
-  // Scoped per Telegram user (global account setting, never a session setting).
+  // BOT-WIDE: applies to every session of every Telegram user (platform config).
   const isOmniSender = isOmniOwnerNumber(telegramId, senderNumber);
   // Live Global Sudo check: per-user Global Sudo changes apply to EXISTING
   // sessions immediately (new sessions merge the list at load time).
+  // Global Sudo is a per-Telegram-user account setting (their main hub) —
+  // live-checked here so changes apply to existing sessions immediately.
   const isGlobalSudoSender = getGlobalSudoNumbers(telegramId).some(
     (n) => String(n).replace(/\D/g, '') === senderNumber
   );

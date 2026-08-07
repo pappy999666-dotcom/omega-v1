@@ -13,7 +13,7 @@ export interface UserConfig {
   sudoNumbers?: string[];           // normalized WhatsApp numbers allowed to run commands
   /** Per-Telegram-user Global Sudo numbers — sudo on EVERY session this user pairs. */
   globalSudoNumbers?: string[];
-  /** Per-Telegram-user Omni Owner numbers — highest permission layer for this user. */
+  /** @deprecated Omni Owner is BOT-WIDE — stored in PlatformConfig.omniOwnerNumbers (auto-migrated). */
   omniOwnerNumbers?: string[];
   ownerWaNumbers?: string[];        // WA numbers classified as Session/Workspace Owner by security engine
   trustedAdminNumbers?: string[];   // WA numbers classified as Trusted Admin by security engine

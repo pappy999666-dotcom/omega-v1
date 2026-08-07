@@ -365,6 +365,63 @@ Validation: `pnpm typecheck` clean; full suite 89/91 (2 pre-existing workspace-m
 env failures). Menu hub render smoke-tested (Group [34] · Promotion [4] · Anti-System
 [62] · Info [8] · Utilities [3] …).
 
+### 22. OMNI OWNER PROMOTED TO BOT-WIDE · GLOBAL SUDO MOVED TO USER HUB ✅
+
+Resolves the semantic split the owner clarified: **Global Sudo is a per-Telegram-user
+account setting; Omni Owner is BOT-WIDE (applies to every session of every Telegram user).**
+
+**Omni Owner → platform config (bot-wide):**
+- `workspace.ts` now stores `omniOwnerNumbers` in `_platform/config.json`
+  (`PlatformConfig.omniOwnerNumbers`), never per-user and never per-session.
+- `getOmniOwnerNumbers` / `add` / `remove` / `isOmniOwnerNumber` are all platform-scoped;
+  `isOmniOwnerNumber` ignores the Telegram id entirely.
+- One-time lazy migration sweeps legacy per-user `omniOwnerNumbers` (pre-promotion era)
+  into the platform config and clears the per-user field — existing owners keep bot-wide
+  access with zero manual reconfiguration.
+- Admin panel: Omni Owner button relabeled "🛡 Omni Owner (Bot-wide)"; panel scope line now
+  reads "ALL sessions (bot-wide)" and the add/remove flow spells out the bot-wide effect.
+
+**Global Sudo → per-user Settings hub:**
+- Removed the Global Sudo button from the admin panel (it is not a platform setting).
+- Added "👑 Global Sudo" to each Telegram user's Settings hub (`settingsKeyboard`); the
+  panel + add/remove input flow are wired as `settings:globalsudo` and reuse the existing
+  per-user `gs-*` permission input with back-navigation to the Settings hub.
+- The WhatsApp permission gate is unchanged and correct: `getGlobalSudoNumbers(telegramId)`
+  is live-checked per user, Omni is live-checked bot-wide, and `.sudo`/`.info` still hide
+  both layers from ordinary session users.
+
+Validation: `pnpm typecheck` clean; `global-settings.test.ts` 4/4 (per-user isolation,
+idempotence, BOT-WIDE omni visibility from any user, legacy per-user → platform migration);
+full suite 90/92 (2 pre-existing workspace-migration env failures).
+
+### 23. MENU HUB SPEC ALIGNMENT · PSTATUS QUOTED-TEXT SUPPORT ✅
+
+Final polish pass for the owner's compact OMEGA NAVIGATION design reference.
+
+**Menu hub (`menu-registry.ts` `renderNavHub`):**
+- Header rendered as `𝗢 𝗠 𝗘 𝗚 𝗔  𝄜  𝗡 𝗔 𝗩 𝗜 𝗚 𝗔 𝗧 𝗜 𝑶 𝑵` with the exact 𝄜 spacing.
+- Status line title-cases ONLINE → `Status: Online  •  Prefix: <current prefix>`.
+- Pair row now matches the spec block: instruction + `Example:` + `23470288288288`.
+- Category rows unchanged (auto-counted): `✦ ⚔️ Group ── [n]`, `✦ ⬆️ Promotion ── [n]`,
+  `✦ 🛡️ Anti-System ── [n]`, `✦ ℹ️ Info ── [n]`, `✦ 🧰 Utilities ── [n]`.
+- Footer pinned to the spec: `💎 Premium:` / `Unlimited Bucket Capacity.` and the brand
+  line `· · ——— 𝗢𝗠𝗘𝗚𝗔 • 𝗩𝟭 ——— · ·` (replaces the rotating tip + PAPPY line in the hub).
+
+**PStatus quoted-text (`personal-engine.ts` `cmdPStatus`):**
+- Replying to a TEXT message with `.pstatus` (no extra args) now publishes that quoted
+  text as the status, per spec "publish that exact message" — previously only quoted
+  media was detected and a quoted-text reply fell into the media-error path.
+- Priority: direct/quoted media → quoted text → command text → usage error.
+
+**Anti System admin split (verified, no code change needed):**
+- Message anti-modules (`runAntiChecks`: AntiLink, AntiSpam, AntiText, AntiWords, …) route
+  through `isProtectedJid` which exempts WhatsApp admins — normal modules never punish admins.
+- AntiPromote / AntiDemote route through `classifyActor` in the Group Security Engine where
+  `WA_ADMIN` is explicitly punishable — the only modules that monitor administrator actions.
+
+Validation: `pnpm typecheck` clean; full suite 90/92 (2 pre-existing workspace-migration
+env failures). No menu/premium/footer test regressions (none reference the old strings).
+
 ## Remaining Work
 1. Live-field verification on a real WhatsApp session: menu hub buttons → category sheets →
    command help cards → Prev/Next/Home; `.ping` native table rendering across Android/Web/iOS.
@@ -372,5 +429,3 @@ env failures). Menu hub render smoke-tested (Group [34] · Promotion [4] · Anti
    wired in PreviewDispatcher).
 3. After the next deploy, confirm `pnpm install` resolves `@crysnovax/baileys@2.7.1` and the
    update-bot summary shows the correct files-changed count.
-4. If Omni Owner should be bot-wide (across ALL Telegram users) rather than per-user, promote
-   `omniOwnerNumbers` to the platform config — currently scoped per Telegram user.

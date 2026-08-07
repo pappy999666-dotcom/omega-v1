@@ -171,7 +171,7 @@ interface BotContext extends Context {
     awaitingGlobalBridge?: boolean;
     awaitingOmniCommand?: boolean;
     awaitingPermissionInput?: boolean;
-    pendingPermissionAction?: string;
+    pendingPermissionAction?: string; // gs-* from settings hub, omni-* from admin
     awaitingSupport?: boolean;
     awaitingProfilePhotoSessionId?: string;
     awaitingGcPfpSessionId?: string;
@@ -2984,16 +2984,6 @@ async function routeCallback(
       ).catch(() => {});
       return;
     }
-    if (sub === 'globalsudo' && (params[1] === 'add' || params[1] === 'rm')) {
-      ctx.session.awaitingPermissionInput = true;
-      ctx.session.pendingPermissionAction = `gs-${params[1]}`;
-      await ctx.editMessageText(
-        card('Global Sudo', 'G', [['Action', params[1] === 'add' ? 'Add number' : 'Remove number']], `Send the WhatsApp number to ${params[1] === 'add' ? 'grant' : 'revoke'} Global Sudo — applies to every session you pair.`),
-        { parse_mode: 'HTML', reply_markup: backKeyboard('admin:globalsudo') }
-      ).catch(() => {});
-      return;
-    }
-    if (sub === 'globalsudo') { await handleGlobalSudoPanel(ctx); return; }
     if (sub === 'omniowner' && (params[1] === 'add' || params[1] === 'rm')) {
       ctx.session.awaitingPermissionInput = true;
       ctx.session.pendingPermissionAction = `omni-${params[1]}`;
@@ -3251,6 +3241,16 @@ Reply directly to a WhatsApp sticker with ${H.code(`${macroConfig.prefix || ''}s
       );
       return;
     }
+    if (sub === 'globalsudo' && (params[1] === 'add' || params[1] === 'rm')) {
+      ctx.session.awaitingPermissionInput = true;
+      ctx.session.pendingPermissionAction = `gs-${params[1]}`;
+      await ctx.editMessageText(
+        card('Global Sudo', 'G', [['Action', params[1] === 'add' ? 'Add number' : 'Remove number']], `Send the WhatsApp number to ${params[1] === 'add' ? 'grant' : 'revoke'} Global Sudo — applies to every session you pair.`),
+        { parse_mode: 'HTML', reply_markup: backKeyboard('settings:globalsudo') }
+      ).catch(() => {});
+      return;
+    }
+    if (sub === 'globalsudo') { await handleGlobalSudoPanel(ctx); return; }
     if (sub === 'disabled') {
       await ctx.answerCbQuery('This option is coming soon', { show_alert: true }).catch(() => {});
       return;
