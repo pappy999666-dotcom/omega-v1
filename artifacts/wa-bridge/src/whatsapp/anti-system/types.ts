@@ -4,6 +4,12 @@
 
 export type AntiAction = 'kick' | 'warn' | 'delete';
 
+/**
+ * Who an anti module is allowed to enforce against.
+ * Every newly-added module must declare a scope in the central policy map.
+ */
+export type AntiTargetScope = 'members' | 'admins' | 'both';
+
 // ── Security Permission Levels ─────────────────────────────
 //
 // Still used by other moderation modules (AntiLink, AntiSpam, etc.).
@@ -24,14 +30,13 @@ export type PermissionLevel =
 //
 // Determines WHICH participants AntiPromote/AntiDemote protects.
 //
-//   protected (default)
+//   protected
 //     Only the bot is a protected target.
 //     AntiDemote: fires only when the bot is demoted.
-//     AntiPromote: fires for any unauthorized promotion (to admin)
-//                  EXCEPT promoting the bot (already admin — ignored).
+//     AntiPromote: no-op for ordinary promotions.
 //
-//   admins
-//     Every administrator is a protected target.
+//   admins (default for AntiPromote / AntiDemote)
+//     Every administrator-targeted change is protected.
 //     AntiDemote: fires when ANY admin is demoted.
 //     AntiPromote: fires when ANY member is promoted to admin.
 //
@@ -235,7 +240,7 @@ export interface AntiWordsConfig extends AntiModuleConfig {
  */
 export interface AntiPromoteConfig extends AntiModuleConfig {
   mode: GroupSecurityMode;
-  targetMode: TargetMode;  // default: 'protected'
+  targetMode: TargetMode;  // default: 'admins' for admin protection modules
 }
 
 /**
@@ -249,7 +254,7 @@ export interface AntiPromoteConfig extends AntiModuleConfig {
  */
 export interface AntiDemoteConfig extends AntiModuleConfig {
   mode: GroupSecurityMode;
-  targetMode: TargetMode;  // default: 'protected'
+  targetMode: TargetMode;  // default: 'admins' for admin protection modules
   /** @deprecated kept for migration; handled by legacy compat layer */
   legacyMode?: AntiDemoteMode;
 }

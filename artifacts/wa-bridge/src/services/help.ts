@@ -69,10 +69,9 @@ export function generateWhatsAppHelp(prefix: string, isGroup: boolean, commandNa
     }
   }
 
-  // Registry-driven paginated help (page 1 by default). The full command
-  // list is never dumped in one message — each page carries 5-7 commands
-  // with usage, permissions and the premium flag.
-  return helpPageText(prefix, 1, isGroup ? 'group' : 'main', []).text;
+  // Registry-driven plain-text help. The full command list is paginated;
+  // navigation is done by sending `.help 2`, `.help 3`, and so on.
+  return helpPageText(prefix, 1, 'all', []).text;
 }
 
 /** Paginated help page n — used by .help <n> and the native-flow Help buttons. */
@@ -82,5 +81,5 @@ export function generateWhatsAppHelpPage(
   page: number,
   knownCommands: readonly string[] = []
 ): { text: string; totalPages: number } {
-  return helpPageText(prefix, page, isGroup ? 'group' : 'main', knownCommands);
+  return helpPageText(prefix, page, 'all', knownCommands);
 }

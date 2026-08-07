@@ -10,8 +10,8 @@
 //  • handleParticipantUpdate no longer returns early when there
 //    is no `author`, so Welcome/Goodbye always fire on add/remove.
 //  • AutoBlock: per-group toggle that blocks new joiners.
-//  • Welcome/Goodbye: per-group isolated and default OFF — they
-//    only fire after the admin explicitly enables them.
+//  • Welcome/Goodbye: per-group isolated and default OFF; enabled groups
+//    use the branded templates unless customised.
 // ============================================================
 
 import type { BridgeWASocket as WASocket, WebMessageInfo } from '../baileys-types.js';
@@ -27,6 +27,7 @@ import { resolveIdentity, profilePicBuffer } from '../utils/identity.js';
 import {
   fetchGroupMeta,
   isProtectedJid,
+  isAdminJid,
   bestRealJid,
   bustGroupMetaCache,
   patchGroupMetaCache,
@@ -50,7 +51,7 @@ import { messageContainsBlockedWord } from './modules/anti-words.js';
 import { messageIsPoll } from './modules/anti-poll.js';
 import { messageIsForwarded } from './modules/anti-forward.js';
 import { messageIsFromChannel } from './modules/anti-channel.js';
-import type { AntiModuleConfig } from './types.js';
+import type { AntiModuleConfig, AntiTargetScope } from './types.js';
 
 type ModuleKey =
   | 'antilink' | 'antibot' | 'antispam' | 'antipic' | 'antivid' | 'antiaud'
@@ -58,9 +59,51 @@ type ModuleKey =
   | 'antinsfw' | 'antigroupmention' | 'antigm' | 'antiwords' | 'antipoll'
   | 'antiforward' | 'antichannel' | 'antigstatus';
 
+/**
+ * Central target policy for message anti modules. Keep this map exhaustive:
+ * adding a ModuleKey without a declared scope must fail typechecking.
+ */
+export const ANTI_TARGET_SCOPE: Readonly<Record<ModuleKey, AntiTargetScope>> = {
+  antilink: 'members',
+  antibot: 'members',
+  antispam: 'members',
+  antipic: 'members',
+  antivid: 'members',
+  antiaud: 'members',
+  antivn: 'members',
+  antitxt: 'members',
+  antiemoji: 'members',
+  antisticker: 'members',
+  antigroupcall: 'members',
+  antinsfw: 'members',
+  antigroupmention: 'members',
+  antigm: 'members',
+  antiwords: 'members',
+  antipoll: 'members',
+  antiforward: 'members',
+  antichannel: 'members',
+  antigstatus: 'members',
+};
+
+export function antiTargetScope(moduleKey: ModuleKey): AntiTargetScope {
+  return ANTI_TARGET_SCOPE[moduleKey];
+}
+
 /** Check if sender is in a module's permit list */
 function isPermitted(moduleConfig: AntiModuleConfig, senderNumber: string): boolean {
   return moduleConfig.permitList.some((n) => normalizeWhatsAppNumber(n) === senderNumber);
+}
+
+/** Central member/admin targeting gate used by every message anti module. */
+function isModuleTargetAllowed(
+  moduleKey: ModuleKey,
+  meta: Awaited<ReturnType<typeof fetchGroupMeta>>,
+  senderJid: string
+): boolean {
+  if (!meta) return false;
+  const scope = antiTargetScope(moduleKey);
+  if (scope === 'members' && isAdminJid(meta.participants, senderJid)) return false;
+  return true;
 }
 
 /**
@@ -141,12 +184,17 @@ export async function runAntiChecks(
   ).catch(() => null);
 
   // ── Protected-participant guard ──────────────────────────────────────
-  // Never apply any anti-module to admins, the bot itself, sudo or omni owners.
-  if (meta) {
-    if (isProtectedJid(meta, senderJid, config?.sudoNumbers ?? [])) {
-      logger.debug('[AntiSystem] Skipping protected participant', { senderJid, groupJid });
-      return false;
-    }
+  // Fail closed when metadata is unavailable: without a participant role we
+  // cannot prove that a sender is an ordinary member.
+  if (!meta) {
+    logger.warn('[AntiSystem] Skipping checks because group metadata is unavailable', { senderJid, groupJid });
+    return false;
+  }
+  // Normal message anti modules target members only. The bot, admins, sudo,
+  // and configured owners are protected centrally before any module runs.
+  if (isProtectedJid(meta, senderJid, config?.sudoNumbers ?? [])) {
+    logger.debug('[AntiSystem] Skipping protected participant', { senderJid, groupJid });
+    return false;
   }
 
   // ── BANNED-MEMBER ENFORCEMENT (local restriction) ────────────────────
@@ -208,7 +256,7 @@ export async function runAntiChecks(
     || Boolean((rawAny.extendedTextMessage as any)?.contextInfo?.isGroupStatus);
   if (isGroupStatusPost) {
     const gs = gc.antigstatus;
-    if (gs?.enabled && !isPermitted(gs, senderNumber)) {
+    if (gs?.enabled && isModuleTargetAllowed('antigstatus', meta, senderJid) && !isPermitted(gs, senderNumber)) {
       logger.info('[AntiGStatus] Group status post flagged', { sessionId, groupJid, senderNumber });
       await triggerViolation(
         socket, msg, sessionId, telegramId, groupJid, senderJid, senderNumber,
@@ -241,6 +289,10 @@ export async function runAntiChecks(
         logger.debug(`[AntiSystem] ${name} skipped (disabled)`, { sessionId, groupJid });
         return;
       }
+      if (!isModuleTargetAllowed(key, meta, senderJid)) {
+        logger.debug(`[AntiSystem] ${name} skipped (target policy)`, { sessionId, groupJid, senderJid, scope: antiTargetScope(key) });
+        return;
+      }
       if (isPermitted(mod, senderNumber)) {
         logger.debug(`[AntiSystem] ${name} skipped (permitted)`, { sessionId, groupJid, senderNumber });
         return;
@@ -264,7 +316,7 @@ export async function runAntiChecks(
   // ── AntiSpam (rolling window) ─────────────────────────────
   try {
     const spamCfg = gc.antispam;
-    if (spamCfg?.enabled && !isPermitted(spamCfg, senderNumber)) {
+    if (spamCfg?.enabled && isModuleTargetAllowed('antispam', meta, senderJid) && !isPermitted(spamCfg, senderNumber)) {
       const count = recordSpamMessage(sessionId, groupJid, senderNumber, spamCfg.windowSeconds);
       logger.debug('[AntiSystem] AntiSpam window', { sessionId, groupJid, senderNumber, count, limit: spamCfg.messageLimit, windowSeconds: spamCfg.windowSeconds });
       if (count >= spamCfg.messageLimit) {
@@ -323,7 +375,7 @@ export async function runAntiChecks(
   // ── AntiWords ────────────────────────────────────────────
   try {
     const wordsCfg = gc.antiwords;
-    if (wordsCfg?.enabled && !isPermitted(wordsCfg, senderNumber)) {
+    if (wordsCfg?.enabled && isModuleTargetAllowed('antiwords', meta, senderJid) && !isPermitted(wordsCfg, senderNumber)) {
       const matched = messageContainsBlockedWord(msg, wordsCfg.words);
       if (matched) {
         triggered = true;
@@ -336,7 +388,7 @@ export async function runAntiChecks(
 
   // ── AntiNSFW (async — runs separately to avoid blocking sync checks) ─
   const nsfwCfg = gc.antinsfw;
-  if (nsfwCfg?.enabled && !isPermitted(nsfwCfg, senderNumber)) {
+  if (nsfwCfg?.enabled && isModuleTargetAllowed('antinsfw', meta, senderJid) && !isPermitted(nsfwCfg, senderNumber)) {
     triggered = true; // Mark as potentially triggered; actual violation only if detected
     violations.push(
       messageIsNSFW(socket, msg).then((isNsfw) => {
@@ -382,16 +434,28 @@ function extractIncomingText(msg: WebMessageInfo): string {
 // the event must NEVER silently skip because a template is empty.
 
 export const DEFAULT_WELCOME_TEMPLATE =
-  `👋 Welcome @mention!\n\n` +
-  `You have joined *&gcname*.\n` +
-  `Members: &membercount • Admins: &admincount\n` +
-  `Read the description (&desc) and enjoy the group.\n` +
-  `— &date &time`;
+  `╭─〔 ✿ Welcome ✿ 〕─╮\n\n` +
+  `♡ Hello, @mention\n\n` +
+  `✦ &gcname\n` +
+  `👥 &membercount • 👑 &admincount\n` +
+  `📅 &date • 🕒 &time\n\n` +
+  `⌜ 🌸 Intro ⌟\n` +
+  `&desc\n` +
+  `&pp\n\n` +
+  `⋆｡ Welcome to the family ⋆｡\n\n` +
+  `╰─ 𝕻𝕬𝕻𝕻𝖄 ×͜× ─╯`;
 
 export const DEFAULT_GOODBYE_TEMPLATE =
-  `👋 @mention has left the group.\n` +
-  `*&gcname* now has &membercount members.\n` +
-  `— &date &time`;
+  `╭─〔 ☾ Farewell ☽ 〕─╮\n\n` +
+  `♡ Goodbye, @mention\n\n` +
+  `✦ Left **&gcname**\n` +
+  `👥 &membercount • 👑 &admincount\n` +
+  `📅 &date • 🕒 &time\n\n` +
+  `⌜ 🌸 Memories ⌟\n` +
+  `&desc\n` +
+  `&pp\n\n` +
+  `⋆｡ Thanks for being part of us ⋆｡\n\n` +
+  `╰─ 𝕻𝕬𝕻𝕻𝖄 ×͜× ─╯`;
 
 // ── Group Participant Event Handler ───────────────────────
 
@@ -413,8 +477,8 @@ export interface ParticipantUpdateEvent {
  *
  * NOTE: `author` is NOT required for Welcome/Goodbye — those fire on
  *   every add/remove regardless of whether an admin initiated it.
- *   Both are per-group isolated and DEFAULT OFF: they only fire after
- *   the admin explicitly enables them (.welcome on / .setwelcome).
+ *   Both are per-group isolated and DEFAULT OFF; enabling them with
+ *   .welcome on / .setwelcome or .goodbye on / .setgoodbye uses the branded defaults.
  */
 export async function handleParticipantUpdate(
   socket: WASocket,
@@ -465,8 +529,8 @@ export async function handleParticipantUpdate(
 
   // ── Welcome Message ──────────────────────────────────────
   if (action === 'add') {
-    // Welcome messages — per-group isolated, default OFF. They only fire
-    // after the admin explicitly enables them (.welcome on / .setwelcome).
+    // Welcome messages are per-group isolated and default OFF. An enabled
+    // group uses a custom template or the branded default.
     // A missing custom template falls back to the built-in default so an
     // enabled-but-empty config never silently drops the event.
     const eventConfig = loadGroupEventConfig(telegramId, sessionId, groupJid);
@@ -571,7 +635,7 @@ export async function handleParticipantUpdate(
     const goodbyeTemplate =
       eventConfig.goodbyeMessage?.trim() || DEFAULT_GOODBYE_TEMPLATE;
 
-    // Per-group isolated, default OFF — same policy as Welcome.
+    // Per-group isolated and default OFF, matching Welcome.
     if (eventConfig.goodbyeEnabled === true) {
       let gcName = groupJid.split('@')[0] ?? 'Group';
       // Use the pre-remove snapshot captured above so LID resolution can still

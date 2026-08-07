@@ -162,33 +162,54 @@ export function getSelfJid(
 
 // ── Media helpers ─────────────────────────────────────────────
 
-const VIEW_ONCE_KEYS = ['viewOnceMessage', 'viewOnceMessageV2', 'viewOnceMessageV2Extension'] as const;
+const VIEW_ONCE_KEYS = [
+  'viewOnceMessage',
+  'viewOnceMessageV2',
+  'viewOnceMessageV2Extension',
+] as const;
 
+/**
+ * Unwrap the message containers used by different WhatsApp clients/forks.
+ * View-once can arrive under ephemeral or document-caption containers, and
+ * some clients remove the wrapper while retaining `media.viewOnce = true`.
+ */
 function unwrap(raw: unknown): { inner: any; viewOnce: boolean } {
-  let r: any = (raw ?? {}) as Record<string, any>;
+  let current: any = raw ?? {};
   let viewOnce = false;
-  // Descend through every supported wrapper (view-once V1 / V2 / V2Extension
-  // + ephemeral) so nested or combined wrappers always resolve to the real
-  // content message.
-  for (let i = 0; i < 8; i++) {
-    if (!r || typeof r !== 'object') break;
-    const vo = VIEW_ONCE_KEYS.find((k) => Boolean(r[k]));
-    if (vo) {
+  const seen = new Set<object>();
+
+  for (let i = 0; i < 12; i++) {
+    if (!current || typeof current !== 'object') break;
+    if (seen.has(current)) break;
+    seen.add(current);
+
+    const viewOnceKey = VIEW_ONCE_KEYS.find((key) => current[key]);
+    if (viewOnceKey) {
       viewOnce = true;
-      r = r[vo]?.message ?? r[vo];
+      current = current[viewOnceKey]?.message ?? current[viewOnceKey];
       continue;
     }
-    if (r.ephemeralMessage?.message) {
-      r = r.ephemeralMessage.message;
+
+    const nested = current.ephemeralMessage?.message
+      ?? current.documentWithCaptionMessage?.message
+      ?? current.deviceSentMessage?.message
+      ?? current.editedMessage?.message;
+    if (nested) {
+      current = nested;
       continue;
     }
     break;
   }
-  // Some clients strip the view-once wrapper inside quotedMessage but keep
-  // the media flagged viewOnce:true — treat that as view-once too.
-  const mediaNode = r?.imageMessage ?? r?.videoMessage ?? r?.audioMessage;
-  if (!viewOnce && mediaNode && mediaNode.viewOnce === true) viewOnce = true;
-  return { inner: r, viewOnce };
+
+  // Wrapper-stripped payloads are common in quoted replies. Check every
+  // supported media node, not just image/video, for the retained flag.
+  const mediaNode = current?.imageMessage
+    ?? current?.videoMessage
+    ?? current?.audioMessage
+    ?? current?.stickerMessage
+    ?? current?.documentMessage;
+  if (mediaNode?.viewOnce === true || current?.viewOnce === true) viewOnce = true;
+  return { inner: current, viewOnce };
 }
 
 /**
@@ -243,7 +264,11 @@ export async function recoverMedia(
           ? { type: 'sticker' as const, n: inner.stickerMessage }
           : inner?.documentMessage
             ? { type: 'document' as const, n: inner.documentMessage }
-            : null;
+            : inner?.documentWithCaptionMessage?.message?.imageMessage
+              ? { type: 'image' as const, n: inner.documentWithCaptionMessage.message.imageMessage }
+              : inner?.documentWithCaptionMessage?.message?.videoMessage
+                ? { type: 'video' as const, n: inner.documentWithCaptionMessage.message.videoMessage }
+                : null;
   if (!node) return null;
 
   const buffer = await downloadMedia(socket, source);
@@ -272,14 +297,27 @@ export function isViewOnceMessage(msg: WebMessageInfo): boolean {
 }
 
 function contextInfoOf(message: unknown): any {
-  const raw = (message ?? {}) as Record<string, any>;
-  return raw.extendedTextMessage?.contextInfo
-    ?? raw.imageMessage?.contextInfo
-    ?? raw.videoMessage?.contextInfo
-    ?? (raw.stickerMessage as any)?.contextInfo
-    ?? (raw as any).audioMessage?.contextInfo
-    ?? (raw.documentMessage as any)?.contextInfo
-    ?? null;
+  let current: any = message ?? {};
+  const seen = new Set<object>();
+  for (let i = 0; i < 12; i++) {
+    if (!current || typeof current !== 'object') return null;
+    if (seen.has(current)) return null;
+    seen.add(current);
+    const direct = current.extendedTextMessage?.contextInfo
+      ?? current.imageMessage?.contextInfo
+      ?? current.videoMessage?.contextInfo
+      ?? current.audioMessage?.contextInfo
+      ?? current.stickerMessage?.contextInfo
+      ?? current.documentMessage?.contextInfo;
+    if (direct) return direct;
+    current = current.viewOnceMessage?.message
+      ?? current.viewOnceMessageV2?.message
+      ?? current.viewOnceMessageV2Extension?.message
+      ?? current.ephemeralMessage?.message
+      ?? current.documentWithCaptionMessage?.message
+      ?? null;
+  }
+  return null;
 }
 
 export function quotedMessageOf(msg: WebMessageInfo): any {
@@ -364,9 +402,9 @@ export async function cmdViewOnce(
     if (!target) return errorCard('VIEW ONCE', 'No self chat found for this session.');
     try {
       await socket.sendMessage(target, mediaContent(media, media.caption ?? '') as any);
-      return toSelf
-        ? successCard('VIEW ONCE SAVED', 'Media recovered and sent to your Saved Messages.', [['Type', media.type]])
-        : successCard('VIEW ONCE RECOVERED', 'Media sent as a normal message (view-once removed).', [['Type', media.type]]);
+      // The recovered media is the response. Do not send a second success card.
+      // This keeps .vv/.vvdm silent after delivery in both groups and DMs.
+      return '';
     } catch (err) {
       return errorCard('VIEW ONCE', `Send failed: ${String(err).slice(0, 120)}`);
     }
@@ -705,37 +743,53 @@ export async function cmdPStatus(
   }
 
   try {
-    let res: unknown;
-    try {
-      res = await socket.sendMessage('status@broadcast', content as any, { statusJidList } as any);
-    } catch (err) {
-      // Retry with ONLY the session's own JID if the fork still rejects the
-      // list (fresh account with zero tracked contacts). Never swallow real
-      // send failures.
-      if (!String(err).includes('statusJidList')) throw err;
-      const self = getSelfJid(socket, telegramId, sessionId);
-      if (!self) throw err;
-      res = await socket.sendMessage('status@broadcast', content as any, { statusJidList: [self] } as any);
+    const self = getSelfJid(socket, telegramId, sessionId);
+    let res: unknown = null;
+    let lastError: unknown = null;
+    const attempts: string[][] = [statusJidList];
+    // The self-only list is the safest fallback for forks that reject contact
+    // recipients or require the account owner to be present explicitly.
+    if (self && !statusJidList.every((jid) => jid === self)) attempts.push([self]);
+
+    for (const recipients of attempts) {
+      try {
+        const candidate = await socket.sendMessage('status@broadcast', content as any, {
+          statusJidList: recipients,
+        } as any);
+        const keyId = (candidate as unknown as { key?: { id?: string } })?.key?.id;
+        // A send without a message key is not confirmed. Do not report success.
+        if (!keyId) {
+          lastError = new Error('WhatsApp returned no status message key');
+          continue;
+        }
+        res = candidate;
+        break;
+      } catch (err) {
+        lastError = err;
+      }
     }
+
     const keyId = (res as unknown as { key?: { id?: string } })?.key?.id;
-    if (keyId) {
-      trackStatus(
-        sessionId,
-        keyId,
-        kind === 'text'
-          ? { kind, text, ts: Date.now() }
-          : {
-              kind,
-              buffer: media?.buffer,
-              mimeType: media?.mimeType,
-              caption: content.caption as string | undefined,
-              fileName: media?.fileName,
-              ptt: media?.ptt,
-              gifPlayback: media?.gifPlayback,
-              ts: Date.now(),
-            }
-      );
+    if (!keyId) {
+      throw lastError instanceof Error ? lastError : new Error(String(lastError ?? 'Status send was not acknowledged'));
     }
+
+    trackStatus(
+      sessionId,
+      keyId,
+      kind === 'text'
+        ? { kind, text, ts: Date.now() }
+        : {
+            kind,
+            buffer: media?.buffer,
+            mimeType: media?.mimeType,
+            caption: content.caption as string | undefined,
+            fileName: media?.fileName,
+            ptt: media?.ptt,
+            gifPlayback: media?.gifPlayback,
+            ts: Date.now(),
+          }
+    );
     return successCard('PERSONAL STATUS', `Status posted${kind === 'text' ? '' : ` (${kind})`}.`);
   } catch (err) {
     return errorCard('PERSONAL STATUS', `Post failed: ${String(err).slice(0, 120)}`);

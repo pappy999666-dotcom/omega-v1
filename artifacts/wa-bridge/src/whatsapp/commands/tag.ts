@@ -63,6 +63,9 @@ export async function cmdTag(
   if (isFrozen(sessionId)) {
     return { success: false, pinged: 0, error: 'Session frozen' };
   }
+  if (!text.trim() && !opts.mediaBuffer && !opts.sourceExt) {
+    return { success: false, pinged: 0, error: 'A real text or media payload is required' };
+  }
 
   const participants = await getParticipants(socket, groupJid);
 
@@ -171,6 +174,9 @@ export async function cmdMTag(
 ): Promise<{ success: boolean; pinged: number; messages: number; error?: string }> {
   if (isFrozen(sessionId)) {
     return { success: false, pinged: 0, messages: 0, error: 'Session frozen' };
+  }
+  if (!text.trim() && !opts.mediaBuffer && !opts.sourceExt) {
+    return { success: false, pinged: 0, messages: 0, error: 'A real text or media payload is required' };
   }
 
   const participants = await getParticipants(socket, groupJid);

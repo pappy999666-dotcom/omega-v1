@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { quotedSourceOf, cmdViewOnce, cmdPStatus } from '../src/whatsapp/personal-engine.js';
+import { quotedSourceOf, cmdViewOnce, cmdPStatus, isViewOnceMessage } from '../src/whatsapp/personal-engine.js';
+import { DEFAULT_WELCOME_TEMPLATE, DEFAULT_GOODBYE_TEMPLATE } from '../src/whatsapp/anti-system/index.js';
 import {
   rememberStatusContact,
   getStatusJidList,
@@ -108,7 +109,7 @@ test('cmdPStatus recovers quoted media via the quoted key (unreachable url → c
   const out = await cmdPStatus(socket, 'tg-1', 'sess-1', msg, '', '.');
   // The quoted media WAS detected — so we must NOT get the "Reply to media" fallback.
   assert.ok(!out.includes('Reply to media or send text'), 'quote media was detected: ' + out);
-  assert.ok(out.includes('PERSONAL STATUS'), out);
+  assert.match(out, /𝗣 𝗘 𝗥 𝗦 𝗢 𝗡 𝗔 𝗟  𝗦 𝗧 𝗔 𝗧 𝗨 𝗦/);
   assert.ok(out.includes('Could not download the replied media'), 'explicit unrecoverable-media error: ' + out);
 });
 
@@ -137,7 +138,7 @@ test('cmdViewOnce detects a quote whose view-once WRAPPER was stripped (media fl
   };
   const out = await cmdViewOnce(socket, 'sess-1', 'tg-1', '123@g.us', msg, false, '.');
   assert.ok(!out.includes('Reply to a View Once image or video'), 'stripped view-once detected: ' + out);
-  assert.ok(out.includes('VIEW ONCE'), out);
+  assert.match(out, /𝗩 𝗜 𝗘 𝗪  𝗢 𝗡 𝗖 𝗘/);
 });
 
 test('cmdViewOnce detects nested view-once wrappers (V2Extension > V2 > content)', async () => {
@@ -170,7 +171,41 @@ test('cmdViewOnce detects nested view-once wrappers (V2Extension > V2 > content)
   };
   const out = await cmdViewOnce(socket, 'sess-1', 'tg-1', '123@g.us', msg, false, '.');
   assert.ok(!out.includes('Reply to a View Once image or video'), 'nested view-once detected: ' + out);
-  assert.ok(out.includes('VIEW ONCE'), out);
+  assert.match(out, /𝗩 𝗜 𝗘 𝗪  𝗢 𝗡 𝗖 𝗘/);
+});
+
+test('isViewOnceMessage detects ephemeral and document-caption wrappers', () => {
+  const ephemeral: any = {
+    key: { id: 'ephemeral' },
+    message: {
+      ephemeralMessage: {
+        message: {
+          viewOnceMessageV2: {
+            message: { imageMessage: { viewOnce: true } },
+          },
+        },
+      },
+    },
+  };
+  const documentCaption: any = {
+    key: { id: 'document-caption' },
+    message: {
+      documentWithCaptionMessage: {
+        message: { videoMessage: { viewOnce: true } },
+      },
+    },
+  };
+  assert.equal(isViewOnceMessage(ephemeral), true);
+  assert.equal(isViewOnceMessage(documentCaption), true);
+});
+
+test('branded welcome and goodbye defaults include real event variables', () => {
+  assert.match(DEFAULT_WELCOME_TEMPLATE, /Hello, @mention/);
+  assert.match(DEFAULT_WELCOME_TEMPLATE, /&gcname/);
+  assert.match(DEFAULT_WELCOME_TEMPLATE, /&pp/);
+  assert.match(DEFAULT_GOODBYE_TEMPLATE, /Goodbye, @mention/);
+  assert.match(DEFAULT_GOODBYE_TEMPLATE, /&gcname/);
+  assert.match(DEFAULT_GOODBYE_TEMPLATE, /&pp/);
 });
 
 test('cmdViewOnce reaches the quoted view-once path', async () => {
@@ -200,5 +235,5 @@ test('cmdViewOnce reaches the quoted view-once path', async () => {
   const out = await cmdViewOnce(socket, 'sess-1', 'tg-1', '123@g.us', msg, false, '.');
   // The quoted view-once message was detected (not "Reply to a View Once").
   assert.ok(!out.includes('Reply to a View Once image or video'), 'quoted view-once detected: ' + out);
-  assert.ok(out.includes('VIEW ONCE'), out);
+  assert.match(out, /𝗩 𝗜 𝗘 𝗪  𝗢 𝗡 𝗖 𝗘/);
 });

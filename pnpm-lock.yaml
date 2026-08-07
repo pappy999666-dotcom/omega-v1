@@ -403,8 +403,8 @@ importers:
   artifacts/wa-bridge:
     dependencies:
       '@crysnovax/baileys':
-        specifier: 2.7.0
-        version: 2.7.0(link-preview-js@3.2.0)(sharp@0.34.5)
+        specifier: ^2.7.1
+        version: 2.7.1(link-preview-js@3.2.0)(sharp@0.34.5)
       '@hapi/boom':
         specifier: ^10.0.1
         version: 10.0.1
@@ -416,7 +416,7 @@ importers:
         version: 7.0.1
       axios:
         specifier: ^1.9.0
-        version: 1.18.1(debug@4.4.3)
+        version: 1.18.1
       bullmq:
         specifier: ^5.56.3
         version: 5.80.11
@@ -690,8 +690,8 @@ packages:
     peerDependencies:
       commander: ~15.0.0
 
-  '@crysnovax/baileys@2.7.0':
-    resolution: {integrity: sha512-awJBK3PnK9qwxRT11hAmH1+8Ijcjt/rR4GNUYpeWvvquX570p6tD7fjEpffkfrMBhOi+JNh6Z+gLA+c1kVRaKw==}
+  '@crysnovax/baileys@2.7.1':
+    resolution: {integrity: sha512-sYlrcIbnf27xQJi8wcpDsaVnWsdZesSGt1j1ZVIFLE742raqCQFjsOQtkCg4r3h1c4YgeffIjGaIukwNUM5tCQ==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       '@napi-rs/image': ~1.12.0
@@ -4343,7 +4343,7 @@ snapshots:
     dependencies:
       commander: 15.0.0
 
-  '@crysnovax/baileys@2.7.0(link-preview-js@3.2.0)(sharp@0.34.5)':
+  '@crysnovax/baileys@2.7.1(link-preview-js@3.2.0)(sharp@0.34.5)':
     dependencies:
       '@adiwajshing/keyed-db': 0.2.4
       '@cacheable/node-cache': 1.7.6
@@ -5763,9 +5763,9 @@ snapshots:
 
   atomic-sleep@1.0.0: {}
 
-  axios@1.18.1(debug@4.4.3):
+  axios@1.18.1:
     dependencies:
-      follow-redirects: 1.16.0(debug@4.4.3)
+      follow-redirects: 1.16.0
       form-data: 4.0.6
       https-proxy-agent: 5.0.1
       proxy-from-env: 2.1.0
@@ -6428,9 +6428,7 @@ snapshots:
 
   fn.name@1.1.0: {}
 
-  follow-redirects@1.16.0(debug@4.4.3):
-    optionalDependencies:
-      debug: 4.4.3
+  follow-redirects@1.16.0: {}
 
   foreground-child@3.3.1:
     dependencies:

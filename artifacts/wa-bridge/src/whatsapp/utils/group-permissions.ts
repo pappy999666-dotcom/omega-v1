@@ -93,31 +93,29 @@ export function patchGroupMetaCache(
   const botNum = numericId(meta.botJid);
 
   if (action === 'promote') {
-    const promoteNums = new Set(participants.map(numericId));
     for (const p of meta.participants) {
-      if (promoteNums.has(numericId(p.id))) p.admin = 'admin';
+      if (participants.some((jid) => participantMatchesIdentity(p, jid))) p.admin = 'admin';
     }
-    if (botNum && promoteNums.has(botNum)) meta.botIsAdmin = true;
+    const botParticipant = meta.participants.find((p) => participantMatchesIdentity(p, meta.botJid));
+    if (botParticipant) meta.botIsAdmin = botParticipant.admin === 'admin' || botParticipant.admin === 'superadmin';
 
   } else if (action === 'demote') {
-    const demoteNums = new Set(participants.map(numericId));
     for (const p of meta.participants) {
-      if (demoteNums.has(numericId(p.id))) p.admin = null;
+      if (participants.some((jid) => participantMatchesIdentity(p, jid))) p.admin = null;
     }
-    if (botNum && demoteNums.has(botNum)) meta.botIsAdmin = false;
+    const botParticipant = meta.participants.find((p) => participantMatchesIdentity(p, meta.botJid));
+    if (botParticipant) meta.botIsAdmin = botParticipant.admin === 'admin' || botParticipant.admin === 'superadmin';
 
   } else if (action === 'add') {
-    const existingNums = new Set(meta.participants.map((p) => numericId(p.id)));
     for (const jid of participants) {
-      if (!existingNums.has(numericId(jid))) {
+      if (!meta.participants.some((p) => participantMatchesIdentity(p, jid))) {
         meta.participants.push({ id: jid, admin: null });
       }
     }
 
   } else if (action === 'remove') {
-    const removeNums = new Set(participants.map(numericId));
     meta.participants = meta.participants.filter(
-      (p) => !removeNums.has(numericId(p.id))
+      (p) => !participants.some((jid) => participantMatchesIdentity(p, jid))
     );
   }
 
@@ -232,21 +230,55 @@ export async function fetchGroupMeta(
 
 // ── Permission checks ──────────────────────────────────────
 
+/** Normalize a phone/JID value without ever treating LID digits as a phone. */
+function phoneNumberOf(value: string | null | undefined): string {
+  if (!value) return '';
+  const normalized = stripDeviceSuffix(String(value));
+  if (normalized.endsWith('@lid')) return '';
+  return normalized.replace(/\D/g, '');
+}
+
+/** Compare a participant row with a canonical phone or raw LID identity. */
+function participantMatchesIdentity(p: GroupParticipant, jid: string): boolean {
+  const participantJid = stripDeviceSuffix(p.id);
+  const targetJid = stripDeviceSuffix(jid);
+  if (participantJid === targetJid) return true;
+
+  const targetPhone = phoneNumberOf(targetJid);
+  if (!targetPhone) return false;
+  return phoneNumberOf(participantJid) === targetPhone || phoneNumberOf(p.phoneNumber) === targetPhone;
+}
+
 /**
- * Check whether a JID (real, LID, or device-suffixed) belongs to an admin
- * by comparing the numeric user-part against the participant list.
+ * Check whether a JID (real, LID, or device-suffixed) belongs to an admin.
+ *
+ * A WhatsApp participant may be represented by an @lid id while exposing the
+ * real phone number separately in `phoneNumber`. Never compare LID digits with
+ * phone digits: they are different identity spaces. Match exact JIDs first,
+ * then normal phone identities, then the participant's explicit phoneNumber.
  */
 export function isAdminJid(
   participants: GroupParticipant[],
   jid: string
 ): boolean {
-  const targetNum = numericId(jid);
-  if (!targetNum) return false;
-  return participants.some(
-    (p) =>
-      numericId(p.id) === targetNum &&
-      (p.admin === 'admin' || p.admin === 'superadmin')
-  );
+  const targetJid = stripDeviceSuffix(jid);
+  const targetPhone = phoneNumberOf(targetJid);
+  if (!targetJid && !targetPhone) return false;
+
+  return participants.some((p) => {
+    if (p.admin !== 'admin' && p.admin !== 'superadmin') return false;
+
+    const participantJid = stripDeviceSuffix(p.id);
+    if (participantJid === targetJid) return true;
+
+    // Numeric matching is safe only within the phone-JID space.
+    const participantPhone = phoneNumberOf(participantJid);
+    if (targetPhone && participantPhone && participantPhone === targetPhone) return true;
+
+    // Baileys exposes the real phone number for many @lid participant rows.
+    const declaredPhone = phoneNumberOf(p.phoneNumber);
+    return Boolean(targetPhone && declaredPhone && declaredPhone === targetPhone);
+  });
 }
 
 /**

@@ -26,9 +26,9 @@
 // funnels through this module.
 // ============================================================
 
-import fs from 'fs';
 import type { BridgeWASocket as WASocket, WebMessageInfo, IMessage } from './baileys-types.js';
 import { loadSessionConfig, loadSessionMeta } from '../services/workspace.js';
+import { resolveMenuMedia } from '../services/menu-canvas.js';
 import { PreviewManager } from '../preview-engine/index.js';
 import { ALL_COMMANDS } from './command-parser.js';
 import {
@@ -38,7 +38,6 @@ import {
   navHubButtons,
   renderNavCategoryPage,
   helpPageText,
-  helpPageButtons,
   navFor,
 } from './menu-registry.js';
 import { pingTableData } from './utils/native-rich.js';
@@ -197,25 +196,36 @@ const quickReply = (displayText: string, id: string): { name: string; buttonPara
 async function sendMenuResponse(
   ctx: InteractionContext,
   body: string,
-  navButtons?: { name: string; buttonParamsJson: string }[]
+  navButtons?: { name: string; buttonParamsJson: string }[],
+  enableButtons = true,
+  textOnly = false
 ): Promise<void> {
   const { socket, sessionId, telegramId, msg } = ctx;
   const meta = loadSessionMeta(telegramId, sessionId);
-  const media = meta?.menuMedia;
   const groupJid = msg.key.remoteJid ?? '';
   const options: any = {
     quoted: msg,
     sessionId,
     telegramId,
-    enableButtons: true, // Preserve global URL buttons on every menu page
+    enableButtons, // Plain-text help pages explicitly disable buttons.
   };
   if (navButtons?.length) options.extra = { buttons: navButtons };
-  if (media?.filePath && fs.existsSync(media.filePath)) {
-    options.media = {
-      buffer: fs.readFileSync(media.filePath),
-      type: media.type,
-      mimetype: media.mimeType,
+  if (!textOnly) {
+    const media = await resolveMenuMedia({
+      prefix: loadSessionConfig(telegramId, sessionId).prefix,
+      menuTarget: groupJid.endsWith('@g.us') ? 'group' : 'main',
+      status: 'ONLINE',
+      userName: msg.pushName || undefined,
       caption: body,
+      config: loadSessionConfig(telegramId, sessionId),
+      meta,
+      socket,
+    });
+    options.media = {
+      buffer: media.buffer,
+      type: media.type,
+      mimetype: media.mimetype,
+      caption: media.caption,
     };
   }
   await PreviewManager.send(socket as never, groupJid, body, options);
@@ -250,12 +260,12 @@ async function renderCategory(
   await sendMenuResponse(ctx, text.text, sheet.buttons);
 }
 
-/** Paginated help page: text + native Prev/Next/Home buttons. */
-async function renderHelp(ctx: InteractionContext, page: number, menuTarget: 'main' | 'group'): Promise<void> {
+/** Plain-text help page; page navigation is sent inside the text body. */
+async function renderHelp(ctx: InteractionContext, page: number, _menuTarget: 'main' | 'group'): Promise<void> {
   const { sessionId, telegramId } = ctx;
   const config = loadSessionConfig(telegramId, sessionId);
-  const res = helpPageText(config.prefix, page, menuTarget, ALL_COMMANDS);
-  await sendMenuResponse(ctx, res.text, helpPageButtons(menuTarget, page, res.totalPages));
+  const res = helpPageText(config.prefix, page, 'all', ALL_COMMANDS);
+  await sendMenuResponse(ctx, res.text, undefined, false, true);
 }
 
 /** Single-command detail card with a Back button to its category. */

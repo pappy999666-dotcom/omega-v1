@@ -7,21 +7,17 @@
 //            AntiLink, AntiSpam, AntiBot, and all future modules.
 //
 // Core principle:
-//   Being a WhatsApp admin does NOT grant exemption from enforcement.
-//   Group admin status alone must NEVER bypass security modules.
+//   Normal message anti modules protect administrators and only enforce
+//   against ordinary members. AntiPromote and AntiDemote are the explicit
+//   administrator-protection modules and enforce their configured actions
+//   for administrator-targeted changes.
 //
-//   Detection  = always (every actor, every event)
-//   Punishment = only for WA_ADMIN and NONE levels
+//   Detection  = centralized by module target scope
+//   Punishment = only after the module's target policy allows enforcement
 //
-// Permission levels (ordered highest → lowest trust):
-//   GLOBAL_OWNER      → Detect + Log; NO punishment
-//   SESSION_OWNER     → Detect + Log; NO punishment
-//   WORKSPACE_OWNER   → Detect + Log; NO punishment
-//   TRUSTED_ADMIN     → Detect + Log; NO punishment
-//   SUDO_USER         → Detect + Log; NO punishment
-//   TEMPORARY_PERMIT  → Detect + Log; NO punishment
-//   WA_ADMIN          → Detect + Log + ENFORCE
-//   NONE              → Detect + Log + ENFORCE
+// Permission levels classify actors for the dedicated admin-protection
+// engine and future module-specific policies. Normal message anti modules
+// do not use WA_ADMIN as an enforcement target.
 // ============================================================
 
 import type { BridgeWASocket as WASocket } from '../baileys-types.js';
@@ -87,10 +83,9 @@ function getTrustedAdminNumbers(sessionCfg: import('../../types/index.js').UserC
 
 // ── Core Classification ────────────────────────────────────
 //
-// Current scope: AntiPromote and AntiDemote.
-// Other moderation modules (AutoBlock, AntiLink, AntiSpam, etc.) still
-// use the legacy isProtectedJid helper, which exempts all WhatsApp admins.
-// Migrating those modules to classifyActor is a separate follow-up task.
+// AntiPromote and AntiDemote use this classifier for administrator-targeted
+// events. Normal message anti modules use the centralized member-only target
+// policy in anti-system/index.ts and do not punish WhatsApp admins.
 
 /**
  * Classify an actor by permission level and determine whether enforcement

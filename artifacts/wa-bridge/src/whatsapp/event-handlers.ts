@@ -9,7 +9,7 @@ import type { BridgeWASocket as WASocket, BaileysEventMap, IMessage, WebMessageI
 import { resolvePreviewRoute } from './preview-router.js';
 import { parseCommand, parseStickerCommand, hashSticker } from './command-parser.js';
 import { resolveTarget, resolveTargetNumbers } from './utils/resolve-target.js';
-import { normalizeParticipantUpdateJids, getContextInfoAny } from './utils/identity.js';
+import { normalizeParticipantUpdateJids, getContextInfoAny, resolveIdentity, profilePicBuffer } from './utils/identity.js';
 import { resolveMention, sanitizeMentionJids } from './utils/mention-engine.js';
 import {
   loadSessionConfig,
@@ -53,6 +53,7 @@ import {
   MENU_CATALOG,
   renderNavHub,
   navHubButtons,
+  helpPageText,
 } from './menu-registry.js';
 import { parseInteraction, routeInteraction } from './interaction-router.js';
 import { rememberStatusContact } from './utils/status-jids.js';
@@ -88,6 +89,7 @@ import {
 } from './message-store.js';
 import {
   handleAntiCommand,
+  handleAntiWordsCommand,
   handlePermitCommand,
   handleSpamlimit,
   handleAntiMsg,
@@ -128,10 +130,13 @@ import {
 } from './commands/group-moderation.js';
 import { setAutoblockConfig, loadGroupEventConfig } from '../services/group-config.js';
 import { fetchGroupMeta, resolveRealJidFromMeta, bustGroupMetaCache } from './utils/group-permissions.js';
+import { filterPendingRequestsByCountry } from './utils/join-approval.js';
+import { updateSessionProfilePicture } from './utils/profile-controls.js';
 import { parseUrlButtons } from './utils/url-buttons.js';
 import fs from 'fs';
 import path from 'path';
 import { sessionDir } from '../services/workspace.js';
+import { resolveMenuMedia } from '../services/menu-canvas.js';
 
 // Map from sessionId → telegramId (populated at init)
 const sessionOwnerMap = new Map<string, string>();
@@ -933,6 +938,9 @@ async function processMessageWithConfig(
   // messages such as warnings, welcomes and moderation notices have no
   // row structure, so tableFromCard() returns null and they stay TXT.
   const baseWhatsAppReply = async (replyText: string, opts?: { suppressPreview?: boolean }): Promise<void> => {
+    // Command handlers that already sent their own action/media return an empty
+    // string intentionally. Never create an extra blank WhatsApp bubble.
+    if (!replyText?.trim()) return;
     const mentions = await getGroupParticipants();
     
     const mode = config.responseMode;
@@ -963,7 +971,17 @@ async function processMessageWithConfig(
     });
   };
 
-  const reply = replyOverride ?? baseWhatsAppReply;
+  const reply = async (replyText: string, opts?: { suppressPreview?: boolean }): Promise<void> => {
+    // Empty command results mean "the handler already responded". This applies
+    // to moderation announcements, media recovery, and any future self-sending
+    // command, including bridge replies.
+    if (!replyText?.trim()) return;
+    if (replyOverride) {
+      await replyOverride(replyText);
+      return;
+    }
+    await baseWhatsAppReply(replyText, opts);
+  };
 
   type MediaKind = 'image' | 'video' | 'audio' | 'sticker' | 'document';
   type ExtractedMedia = { buffer: Buffer; type: MediaKind; mimeType: string; animated?: boolean; ptt?: boolean; caption?: string; fileName?: string };
@@ -1039,26 +1057,37 @@ async function processMessageWithConfig(
   const sendMenuResponse = async (
     title: string,
     body: string,
-    navButtons?: { name: string; buttonParamsJson: string }[]
+    navButtons?: { name: string; buttonParamsJson: string }[],
+    enableButtons = true,
+    textOnly = false
   ): Promise<void> => {
     const meta = loadSessionMeta(telegramId, sessionId);
-    const media = meta?.menuMedia;
     
     const options: any = {
       quoted: msg,
       sessionId,
       telegramId,
-      enableButtons: true, // Always enable global URL buttons for menu/help
+      enableButtons, // Help is text-only; menus can opt into buttons.
     };
 
     if (navButtons?.length) options.extra = { buttons: navButtons };
 
-    if (media?.filePath && fs.existsSync(media.filePath)) {
+    if (!textOnly) {
+      const media = await resolveMenuMedia({
+        prefix: config.prefix,
+        menuTarget: isGroup ? 'group' : 'main',
+        status: isFrozen(sessionId) ? 'FROZEN' : 'ONLINE',
+        userName: msg.pushName || undefined,
+        caption: body,
+        config,
+        meta,
+        socket,
+      });
       options.media = {
-        buffer: fs.readFileSync(media.filePath),
+        buffer: media.buffer,
         type: media.type,
-        mimetype: media.mimeType,
-        caption: body
+        mimetype: media.mimetype,
+        caption: media.caption,
       };
     }
 
@@ -1291,19 +1320,23 @@ async function processMessageWithConfig(
         userName: msg.pushName || undefined,
       };
 
-      if (command === 'help' && args[0] && MENU_CATALOG[args[0].toLowerCase()]) {
-        // .help <command> → detailed single-command card
-        const { generateWhatsAppHelp } = await import('../services/help.js');
-        const detail = generateWhatsAppHelp(
-          config.prefix,
-          menuTarget === 'group',
-          args[0].toLowerCase()
-        );
-        await sendMenuResponse(`HELP: ${args[0].toUpperCase()}`, detail);
-        break;
+      if (command === 'help') {
+        const requestedPage = args[0] && /^\d+$/u.test(args[0]) ? Number(args[0]) : 1;
+        if (!args[0] || /^\d+$/u.test(args[0])) {
+          const help = helpPageText(config.prefix, requestedPage, 'all', known);
+          await sendMenuResponse(`HELP ${requestedPage}`, help.text, undefined, false, true);
+          break;
+        }
+        if (MENU_CATALOG[args[0].toLowerCase()]) {
+          // .help <command> → detailed single-command card
+          const { generateWhatsAppHelp } = await import('../services/help.js');
+          const detail = generateWhatsAppHelp(config.prefix, menuTarget === 'group', args[0].toLowerCase());
+          await sendMenuResponse(`HELP: ${args[0].toUpperCase()}`, detail);
+          break;
+        }
       }
 
-      // .menu / .gmenu / bare .help → navigation hub dashboard
+      // .menu / .gmenu → navigation hub dashboard with category buttons.
       await sendMenuResponse(
         'NAVIGATION',
         renderNavHub(config.prefix, menuTarget, known, hubOpts),
@@ -1350,6 +1383,224 @@ async function processMessageWithConfig(
     }
 
     // ── Session Management ──
+    // ── Session Profile / Workspace Controls ───────────────────
+    // These mirror Telegram's per-session controls. Session switching,
+    // Join Manager, and My Groups are intentionally not duplicated here:
+    // WhatsApp already runs in the selected session and `groups` provides
+    // ordinary group discovery without another submenu.
+    case 'setname': {
+      const value = commandText();
+      if (!value) {
+        await reply(warningCard('NAME REQUIRED', `Usage: ${config.prefix}setname <display name>`));
+        break;
+      }
+      try {
+        await (socket as unknown as { updateProfileName(name: string): Promise<void> }).updateProfileName(value.trim());
+        await reply(successCard('NAME UPDATED', `WhatsApp display name set to: ${value.trim()}`));
+      } catch (err) {
+        await reply(errorCard('SET NAME FAILED', String(err)));
+      }
+      break;
+    }
+
+    case 'setbio': {
+      const value = commandText();
+      if (!value) {
+        await reply(warningCard('BIO REQUIRED', `Usage: ${config.prefix}setbio <bio text>`));
+        break;
+      }
+      try {
+        await (socket as unknown as { updateProfileStatus(bio: string): Promise<void> }).updateProfileStatus(value.trim());
+        await reply(successCard('BIO UPDATED', `WhatsApp bio set to: ${value.trim()}`));
+      } catch (err) {
+        await reply(errorCard('SET BIO FAILED', String(err)));
+      }
+      break;
+    }
+
+    case 'setpfp':
+    case 'getpfp':
+    case 'removepfp': {
+      const user = (socket as unknown as { user?: { id?: string; lid?: string } }).user;
+      const rawOwnId = user?.id ?? user?.lid ?? '';
+      const ownIdentity = await resolveIdentity(socket, rawOwnId);
+      const ownJid = ownIdentity.jid;
+      if (!ownJid || ownJid.endsWith('@lid')) {
+        await reply(errorCard('PFP FAILED', 'The connected WhatsApp identity is not available yet.'));
+        break;
+      }
+      if (command === 'setpfp') {
+        const media = await extractMedia();
+        if (!media || media.type !== 'image') {
+          await reply(warningCard('REPLY TO IMAGE', `Reply to an image with ${config.prefix}setpfp. The original image is sent in HD without bot-side cropping.`));
+          break;
+        }
+        try {
+          await updateSessionProfilePicture(socket as any, ownJid, media.buffer);
+          await reply(successCard('PROFILE PICTURE UPDATED', 'The original image bytes were sent with WhatsApp HD enabled; no bot-side crop was applied.'));
+        } catch (err) {
+          await reply(errorCard('SET PFP FAILED', String(err)));
+        }
+      } else if (command === 'getpfp') {
+        const buffer = await profilePicBuffer(socket, ownJid);
+        if (!buffer) {
+          await reply(warningCard('NO PROFILE PICTURE', 'WhatsApp did not return a profile picture for this session.'));
+          break;
+        }
+        await PreviewManager.send(socket as any, groupJid, 'PROFILE PICTURE', {
+          media: { buffer, type: 'image', mimetype: 'image/jpeg', caption: '🖼 PROFILE PICTURE' },
+          quoted: msg,
+          sessionId,
+          telegramId,
+        });
+      } else {
+        try {
+          await (socket as unknown as { removeProfilePicture(jid: string): Promise<void> }).removeProfilePicture(ownJid);
+          await reply(successCard('PROFILE PICTURE REMOVED', 'Your WhatsApp profile picture has been removed.'));
+        } catch (err) {
+          await reply(errorCard('REMOVE PFP FAILED', String(err)));
+        }
+      }
+      break;
+    }
+
+    case 'collect': {
+      const sub = args[0]?.toLowerCase();
+      const meta = loadSessionMeta(telegramId, sessionId);
+      if (!sub || !['on', 'off', 'status'].includes(sub)) {
+        await reply(asciiBox({
+          title: 'LINK COLLECTION',
+          emoji: '🔗',
+          rows: [['Status', meta?.linkCollectionEnabled ? 'Enabled' : 'Disabled'], ['Collected', String(meta?.linksCollected ?? 0)], ['Usage', `${config.prefix}collect <on|off>`]],
+          footer: 'Invite links are collected silently for this WhatsApp session and saved to the main bucket.',
+        }));
+        break;
+      }
+      if (sub !== 'status') updateSessionMeta(telegramId, sessionId, { linkCollectionEnabled: sub === 'on' });
+      const enabled = sub === 'status' ? Boolean(meta?.linkCollectionEnabled) : sub === 'on';
+      await reply(successCard('LINK COLLECTION', `${enabled ? 'Enabled' : 'Disabled'} for this WhatsApp session.`, [['Status', enabled ? 'On' : 'Off'], ['Collected', String(meta?.linksCollected ?? 0)]]));
+      break;
+    }
+
+    case 'autopromo': {
+      const sub = args[0]?.toLowerCase();
+      const { getSessionJob, addLink, removeLink, removeJob, runJobNow } = await import('../services/auto-promote.js');
+      const job = getSessionJob(telegramId, sessionId);
+      if (!sub || sub === 'status' || sub === 'list') {
+        await reply(asciiBox({
+          title: 'AUTO-PROMOTE',
+          emoji: '📅',
+          rows: job ? [['Links', String(job.links.length)], ['Days', String(job.days)], ['Ends', new Date(job.endsAt).toLocaleDateString()], ['Usage', `${config.prefix}autopromo add <invite-link> <days>`]] : [['Status', 'Not scheduled'], ['Usage', `${config.prefix}autopromo add <invite-link> <days>`]],
+          footer: job?.links.map((link, index) => `${index + 1}. ${link}`).join('\n') || 'No per-session auto-promote links scheduled.',
+        }));
+        break;
+      }
+      if (sub === 'off' || sub === 'remove') {
+        removeJob(telegramId, sessionId);
+        await reply(successCard('AUTO-PROMOTE DISABLED', 'The per-session auto-promote schedule was removed.'));
+        break;
+      }
+      if (sub === 'run') {
+        if (!job) { await reply(warningCard('NO AUTO-PROMOTE JOB', `Use ${config.prefix}autopromo add <invite-link> <days> first.`)); break; }
+        await runJobNow(telegramId, sessionId);
+        await reply(successCard('AUTO-PROMOTE STARTED', 'The current scheduled run was started.'));
+        break;
+      }
+      if (sub === 'remove-link') {
+        const index = Number(args[1]);
+        if (!Number.isInteger(index) || index < 1) { await reply(warningCard('INDEX REQUIRED', `Usage: ${config.prefix}autopromo remove-link <number>`)); break; }
+        if (!job || index > job.links.length) {
+          await reply(warningCard('INDEX NOT FOUND', `This session has ${job?.links.length ?? 0} scheduled link(s).`));
+          break;
+        }
+        removeLink(telegramId, sessionId, index - 1);
+        await reply(successCard('AUTO-PROMOTE LINK REMOVED', `Removed link #${index} from this session.`));
+        break;
+      }
+      if (sub === 'add') {
+        const link = args[1] ?? '';
+        const days = Number(args[2]);
+        if (!link || !link.includes('chat.whatsapp.com/') || !Number.isInteger(days) || days < 1 || days > 30) {
+          await reply(warningCard('INVALID AUTO-PROMOTE', `Usage: ${config.prefix}autopromo add <invite-link> <days>\nDays must be between 1 and 30.`));
+          break;
+        }
+        const created = addLink(telegramId, sessionId, link, days);
+        await reply(successCard('AUTO-PROMOTE SCHEDULED', `Link added to this session for ${days} day(s).`, [['Queue', `${created.links.length}/24`], ['Ends', new Date(created.endsAt).toLocaleDateString()]]));
+        break;
+      }
+      await reply(warningCard('AUTO-PROMOTE USAGE', `${config.prefix}autopromo add <invite-link> <days>\n${config.prefix}autopromo status\n${config.prefix}autopromo run\n${config.prefix}autopromo off`));
+      break;
+    }
+
+    case 'wainfo': {
+      const query = commandText();
+      if (!query) {
+        await reply(warningCard('TARGET REQUIRED', `Usage: ${config.prefix}wainfo <number|JID|group invite link>`));
+        break;
+      }
+      try {
+        const sock = socket as unknown as {
+          fetchStatus(...jids: string[]): Promise<Array<{ id?: string; status?: string }> | null>;
+          groupMetadata(jid: string): Promise<{ subject: string; desc?: string; participants: { id: string; admin?: string | null }[]; creation?: number }>;
+          groupGetInviteInfo(code: string): Promise<{ id: string; subject?: string; size?: number }>;
+        };
+        let targetJid = query.trim();
+        if (targetJid.includes('chat.whatsapp.com/')) {
+          const code = targetJid.split('chat.whatsapp.com/')[1]?.split(/[/?]/)[0] ?? '';
+          const invite = code ? await sock.groupGetInviteInfo(code) : null;
+          targetJid = invite?.id ?? targetJid;
+        } else if (!targetJid.includes('@')) {
+          const digits = targetJid.replace(/[^0-9]/g, '');
+          if (!digits) throw new Error('Invalid number, JID, or invite link.');
+          targetJid = `${digits}@s.whatsapp.net`;
+        }
+        const picture = await profilePicBuffer(socket, targetJid);
+        let infoText: string;
+        if (targetJid.endsWith('@g.us')) {
+          const group = await sock.groupMetadata(targetJid);
+          infoText = asciiBox({ title: 'WHATSAPP GROUP INFO', emoji: '🔍', rows: [['Name', group.subject], ['JID', targetJid], ['Members', String(group.participants.length)], ...(group.creation ? [['Created', new Date(group.creation * 1000).toLocaleDateString()] as [string, string]] : []), ...(group.desc ? [['Description', group.desc] as [string, string]] : [])] });
+        } else {
+          const status = await sock.fetchStatus(targetJid).catch(() => null);
+          const contact = (sock as unknown as { store?: { contacts?: Record<string, { name?: string; notify?: string }> } }).store?.contacts?.[targetJid];
+          infoText = asciiBox({ title: 'WHATSAPP CONTACT INFO', emoji: '🔍', rows: [['Number', `+${targetJid.split('@')[0] ?? targetJid}`], ...(contact?.name || contact?.notify ? [['Name', contact.name ?? contact.notify ?? ''] as [string, string]] : []), ...((status?.[0]?.status) ? [['Bio', status[0].status] as [string, string]] : [])] });
+        }
+        if (picture) {
+          await PreviewManager.send(socket as any, groupJid, infoText, { media: { buffer: picture, type: 'image', mimetype: 'image/jpeg', caption: infoText }, quoted: msg, sessionId, telegramId });
+        } else {
+          await reply(infoText);
+        }
+      } catch (err) {
+        await reply(errorCard('WA INFO FAILED', String(err)));
+      }
+      break;
+    }
+
+    case 'creategc': {
+      const raw = parsed.rawRemainder.trim() || quotedText.trim();
+      const [name, description = ''] = raw.split('|').map((part) => part.trim());
+      if (!name) {
+        await reply(warningCard('GROUP NAME REQUIRED', `Usage: ${config.prefix}creategc <name> | <desc>`));
+        break;
+      }
+      try {
+        const media = await extractMedia();
+        const rawOwnId = (socket as unknown as { user?: { id?: string; lid?: string } }).user?.id
+          ?? (socket as unknown as { user?: { id?: string; lid?: string } }).user?.lid
+          ?? '';
+        const ownIdentity = await resolveIdentity(socket, rawOwnId);
+        const ownJid = ownIdentity.jid;
+        if (!ownJid || ownJid.endsWith('@lid')) throw new Error('Connected WhatsApp phone identity is unavailable.');
+        const created = await (socket as unknown as { groupCreate(subject: string, participants: string[]): Promise<{ id: string }> }).groupCreate(name, [ownJid]);
+        if (description) await (socket as unknown as { groupUpdateDescription(jid: string, desc: string): Promise<void> }).groupUpdateDescription(created.id, description).catch(() => {});
+        if (media?.type === 'image') await (socket as unknown as { updateProfilePicture(jid: string, content: Buffer, opts?: { hd?: boolean }): Promise<void> }).updateProfilePicture(created.id, media.buffer, { hd: true }).catch(() => {});
+        const invite = await (socket as unknown as { groupInviteCode(jid: string): Promise<string> }).groupInviteCode(created.id);
+        await reply(successCard('GROUP CREATED', `Created ${name}.`, [['JID', created.id], ['Invite', `https://chat.whatsapp.com/${invite}`], ['Picture', media?.type === 'image' ? 'HD original image' : 'Not set']]));
+      } catch (err) {
+        await reply(errorCard('CREATE GROUP FAILED', String(err)));
+      }
+      break;
+    }
+
     case 'ls': {
       const { cmdListSessions } = await import('./commands/session-mgmt.js');
       await reply(await cmdListSessions(telegramId));
@@ -2215,8 +2466,20 @@ async function processMessageWithConfig(
     // ── tag ──
     case 'tag': {
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
-      const text = commandText('📢');
-      const media = await extractMedia();
+      // Sticker macros may have been bound with an old placeholder such as
+      // `tag 📢`. For tag, the quoted message is the only valid text payload;
+      // never treat the macro's stored argument as the outgoing message.
+      const text = parsed.fromSticker ? quotedText.trim() : commandText();
+      const extractedTagMedia = await extractMedia();
+      // A sticker macro is the trigger, not the tag payload. Never relay the
+      // trigger sticker or replace a missing payload with a default emoji.
+      const media = parsed.fromSticker && extractedTagMedia?.type === 'sticker'
+        ? null
+        : extractedTagMedia;
+      if (!text.trim() && !media) {
+        await reply(warningCard('PAYLOAD REQUIRED', `Send text, reply to text, or reply to media with ${config.prefix}tag.`));
+        break;
+      }
       const incomingMentions = getContextInfoAny(msg.message)?.mentionedJid ?? [];
       const res = await cmdTag(socket, telegramId, sessionId, groupJid, text, {
         existingPreview: quotedPreview,
@@ -2234,8 +2497,15 @@ async function processMessageWithConfig(
     // ── mtag ──
     case 'mtag': {
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
-      const text = commandText('📢');
-      const media = await extractMedia();
+      const text = parsed.fromSticker ? quotedText.trim() : commandText();
+      const extractedMTagMedia = await extractMedia();
+      const media = parsed.fromSticker && extractedMTagMedia?.type === 'sticker'
+        ? null
+        : extractedMTagMedia;
+      if (!text.trim() && !media) {
+        await reply(warningCard('PAYLOAD REQUIRED', `Send text, reply to text, or reply to media with ${config.prefix}mtag.`));
+        break;
+      }
       const incomingMentions = getContextInfoAny(msg.message)?.mentionedJid ?? [];
       const res = await cmdMTag(socket, telegramId, sessionId, groupJid, text, {
         existingPreview: quotedPreview,
@@ -2376,7 +2646,7 @@ async function processMessageWithConfig(
 
     // ── AntiText ──
     case 'antitxt': {
-      await reply(handleAntiCommand('antitxt', 'antitxt', args, telegramId, sessionId, groupJid, config.prefix));
+      await reply(handleAntiCommand('antitext', 'antitxt', args, telegramId, sessionId, groupJid, config.prefix));
       break;
     }
 
@@ -2462,7 +2732,7 @@ async function processMessageWithConfig(
 
     // ── AntiWords ──
     case 'antiwords': {
-      await reply(handleAntiCommand('antiwords', 'antiwords', args, telegramId, sessionId, groupJid, config.prefix));
+      await reply(handleAntiWordsCommand(args, telegramId, sessionId, groupJid, config.prefix));
       break;
     }
     case 'antiaddword': {
@@ -2752,7 +3022,7 @@ async function processMessageWithConfig(
       if (!isGroup) { await reply(warningCard('GROUP ONLY', 'Use this command inside a WhatsApp group.')); break; }
       try {
         const sock = socket as unknown as {
-          groupRequestParticipantsList(jid: string): Promise<Array<{ jid: string; phoneNumber?: string }>>;
+          groupRequestParticipantsList(jid: string): Promise<Array<{ jid: string; phoneNumber?: string; phone_number?: string }>>;
         };
         const pending = await sock.groupRequestParticipantsList(groupJid);
         if (pending.length === 0) {
@@ -2947,7 +3217,7 @@ async function processMessageWithConfig(
       if (!meta_ac?.botIsAdmin) { await reply(errorCard('APPROVE BY COUNTRY', 'I need to be a group admin to manage join requests.')); break; }
       try {
         const sock = socket as unknown as {
-          groupRequestParticipantsList(jid: string): Promise<Array<{ jid: string; phoneNumber?: string }>>;
+          groupRequestParticipantsList(jid: string): Promise<Array<{ jid: string; phoneNumber?: string; phone_number?: string }>>;
           groupRequestParticipantsUpdate(jid: string, p: string[], action: 'approve' | 'reject'): Promise<unknown>;
         };
         const all_ac = await sock.groupRequestParticipantsList(groupJid);
@@ -2956,78 +3226,20 @@ async function processMessageWithConfig(
           await reply(warningCard('NO PENDING REQUESTS', 'There are no pending join requests in this group right now.'));
           break;
         }
-        // Fetch group participant list once — needed to resolve LID → real phone
-        const groupParticipants_ac = meta_ac?.participants ?? [];
-
-        // Resolve LID JIDs — pending requests may be pure @lid with no phoneNumber.
-        // Build a lookup map: lidJid → real phone number.
-        const lidPhoneMap = new Map<string, string>();
-        const lidEntries = all_ac.filter(r => r.jid.endsWith('@lid'));
-        if (lidEntries.length > 0) {
-          try {
-            const sockWithLid = socket as unknown as {
-              onWhatsApp(...jids: string[]): Promise<Array<{ exists: boolean; jid: string; lid?: string }>>;
-            };
-            // onWhatsApp accepts real JIDs, not LIDs — try resolving via group participant phoneNumber first
-            for (const entry of lidEntries) {
-              const lidNum = (entry.jid.split('@')[0] ?? '').split(':')[0] ?? '';
-              // Check group participant list for a matching phoneNumber
-              const matched = groupParticipants_ac.find(
-                p => (p.phoneNumber ?? '').replace(/\D/g, '') === lidNum
-              );
-              if (matched && !matched.id.endsWith('@lid')) {
-                const phone = (matched.id.split('@')[0] ?? '').split(':')[0] ?? '';
-                lidPhoneMap.set(entry.jid, phone);
-              }
-            }
-            // For still-unresolved LIDs, try onWhatsApp in batches
-            const unresolved = lidEntries.filter(e => !lidPhoneMap.has(e.jid));
-            if (unresolved.length > 0 && typeof sockWithLid.onWhatsApp === 'function') {
-              const BATCH_LID = 50;
-              for (let i = 0; i < unresolved.length; i += BATCH_LID) {
-                const batch = unresolved.slice(i, i + BATCH_LID).map(e => e.jid);
-                try {
-                  const results = await sockWithLid.onWhatsApp(...batch);
-                  for (const res of results) {
-                    if (res.exists && res.jid && !res.jid.endsWith('@lid')) {
-                      // Find which lid entry this corresponds to via the lid field
-                      const lidEntry = unresolved.find(e => res.lid && e.jid.startsWith(res.lid.split('@')[0] ?? ''));
-                      if (lidEntry) {
-                        const phone = (res.jid.split('@')[0] ?? '').split(':')[0] ?? '';
-                        lidPhoneMap.set(lidEntry.jid, phone);
-                      }
-                    }
-                  }
-                } catch { /* non-critical */ }
-              }
-            }
-          } catch { /* non-critical */ }
-          logger.info('[ApproveCountry] LID resolution', { total: lidEntries.length, resolved: lidPhoneMap.size });
-        }
-
-        const matched_ac = all_ac.filter((r) => {
-          // Real @s.whatsapp.net JID — extract phone directly
-          if (r.jid.endsWith('@s.whatsapp.net')) {
-            const jidUser = (r.jid.split('@')[0] ?? '').split(':')[0] ?? '';
-            return jidUser.startsWith(countryDigits);
-          }
-          // LID — use resolved phone map
-          if (r.jid.endsWith('@lid')) {
-            const resolvedPhone = lidPhoneMap.get(r.jid);
-            if (resolvedPhone) return resolvedPhone.startsWith(countryDigits);
-            // Fallback: explicit phoneNumber field if Baileys populated it
-            const explicitPhone = (r.phoneNumber ?? '').replace(/[^0-9]/g, '');
-            return explicitPhone ? explicitPhone.startsWith(countryDigits) : false;
-          }
-          const explicitPhone = (r.phoneNumber ?? '').replace(/[^0-9]/g, '');
-          return explicitPhone ? explicitPhone.startsWith(countryDigits) : false;
-        });
+        // Resolve every pending request through the fork's authoritative
+        // LID mapping first, then the group participant phoneNumber field.
+        // An unresolved LID is NOT a country match: approving it would make
+        // `.approvecountry` approve users from unknown countries.
+        const matched_ac = await filterPendingRequestsByCountry(
+          socket,
+          all_ac,
+          meta_ac.participants,
+          countryDigits
+        );
         logger.info('[ApproveCountry] Filter result', { countryDigits, matched: matched_ac.length, total: all_ac.length });
-        logger.info('[ApproveCountry] Sample JIDs', { samples: all_ac.slice(0, 5).map(r => ({ jid: r.jid, phone: r.phoneNumber, raw: r })) });
+        logger.info('[ApproveCountry] Sample JIDs', { samples: all_ac.slice(0, 5).map(r => ({ jid: r.jid, phone: r.phoneNumber ?? r.phone_number })) });
 
-        // If all entries are unresolvable LIDs (Baileys limitation), fall back to approving all
-        const allLidUnresolved = matched_ac.length === 0 && all_ac.every(r => r.jid.endsWith('@lid')) && lidPhoneMap.size === 0;
-        const finalList = allLidUnresolved ? all_ac : matched_ac;
+        const finalList = matched_ac;
 
         if (finalList.length === 0) {
           await reply(warningCard('NO MATCHES', `No pending requests with country code +${countryDigits}.\nTotal pending: ${all_ac.length}\n\nTip: check the exact digits — Nigeria is 234, USA is 1.`));
@@ -3045,8 +3257,8 @@ async function processMessageWithConfig(
         }));
         let approved_ac = 0, failed_ac = 0;
         const BATCH_ac = 20;
-        for (let i = 0; i < matched_ac.length; i += BATCH_ac) {
-          const batch = matched_ac.slice(i, i + BATCH_ac).map((r) => r.jid);
+        for (let i = 0; i < finalList.length; i += BATCH_ac) {
+          const batch = finalList.slice(i, i + BATCH_ac).map((r) => r.jid);
           try {
             await sock.groupRequestParticipantsUpdate(groupJid, batch, 'approve');
             approved_ac += batch.length;
@@ -3056,7 +3268,7 @@ async function processMessageWithConfig(
               catch { failed_ac++; }
             }
           }
-          if (i + BATCH_ac < matched_ac.length) await new Promise((r) => setTimeout(r, 800));
+          if (i + BATCH_ac < finalList.length) await new Promise((r) => setTimeout(r, 800));
         }
         await updateProgress_ac(asciiBox({
           title: 'APPROVE BY COUNTRY — COMPLETE',
@@ -3066,7 +3278,7 @@ async function processMessageWithConfig(
             ['Matched', String(matched_ac.length)],
             ['Approved', String(approved_ac)],
             ['Failed', String(failed_ac)],
-            ['Remaining (other)', String(all_ac.length - matched_ac.length)],
+            ['Remaining (other)', String(all_ac.length - finalList.length)],
           ],
         }));
       } catch (err) {

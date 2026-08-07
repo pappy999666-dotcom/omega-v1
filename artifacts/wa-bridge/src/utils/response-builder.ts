@@ -1,6 +1,6 @@
 // ============================================================
 // WA-Bridge — Standardized Response Builder
-// Provides consistent SUCCESS, ERROR, WARNING, etc. templates.
+// Compatibility wrappers around the shared PAPPY renderer.
 // ============================================================
 
 import { asciiBox } from './ascii-art.js';
@@ -12,79 +12,31 @@ export interface ResponseOptions {
   error?: string;
 }
 
-/**
- * Standardized Success Response
- */
+function card(title: string, message: string, emoji: string, details?: string): string {
+  const body = details ? `${message}\n${details}` : message;
+  return asciiBox({ title, emoji, rows: [], footer: body });
+}
+
 export function successCard(title: string, message: string): string {
-  return [
-    `╭──〔 ✅ ${title.toUpperCase()} 〕`,
-    `│`,
-    `├ ${message}`,
-    `╰──────────`
-  ].join('\n');
+  return card(title, message, '✅');
 }
 
-/**
- * Standardized Error Response
- */
 export function errorCard(title: string, message: string, error?: string): string {
-  const lines = [
-    `╭──〔 ❌ ${title.toUpperCase()} 〕`,
-    `│`,
-    `├ ${message}`
-  ];
-  if (error) {
-    lines.push(`│`);
-    lines.push(`├ Details: ${error}`);
-  }
-  lines.push(`╰──────────`);
-  return lines.join('\n');
+  return card(title, message, '❌', error ? `Details: ${error}` : undefined);
 }
 
-/**
- * Standardized Warning Response
- */
 export function warningCard(title: string, message: string): string {
-  return [
-    `╭──〔 ⚠️ ${title.toUpperCase()} 〕`,
-    `│`,
-    `├ ${message}`,
-    `╰──────────`
-  ].join('\n');
+  return card(title, message, '⚠️');
 }
 
-/**
- * Standardized Processing Response
- */
 export function processingCard(title: string, message: string): string {
-  return [
-    `╭──〔 ⚡ ${title.toUpperCase()} 〕`,
-    `│`,
-    `├ ${message}`,
-    `╰──────────`
-  ].join('\n');
+  return card(title, message, '⚡');
 }
 
-/**
- * Standardized Info Response
- */
 export function infoCard(title: string, message: string): string {
-  return [
-    `╭──〔 ℹ️ ${title.toUpperCase()} 〕`,
-    `│`,
-    `├ ${message}`,
-    `╰──────────`
-  ].join('\n');
+  return card(title, message, 'ℹ️');
 }
 
-/**
- * Standardized Moderation Response
- */
 export function moderationCard(title: string, message: string): string {
-  return [
-    `╭──〔 ⚔️ ${title.toUpperCase()} 〕`,
-    `│`,
-    `├ ${message}`,
-    `╰──────────`
-  ].join('\n');
+  return card(title, message, '⚔️');
 }

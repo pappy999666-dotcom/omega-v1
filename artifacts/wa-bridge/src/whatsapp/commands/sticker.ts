@@ -1,6 +1,6 @@
 import type { BridgeWASocket as WASocket } from '../baileys-types.js';
 import { PreviewManager } from '../../preview-engine/index.js';
-import { successCard, warningCard, errorCard } from '../../utils/ascii-art.js';
+import { warningCard, errorCard } from '../../utils/ascii-art.js';
 import { logger } from '../../utils/logger.js';
 import sharp from 'sharp';
 import { exec } from 'child_process';
@@ -119,12 +119,8 @@ export async function cmdSticker(
       telegramId,
     });
 
-    await PreviewManager.send(
-      socket as any,
-      groupJid,
-      successCard('STICKER CREATED', 'Your sticker has been generated and sent.', [], 'STICKER ENGINE'),
-      { suppressPreview: true, sessionId, telegramId }
-    );
+    // The generated sticker is the response. Do not send a second
+    // "sticker created" confirmation bubble.
   } catch (err) {
     logger.error('[Sticker] Failed to create sticker', { err: String(err) });
     await PreviewManager.send(

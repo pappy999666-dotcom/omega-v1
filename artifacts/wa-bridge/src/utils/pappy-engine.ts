@@ -1,10 +1,7 @@
 // ============================================================
-// WA-Bridge — PAPPY Response Engine v3
-// Compact Cyberpunk, Gothic, and Premium styling for WhatsApp.
-// Optimized for WhatsApp mobile width (~35 chars per line).
+// WA-Bridge — PAPPY Response Engine v4
+// Compact, consistent styling for WhatsApp responses.
 // ============================================================
-
-import { bold, italic } from './ascii-art.js';
 
 export interface Theme {
   name: string;
@@ -16,7 +13,6 @@ export interface Theme {
   layout?: 'standard' | 'compact' | 'minimal' | 'matrix' | 'gothic';
 }
 
-// Compact themes — all optimized for WhatsApp mobile width
 export const THEMES: Theme[] = [
   { name: 'Omega Core', header: '⟦ ◈ OMEGA • CORE ◈ ⟧', border: '│', divider: '────────', symbol: '⚡', footer: '╰─── OMEGA ───╯', layout: 'compact' },
   { name: 'Dark Terminal', header: '『 DARK TERMINAL 』', border: '│', divider: '----------', symbol: '>', footer: '└──────────────┘', layout: 'compact' },
@@ -30,7 +26,7 @@ export const THEMES: Theme[] = [
   { name: 'Crimson', header: '🩸 CRIMSON 🩸', border: '│', divider: '── 🩸 ──', symbol: '⚡', footer: '🩸 CRIMSON 🩸', layout: 'compact' },
 ];
 
-/** Default to Omega Core — the PAPPY signature theme */
+/** Kept for compatibility with theme-selection settings. */
 export function getRandomTheme(): Theme {
   return THEMES[Math.floor(Math.random() * THEMES.length)]!;
 }
@@ -44,47 +40,60 @@ export interface PappyBoxOptions {
   moduleIdentity?: string;
 }
 
-/**
- * PAPPY Response Engine v3 — Compact Structured Layout
- * Header → Title → Content → Information Panel → Footer
- * All layouts fit within WhatsApp mobile width.
- */
-export function pappyBox(opts: PappyBoxOptions): string {
-  const theme = opts.theme || getRandomTheme();
-  const { border, divider, symbol, footer: themeFooter, layout = 'compact' } = theme;
+const BOLD_UPPER = [...'𝗔𝗕𝗖𝗗𝗘𝗙𝗚𝗛𝗜𝗝𝗞𝗟𝗠𝗡𝗢𝗣𝗤𝗥𝗦𝗧𝗨𝗩𝗪𝗫𝗬𝗭'];
+const BOLD_DIGITS = [...'𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵'];
 
-  const lines: string[] = [];
+/** Convert a response title to the spaced bold Unicode style. */
+function spacedBold(value: string): string {
+  return value.trim().split(/\s+/u).filter(Boolean)
+    .map((word) => [...word].map((char) => {
+      const letterIndex = 'abcdefghijklmnopqrstuvwxyz'.indexOf(char.toLowerCase());
+      if (letterIndex >= 0) return BOLD_UPPER[letterIndex] ?? char;
+      const digitIndex = '0123456789'.indexOf(char);
+      return digitIndex >= 0 ? BOLD_DIGITS[digitIndex] ?? char : char;
+    }).join(' '))
+    .join('  ');
+}
 
-  // 1. Compact Box Header
-  const boxTitle = opts.moduleIdentity
-    ? `${opts.emoji || ''} ${opts.moduleIdentity.toUpperCase()}`
-    : `${opts.emoji || ''} ${opts.title.toUpperCase()}`;
-
-  lines.push(`╭─〔 ${boxTitle} 〕`);
-  lines.push(border);
-
-  // 2. Main Message / Description
-  if (opts.footer && !opts.footer.includes('◈')) {
-    lines.push(`${border} ${opts.footer}`);
-    lines.push(border);
+function instructionLines(message: string): { instructions: string[]; usage: string[] } {
+  const instructions: string[] = [];
+  const usage: string[] = [];
+  for (const line of message.split('\n')) {
+    if (/^\s*usage\s*:/iu.test(line)) usage.push(line.replace(/^\s*usage\s*:/iu, '').trim());
+    else if (line.trim()) instructions.push(line.trim());
   }
+  return { instructions, usage };
+}
 
-  // 3. Information Panel (Rows) — compact layout
-  if (opts.rows.length > 0) {
-    for (const [label, value] of opts.rows) {
-      lines.push(`${border} ${symbol} ${bold(label)}: ${value}`);
+function addSection(lines: string[], title: string, values: string[]): void {
+  if (values.length === 0) return;
+  lines.push(`✦ ${title}`);
+  for (const value of values) {
+    for (const part of value.split('\n').map((line) => line.trim()).filter(Boolean)) {
+      lines.push(`  └─ ${part}`);
     }
   }
+}
 
-  // 4. Special Footer Content (e.g. Menu items)
-  if (opts.footer && opts.footer.includes('◈')) {
-    lines.push(opts.footer);
+/**
+ * Shared WhatsApp response layout. All cards now use the same title,
+ * Instructions/Usage sections, and PAPPY signature.
+ */
+export function pappyBox(opts: PappyBoxOptions): string {
+  const title = opts.moduleIdentity || opts.title;
+  const lines: string[] = [`${opts.emoji || ''} ${spacedBold(title)}`.trim(), ''];
+  const { instructions, usage } = opts.footer
+    ? instructionLines(opts.footer)
+    : { instructions: [], usage: [] };
+
+  addSection(lines, 'Instructions', instructions);
+  for (const [label, value] of opts.rows) {
+    if (lines[lines.length - 1] !== '') lines.push('');
+    addSection(lines, label, [value]);
   }
+  addSection(lines, 'Usage', usage);
 
-  // 5. Compact Box Footer — unified OMEGA • V1 brand (replaces the legacy
-  //    PAPPY ×͜× signature across every card/response in the system).
-  lines.push(border);
-  lines.push(`╰─ 𝗢𝗠𝗘𝗚𝗔 • 𝗩𝟭`);
-
+  if (lines[lines.length - 1] !== '') lines.push('');
+  lines.push('· · ——— 𝕻𝕬𝕻𝕻𝖞 ×͜× ——— · ·');
   return lines.join('\n');
 }

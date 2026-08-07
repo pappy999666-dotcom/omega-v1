@@ -51,7 +51,8 @@ export function defaultPromoteConfig(): AntiPromoteConfig {
   return {
     ...defaultModuleConfig('kick'),
     mode: 'restorekick',
-    targetMode: 'protected',
+    // Admin protection modules monitor administrator-targeted events by default.
+    targetMode: 'admins',
   };
 }
 
@@ -59,7 +60,8 @@ export function defaultDemoteConfig(): AntiDemoteConfig {
   return {
     ...defaultModuleConfig('kick'),
     mode: 'restorekick',
-    targetMode: 'protected',
+    // Admin protection modules monitor administrator-targeted events by default.
+    targetMode: 'admins',
   };
 }
 

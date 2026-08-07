@@ -12,7 +12,7 @@
 //      regardless of whether the AntiDemote module is enabled.
 //
 //   2. Target mode is the only enforcement gate:
-//        protected (default) — only the bot is protected
+//        protected — only the bot is protected
 //        admins              — every administrator is protected
 //
 //   3. Actor exemptions: NONE.
@@ -558,7 +558,7 @@ export async function handleAntiDemoteEvent(
   // ── Load module config ───────────────────────────────────
   const gc  = loadGroupAntiConfig(telegramId, sessionId, groupJid);
   const mod = gc.antidemote as AntiDemoteConfig | undefined;
-  const targetMode: TargetMode = mod?.targetMode ?? 'protected';
+  const targetMode: TargetMode = mod?.targetMode ?? 'admins';
   const modeStr = mod ? String(mod.mode) : 'off';
 
   const audit = makeAudit(
@@ -759,7 +759,7 @@ export async function handleAntiPromoteEvent(
 
   const gc  = loadGroupAntiConfig(telegramId, sessionId, groupJid);
   const mod = gc.antipromote as AntiPromoteConfig | undefined;
-  const targetMode: TargetMode = mod?.targetMode ?? 'protected';
+  const targetMode: TargetMode = mod?.targetMode ?? 'admins';
   const modeStr = mod ? String(mod.mode) : 'off';
 
   const audit = makeAudit(

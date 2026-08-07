@@ -64,6 +64,7 @@ export function parseCommand(
   const argsText = rawRemainder.trimStart();
   const args = argsText ? argsText.split(/ +/).filter(Boolean) : [];
   const aliases: Record<string, string> = {
+    antitext: 'antitxt',
     left: 'left',
     stopspam: 'stopspam',
     togstatusx: 'togstatusx',
@@ -144,7 +145,7 @@ export const ALL_COMMANDS = [
   // Stop
   'stop', 'stopspam', 'spam',
   // Settings
-  'setprefix', 'setcmd', 'delcmd', 'setmenupic', 'setmenuvideo', 'delmenumedia', 'setsudo', 'delsudo', 'sudo', 'prefix', 'public', 'setmode', 'publicresponse', 'tagreply',
+  'setprefix', 'setcmd', 'delcmd', 'setmenupic', 'setmenuvideo', 'delmenumedia', 'setpfp', 'getpfp', 'removepfp', 'setname', 'setbio', 'wainfo', 'creategc', 'collect', 'autopromo', 'setsudo', 'delsudo', 'sudo', 'prefix', 'public', 'setmode', 'publicresponse', 'tagreply',
   // Response Mode + Timezone
   'swresponse', 'settimezone',
   // Info
@@ -186,8 +187,8 @@ export const ALL_COMMANDS = [
   'antiaud', 'audpermit', 'rmaudpermit',
   // AntiVN
   'antivn', 'vnpermit', 'rmvnpermit', 'antivnmsg',
-  // AntiText
-  'antitxt',
+  // AntiText (antitext is the user-facing spelling; antitxt remains compatible)
+  'antitxt', 'antitext',
   // AntiEmoji
   'antiemoji', 'emojipermit', 'rmemojipermit', 'antiemojimsg',
   // AntiSticker

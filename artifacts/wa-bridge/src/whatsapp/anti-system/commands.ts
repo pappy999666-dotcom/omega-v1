@@ -133,6 +133,97 @@ export function handleAntiCommand(
   );
 }
 
+/**
+ * Configure AntiWords and its blocked list in one command.
+ *
+ * Syntax:
+ *   .antiwords warn 3 [scam, fraud, free money]
+ *   .antiwords delete [scam, fraud]
+ *
+ * The list is intentionally owned by AntiWords. AntiText remains a separate
+ * plain-text detector and never receives or consults this word list.
+ */
+export function handleAntiWordsCommand(
+  args: string[],
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  prefix: string
+): string {
+  if (!groupJid.endsWith('@g.us')) {
+    return errorCard('AntiWords', 'This command must be used inside a WhatsApp group.');
+  }
+
+  const subCmd = args[0]?.toLowerCase();
+  if (subCmd === 'off') {
+    const gc = loadGroupAntiConfig(telegramId, sessionId, groupJid);
+    const existing = gc.antiwords;
+    if (!existing?.enabled) return warningCard('AntiWords', 'Already disabled in this group.');
+    existing.enabled = false;
+    saveGroupAntiConfig(telegramId, sessionId, gc);
+    return successCard('AntiWords', 'Disabled in this group.');
+  }
+
+  const action = parseAction(subCmd ?? '');
+  if (!action) {
+    return errorCard(
+      'AntiWords',
+      `Usage: ${prefix}antiwords <kick|warn N|delete|off> [words]\n` +
+      `Example: ${prefix}antiwords warn 3 [scam, fraud, free money]`
+    );
+  }
+
+  const thresholdArgIndex = action === 'warn' ? 1 : 0;
+  const thresholdToken = action === 'warn' ? (args[1] ?? '') : '';
+  const thresholdMatch = thresholdToken.match(/^(\d+)(.*)$/u);
+  const warnThreshold = action === 'warn'
+    ? Number.parseInt(thresholdMatch?.[1] ?? '', 10)
+    : 3;
+  if (action === 'warn' && (!Number.isInteger(warnThreshold) || warnThreshold < 1)) {
+    return errorCard('AntiWords', `Warn threshold must be a positive number.\nExample: ${prefix}antiwords warn 3 [scam, fraud]`);
+  }
+
+  // Accept both `warn 3 [words]` and the compact `warn 3[words]` form.
+  const compactWords = action === 'warn' && thresholdMatch?.[2]
+    ? thresholdMatch[2]
+    : '';
+  const rawWords = [compactWords, ...args.slice(thresholdArgIndex + 1)].filter(Boolean).join(' ').trim();
+  if (!rawWords.startsWith('[') || !rawWords.endsWith(']')) {
+    return errorCard(
+      'AntiWords',
+      `Words must be enclosed in brackets.\nExample: ${prefix}antiwords warn 3 [scam, fraud]`
+    );
+  }
+  const wordsText = rawWords.slice(1, -1).trim();
+  if (!wordsText) {
+    return errorCard(
+      'AntiWords',
+      `Provide the words to block in brackets.\nExample: ${prefix}antiwords warn 3 [scam, fraud, free money]`
+    );
+  }
+
+  const words = wordsText.split(',').map((word) => word.trim()).filter(Boolean);
+  const gc = loadGroupAntiConfig(telegramId, sessionId, groupJid);
+  const existing = gc.antiwords ?? defaultWordsConfig();
+  gc.antiwords = {
+    ...existing,
+    enabled: true,
+    action,
+    warnThreshold,
+    words: [...new Set(words.map((word) => word.toLowerCase()))],
+  };
+  saveGroupAntiConfig(telegramId, sessionId, gc);
+
+  const actionText = action === 'warn' ? `warn (kick after ${warnThreshold})` : action;
+  return successCard(
+    'AntiWords Configured',
+    `Enabled with ${bold(actionText)}.\n` +
+    `${gc.antiwords.words.length} blocked word(s) saved.\n` +
+    `${italic(`AntiText remains plain-text only; use ${prefix}antitext ${action} for all plain text.`)}`,
+    [['Words', gc.antiwords.words.join(', ')]]
+  );
+}
+
 // ── Permit commands ───────────────────────────────────────────
 
 export function handlePermitCommand(
@@ -416,7 +507,7 @@ const SECURITY_MODE_USAGE =
   `${italic('Aliases:')} revert=restore · warn=restorewarn · kick=restorekick · ban=restoreban`;
 
 const TARGET_MODE_USAGE =
-  `${bold('protected')} (default) — only the bot is protected\n` +
+  `${bold('protected')} — only the bot is protected\n` +
   `${bold('admins')}              — every administrator is protected`;
 
 // ── AntiPromote command handler ───────────────────────────────
@@ -455,7 +546,7 @@ export function handleAntiPromoteCmd(
     return successCard('AntiPromote',
       `Enabled\n` +
       `Mode: ${bold(mod.mode)}\n` +
-      `Target: ${bold(mod.targetMode ?? 'protected')}\n` +
+      `Target: ${bold(mod.targetMode ?? 'admins')}\n` +
       `Permits: ${mod.permitList.length}`
     );
   }
@@ -479,7 +570,7 @@ export function handleAntiPromoteCmd(
     return successCard(
       'AntiPromote Enabled',
       `Mode: ${bold(existing.mode)}\n` +
-      `Target: ${bold(existing.targetMode ?? 'protected')}\n` +
+      `Target: ${bold(existing.targetMode ?? 'admins')}\n` +
       `To change mode: ${italic(`${prefix}antipromote mode <mode>`)},\n` +
       `To change target: ${italic(`${prefix}antipromote target <protected|admins>`)},\n` +
       `To disable: ${italic(`${prefix}antipromote off`)}`,
@@ -591,7 +682,7 @@ export function handleAntiDemote(
     return successCard('AntiDemote',
       `Enabled\n` +
       `Mode: ${bold(mod.mode)}\n` +
-      `Target: ${bold(mod.targetMode ?? 'protected')}\n` +
+      `Target: ${bold(mod.targetMode ?? 'admins')}\n` +
       `Permits: ${mod.permitList.length}`
     );
   }
@@ -615,7 +706,7 @@ export function handleAntiDemote(
     return successCard(
       'AntiDemote Enabled',
       `Mode: ${bold(existing.mode)}\n` +
-      `Target: ${bold(existing.targetMode ?? 'protected')}\n` +
+      `Target: ${bold(existing.targetMode ?? 'admins')}\n` +
       `To change mode: ${italic(`${prefix}antidemote mode <mode>`)},\n` +
       `To change target: ${italic(`${prefix}antidemote target <protected|admins>`)},\n` +
       `To disable: ${italic(`${prefix}antidemote off`)}`,
@@ -722,8 +813,8 @@ export function handleAntiStatus(
     ['AntiPoll', gc.antipoll?.enabled ? `✅ ${gc.antipoll.action}` : '❌ off'],
     ['AntiForward', gc.antiforward?.enabled ? `✅ ${gc.antiforward.action}` : '❌ off'],
     ['AntiChannel', gc.antichannel?.enabled ? `✅ ${gc.antichannel.action}` : '❌ off'],
-    ['AntiPromote', gc.antipromote?.enabled ? `✅ mode:${(gc.antipromote as AntiPromoteConfig).mode} target:${(gc.antipromote as AntiPromoteConfig).targetMode ?? 'protected'}` : '❌ off'],
-    ['AntiDemote',  gc.antidemote?.enabled  ? `✅ mode:${gc.antidemote.mode} target:${gc.antidemote.targetMode ?? 'protected'}` : '❌ off'],
+    ['AntiPromote', gc.antipromote?.enabled ? `✅ mode:${(gc.antipromote as AntiPromoteConfig).mode} target:${(gc.antipromote as AntiPromoteConfig).targetMode ?? 'admins'}` : '❌ off'],
+    ['AntiDemote',  gc.antidemote?.enabled  ? `✅ mode:${gc.antidemote.mode} target:${gc.antidemote.targetMode ?? 'admins'}` : '❌ off'],
   ];
   return asciiBox({
     title: 'Anti System Status',

@@ -44,7 +44,7 @@ import { runRemoveModerationPipeline } from '../utils/moderation-pipeline.js';
 import { loadSessionConfig } from '../../services/workspace.js';
 import { logger } from '../../utils/logger.js';
 import { bold, italic, successCard, warningCard, errorCard, asciiBox } from '../../utils/ascii-art.js';
-import { renderTemplate, renderTemplatePreview, renderTemplateWithMentions, hasTemplateVariable } from '../../utils/response-engine.js';
+import { renderTemplate, renderTemplateWithMentions } from '../../utils/response-engine.js';
 import {
   loadGroupEventConfig,
   setGroupMessage,
@@ -259,12 +259,10 @@ export async function cmdBan(
     });
   } catch (announceErr) {
     logger.warn('[Ban] Announcement failed after local ban', { err: String(announceErr), groupJid });
-  }
+  }    // The restriction announcement above is the user-facing success response;
+    // do not send a second confirmation card to the same chat.
+    return '';
 
-  return successCard('Ban', `@${target.number} is now locally restricted.\nThey stay in the group but every message they send will be deleted until ${prefix}unban.`, [
-    ['Number', target.number],
-    ['Action', 'Local restriction (no kick)'],
-  ]);
 }
 
 // ── Unban ────────────────────────────────────────────────
@@ -357,7 +355,8 @@ export async function cmdPromote(
     telegramId,
     ...(pfpBuffer ? { media: { buffer: pfpBuffer as any, type: 'image', caption } } : {}),
   });
-  return successCard('Promote', `@${target.number} is now an admin.`);
+  // The native promotion announcement is the complete success response.
+  return '';
 }
 
 // ── Demote ───────────────────────────────────────────────
@@ -402,7 +401,8 @@ export async function cmdDemote(
     telegramId,
     ...(pfpBuffer ? { media: { buffer: pfpBuffer as any, type: 'image', caption } } : {}),
   });
-  return successCard('Demote', `@${target.number} is no longer an admin.`);
+  // The native demotion announcement is the complete success response.
+  return '';
 }
 
 // ── DnKick — Demote then Kick ─────────────────────────────
@@ -481,8 +481,9 @@ export async function cmdDnKick(
     sessionId,
     telegramId,
     ...(pfpBuffer ? { media: { buffer: pfpBuffer as any, type: 'image', caption } } : {}),
-  });
-  return successCard('DnKick', `@${target.number} was demoted then kicked.`, [['Number', target.number]]);
+  });    // The final demote/kick announcement above is the response.
+    return '';
+
 }
 
 // ── Warn ─────────────────────────────────────────────────
@@ -937,19 +938,6 @@ export async function cmdSetWelcome(
 
   setWelcomeConfig(telegramId, sessionId, groupJid, true, message);
 
-  // ── LIVE PREVIEW ───────────────────────────────────────────
-  // Simulate the join event using the command sender as the example member
-  // so the admin sees EXACTLY what new members will receive.
-  const senderJid = msg.key?.participant ?? msg.key?.remoteJid ?? '';
-  let livePreview = '';
-  try {
-    livePreview = await renderTemplatePreview(message, socket, groupJid, senderJid);
-  } catch (err) {
-    logger.warn('[Welcome] Live preview render failed', { err: String(err) });
-  }
-  const hasPp = hasTemplateVariable(message, 'pp');
-  const previewSuffix = hasPp ? '\n📷 Profile photo will be attached here' : '';
-
   const rows: [string, string][] = [
     ['New Template', message.slice(0, 60)],
   ];
@@ -958,8 +946,8 @@ export async function cmdSetWelcome(
   }
   return successCard(
     'Welcome Set',
-    `Welcome message saved and enabled.\n${italic('Variables: @mention, &gcname, &desc, &membercount, &admincount, &date, &time, &pp')}`, rows
-  ) + (livePreview ? `\n\n${italic('⚡ LIVE PREVIEW')}\n${livePreview}${previewSuffix}` : '');
+    `Welcome message saved and enabled.\n${italic('Variables are rendered when a real member joins: @mention, &gcname, &desc, &membercount, &admincount, &date, &time, &pp')}`, rows
+  );
 }
 
 export function cmdWelcomeToggle(
@@ -1010,17 +998,6 @@ export async function cmdSetGoodbye(
 
   setGoodbyeConfig(telegramId, sessionId, groupJid, true, message);
 
-  // ── LIVE PREVIEW ───────────────────────────────────────────
-  const senderJid = msg.key?.participant ?? msg.key?.remoteJid ?? '';
-  let livePreview = '';
-  try {
-    livePreview = await renderTemplatePreview(message, socket, groupJid, senderJid);
-  } catch (err) {
-    logger.warn('[Goodbye] Live preview render failed', { err: String(err) });
-  }
-  const hasPp = hasTemplateVariable(message, 'pp');
-  const previewSuffix = hasPp ? '\n📷 Profile photo will be attached here' : '';
-
   const rows: [string, string][] = [
     ['New Template', message.slice(0, 60)],
   ];
@@ -1029,8 +1006,8 @@ export async function cmdSetGoodbye(
   }
   return successCard(
     'Goodbye Set',
-    `Goodbye message saved and enabled.\n${italic('Variables: @mention, &gcname, &desc, &membercount, &admincount, &date, &time, &pp')}`, rows
-  ) + (livePreview ? `\n\n${italic('⚡ LIVE PREVIEW')}\n${livePreview}${previewSuffix}` : '');
+    `Goodbye message saved and enabled.\n${italic('Variables are rendered when a real member leaves: @mention, &gcname, &desc, &membercount, &admincount, &date, &time, &pp')}`, rows
+  );
 }
 
 export function cmdGoodbyeToggle(
@@ -1082,17 +1059,6 @@ export async function cmdSetModerationMsg(
   const previous = getGroupMessage(telegramId, sessionId, groupJid, key);
   setGroupMessage(telegramId, sessionId, groupJid, key, message);
 
-  // ── LIVE PREVIEW ───────────────────────────────────────────
-  const senderJid = msg.key?.participant ?? msg.key?.remoteJid ?? '';
-  let livePreview = '';
-  try {
-    livePreview = await renderTemplatePreview(message, socket, groupJid, senderJid);
-  } catch (err) {
-    logger.warn(`[${label}] Live preview render failed`, { err: String(err) });
-  }
-  const hasPp = hasTemplateVariable(message, 'pp');
-  const previewSuffix = hasPp ? '\n📷 Profile photo will be attached here' : '';
-
   const rows: [string, string][] = [];
   if (previous) {
     rows.push(['Previous', previous.slice(0, 60)]);
@@ -1101,8 +1067,7 @@ export async function cmdSetModerationMsg(
   }
   rows.push(['New Template', message.slice(0, 60)]);
 
-  return successCard(`${label} Template Saved`, `Custom response will be used for ${label} actions.\n${italic('Variables: @mention, &gcname, &desc, &membercount, &admincount, &date, &time, &pp')}`, rows)
-    + (livePreview ? `\n\n${italic('⚡ LIVE PREVIEW')}\n${livePreview}${previewSuffix}` : '');
+  return successCard(`${label} Template Saved`, `Custom response will be used for ${label} actions.\n${italic('Variables are rendered when the real action occurs: @mention, &gcname, &desc, &membercount, &admincount, &date, &time, &pp')}`, rows);
 }
 
 // ── Mute / Unmute ────────────────────────────────────────
@@ -1135,7 +1100,8 @@ export async function cmdMute(
       sessionId,
       telegramId,
     });
-    return successCard('Group Muted', 'Only admins can now send messages in this group.', [['Group', meta.subject]]);
+    // The group-state announcement above is the complete success response.
+  return '';
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     return errorCard('Mute Failed', `Could not mute the group.\n\nReason: ${reason}`);
@@ -1167,7 +1133,8 @@ export async function cmdUnmute(
       sessionId,
       telegramId,
     });
-    return successCard('Group Unmuted', 'All members can now send messages in this group.', [['Group', meta.subject]]);
+    // The group-state announcement above is the complete success response.
+  return '';
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     return errorCard('Unmute Failed', `Could not unmute the group.\n\nReason: ${reason}`);
@@ -1233,7 +1200,8 @@ export async function cmdBlock(
     telegramId,
   }).catch(() => {});
 
-  return successCard('Blocked', `@${target.number} was kicked and blocked.`, [['Number', target.number]]);
+  // The kick/block announcement above is the complete success response.
+  return '';
 }
 
 // ── Delete All ────────────────────────────────────────────

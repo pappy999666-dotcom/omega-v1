@@ -46,6 +46,8 @@ export interface MenuEntry {
   output?: string;
   /** Which menu this entry appears in: 'main' | 'group' | 'both' */
   target?: 'main' | 'group' | 'both';
+  /** Optional navigation domain used to build complete category pages. */
+  navCategory?: 'status';
   /** If true, the command is never shown in any menu */
   hidden?: boolean;
 }
@@ -54,77 +56,77 @@ export interface MenuEntry {
 export const MENU_CATALOG: Record<string, MenuEntry> = {
 
   // ── Status Engine ──────────────────────────────────────────
-  godcast: { section: '⚔ MODERATION', syntax: 'godcast', desc: 'Post designed status for current group', target: 'main' },
-  statusdesign: { section: '⚔ MODERATION', syntax: 'statusdesign', desc: 'Post designed status for current group', target: 'main' },
-  settheme: { section: '⚔ MODERATION', syntax: 'settheme [theme]', desc: 'Set default status theme for this group', target: 'main' },
-  smedia: { section: '⚔ MODERATION', syntax: 'smedia', desc: 'Post media status', target: 'main' },
-  gstatus: { section: '⚔ MODERATION', syntax: 'gstatus [msg]', desc: 'Post text to current group status', target: 'main' },
+  godcast: { section: '⚔ MODERATION', syntax: 'godcast', desc: 'Post designed status for current group', target: 'main', navCategory: 'status' },
+  statusdesign: { section: '⚔ MODERATION', syntax: 'statusdesign', desc: 'Post designed status for current group', target: 'main', navCategory: 'status' },
+  settheme: { section: '⚔ MODERATION', syntax: 'settheme [theme]', desc: 'Set default status theme for this group', target: 'main', navCategory: 'status' },
+  smedia: { section: '⚔ MODERATION', syntax: 'smedia', desc: 'Post media status', target: 'main', navCategory: 'status' },
+  gstatus: { section: '⚔ MODERATION', syntax: 'gstatus [msg]', desc: 'Post text to current group status', target: 'main', navCategory: 'status' },
   tochat: { section: '⚔ MODERATION', syntax: 'tochat [jid] [msg]', desc: 'Send message to a target group', target: 'main' },
-  togstatus: { section: '⚔ MODERATION', syntax: 'togstatus [jid] [msg]', desc: 'Post to a target group status', target: 'main' },
+  togstatus: { section: '⚔ MODERATION', syntax: 'togstatus [jid] [msg]', desc: 'Post to a target group status', target: 'main', navCategory: 'status' },
   tochatx: { section: '⚔ MODERATION', syntax: 'tochatx [jid] [n] [msg]', desc: 'Repeat a message to a target group', target: 'main' },
-  togstatusx: { section: '⚔ MODERATION', syntax: 'togstatusx [n] [jid] [msg]', desc: 'Repeat to a target group status', target: 'main' },
-  sstatus: { section: '📲 STATUS PLATFORM', syntax: 'sstatus [dm]', desc: 'Save a replied contact status (or .sstatus dm)', target: 'both',
+  togstatusx: { section: '⚔ MODERATION', syntax: 'togstatusx [n] [jid] [msg]', desc: 'Repeat to a target group status', target: 'main', navCategory: 'status' },
+  sstatus: { section: '📲 STATUS PLATFORM', syntax: 'sstatus [dm]', desc: 'Save a replied contact status (or .sstatus dm)', target: 'both', navCategory: 'status',
     usage: 'Reply to any contact status to recover it.\n.sstatus — send back into this chat\n.sstatus dm — send to your Saved Messages',
     permissions: 'Owner / Sudo',
     inputs: ['Reply (contact status)'],
     examples: ['sstatus', 'sstatus dm'],
     output: 'Recovered status media/text sent.' },
-  vv: { section: '📲 STATUS PLATFORM', syntax: 'vv', desc: 'Recover a View Once image/video (reply)', target: 'both',
+  vv: { section: '📲 STATUS PLATFORM', syntax: 'vv', desc: 'Recover a View Once image/video (reply)', target: 'both', navCategory: 'status',
     usage: 'Reply to a View Once image or video to recover the original media and resend it as a normal message.',
     permissions: 'Owner / Sudo',
     inputs: ['Reply (View Once)'],
     examples: ['vv'],
     output: 'Media resent as normal (view-once removed).' },
-  vvdm: { section: '📲 STATUS PLATFORM', syntax: 'vvdm', desc: 'Recover View Once to your Saved Messages', target: 'both',
+  vvdm: { section: '📲 STATUS PLATFORM', syntax: 'vvdm', desc: 'Recover View Once to your Saved Messages', target: 'both', navCategory: 'status',
     usage: 'Reply to a View Once message. Recovers the media and sends it privately to your own WhatsApp account.',
     permissions: 'Owner / Sudo',
     inputs: ['Reply (View Once)'],
     examples: ['vvdm'],
     output: 'Media sent to Saved Messages.' },
-  autovv: { section: '📲 STATUS PLATFORM', syntax: 'autovv <on|off>', desc: 'Auto-recover every view-once in this chat', target: 'both',
+  autovv: { section: '📲 STATUS PLATFORM', syntax: 'autovv <on|off>', desc: 'Auto-recover every view-once in this chat', target: 'both', navCategory: 'status',
     usage: 'When enabled in a chat, every View Once received is automatically recovered and resent as normal media.',
     permissions: 'Owner / Sudo',
     examples: ['autovv on', 'autovv off'],
     output: 'Per-chat setting persisted.' },
-  antidelete: { section: '📲 STATUS PLATFORM', syntax: 'antidelete <on|dm|link <dest>|off>', desc: 'Recover deleted messages', target: 'both',
+  antidelete: { section: '📲 STATUS PLATFORM', syntax: 'antidelete <on|dm|link <dest>|off>', desc: 'Recover deleted messages', target: 'both', navCategory: 'status',
     usage: 'Recover messages deleted by participants.\non — repost in the same chat\ndm — send to your Saved Messages\nlink <jid|invite> — forward to a configured destination\noff — disable for this chat',
     permissions: 'Owner / Sudo',
     inputs: ['Reply', 'JID', 'Invite Link'],
     examples: ['antidelete on', 'antidelete dm', 'antidelete link 120363…@g.us', 'antidelete off'],
     output: 'Deleted messages recovered with sender/time/type metadata.' },
-  pstatus: { section: '📲 STATUS PLATFORM', syntax: 'pstatus [text]', desc: 'Post to your personal WhatsApp Status', target: 'main',
+  pstatus: { section: '📲 STATUS PLATFORM', syntax: 'pstatus [text]', desc: 'Post to your personal WhatsApp Status', target: 'main', navCategory: 'status',
     usage: 'Post text or reply to media (image/video/audio/document) to upload it to your personal status.',
     permissions: 'Owner / Sudo',
     inputs: ['Text', 'Reply (media)'],
     examples: ['pstatus Hello World', 'pstatus (reply image)'],
     output: 'Status posted to status@broadcast.' },
-  autosend: { section: '📲 STATUS PLATFORM', syntax: 'autosend <on|off>', desc: 'Auto-send status content on request', target: 'main',
+  autosend: { section: '📲 STATUS PLATFORM', syntax: 'autosend <on|off>', desc: 'Auto-send status content on request', target: 'main', navCategory: 'status',
     usage: 'When someone replies to your status asking for it ("send", "please send"), the original content is sent to them.',
     permissions: 'Owner / Sudo',
     examples: ['autosend on', 'autosend off'],
     output: 'Session setting persisted.' },
-  autodstatus: { section: '📲 STATUS PLATFORM', syntax: 'autodstatus <on|off>', desc: 'Auto-download contacts\' statuses to Saved Messages', target: 'main',
+  autodstatus: { section: '📲 STATUS PLATFORM', syntax: 'autodstatus <on|off>', desc: 'Auto-download contacts\' statuses to Saved Messages', target: 'main', navCategory: 'status',
     usage: 'Every contact status is downloaded and forwarded to your Saved Messages with contact/time/type metadata.',
     permissions: 'Owner / Sudo',
     examples: ['autodstatus on', 'autodstatus off'],
     output: 'Statuses archived with metadata.' },
-  autostatusreact: { section: '📲 STATUS PLATFORM', syntax: 'autostatusreact <on|off> [emoji]', desc: 'Native reaction to viewed statuses', target: 'main',
+  autostatusreact: { section: '📲 STATUS PLATFORM', syntax: 'autostatusreact <on|off> [emoji]', desc: 'Native reaction to viewed statuses', target: 'main', navCategory: 'status',
     usage: 'Automatically reacts to statuses you view using a native WhatsApp reaction packet (not a chat reply).',
     permissions: 'Owner / Sudo',
     examples: ['autostatusreact on', 'autostatusreact on 🔥', 'autostatusreact off'],
     output: 'Native status reactions applied.' },
-  antigstatus: { section: '🛡 ANTI SYSTEM', syntax: 'antigstatus <delete|warn N|kick|off>', desc: 'Block unauthorized Group Status posts', target: 'group',
+  antigstatus: { section: '🛡 ANTI SYSTEM', syntax: 'antigstatus <delete|warn N|kick|off>', desc: 'Block unauthorized Group Status posts', target: 'group', navCategory: 'status',
     usage: 'Detect group status posting events and punish unauthorized posters (respects permits and admin exemption).',
     permissions: 'Admin / Sudo / Owner',
     examples: ['antigstatus delete', 'antigstatus warn 3', 'antigstatus kick', 'antigstatus off'],
     output: 'Violations deleted/warned/kicked with warn escalation.' },
 
   // ── Broadcast Network ─────────────────────────────────────
-  allstatus: { section: '⚔ MODERATION', syntax: 'allstatus [msg]', desc: 'Post to ALL group statuses', target: 'main' },
-  allstatusx: { section: '⚔ MODERATION', syntax: 'allstatusx [n] [msg]', desc: 'Repeat to every group status', target: 'main' },
+  allstatus: { section: '⚔ MODERATION', syntax: 'allstatus [msg]', desc: 'Post to ALL group statuses', target: 'main', navCategory: 'status' },
+  allstatusx: { section: '⚔ MODERATION', syntax: 'allstatusx [n] [msg]', desc: 'Repeat to every group status', target: 'main', navCategory: 'status' },
   allchat: { section: '⚔ MODERATION', syntax: 'allchat [msg]', desc: 'Send to all groups with hidetag', target: 'main' },
-  stopspam: { section: '⚔ MODERATION', syntax: 'stopspam', desc: 'Stop the active status / outreach loop', target: 'main' },
-  stop: { section: '⚔ MODERATION', syntax: 'stop', desc: 'Alias for stopspam', target: 'main' },
+  stopspam: { section: '⚔ MODERATION', syntax: 'stopspam', desc: 'Stop the active status / outreach loop', target: 'main', navCategory: 'status' },
+  stop: { section: '⚔ MODERATION', syntax: 'stop', desc: 'Alias for stopspam', target: 'main', navCategory: 'status' },
 
   // ── Tag Engine ────────────────────────────────────────────
   tag: { section: '📊 UTILITY', syntax: 'tag', desc: 'Hidetag all group members', target: 'both' },
@@ -170,6 +172,15 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
   setmenupic: { section: '⚙ CONFIGURATION', syntax: 'setmenupic', desc: 'Set replied image as menu media', target: 'main' },
   setmenuvideo: { section: '⚙ CONFIGURATION', syntax: 'setmenuvideo', desc: 'Set replied video as menu media', target: 'main' },
   delmenumedia: { section: '⚙ CONFIGURATION', syntax: 'delmenumedia', desc: 'Restore default text-only menus', target: 'main' },
+  setpfp: { section: '⚙ CONFIGURATION', syntax: 'setpfp', desc: 'Set the session profile picture from a replied image', target: 'main', inputs: ['Reply (Image)'] },
+  getpfp: { section: '⚙ CONFIGURATION', syntax: 'getpfp', desc: 'Send the session profile picture', target: 'main' },
+  removepfp: { section: '⚙ CONFIGURATION', syntax: 'removepfp', desc: 'Remove the session profile picture', target: 'main' },
+  setname: { section: '⚙ CONFIGURATION', syntax: 'setname <name>', desc: 'Set the WhatsApp display name', target: 'main' },
+  setbio: { section: '⚙ CONFIGURATION', syntax: 'setbio <text>', desc: 'Set the WhatsApp profile bio', target: 'main' },
+  wainfo: { section: '⚙ CONFIGURATION', syntax: 'wainfo <target>', desc: 'Look up a WhatsApp contact or group', target: 'main' },
+  creategc: { section: '⚙ CONFIGURATION', syntax: 'creategc <name> | <desc>', desc: 'Create a group and optionally set a replied image as its PFP', target: 'main' },
+  collect: { section: '⚙ CONFIGURATION', syntax: 'collect <on|off>', desc: 'Toggle per-session invite-link collection', target: 'main' },
+  autopromo: { section: '⚙ CONFIGURATION', syntax: 'autopromo <add|status|run|off>', desc: 'Manage per-session auto-promotion', target: 'main' },
   setsudo: { section: '⚙ CONFIGURATION', syntax: 'setsudo [number]', desc: 'Grant command access (or reply to msg)', target: 'main' },
   delsudo: { section: '⚙ CONFIGURATION', syntax: 'delsudo [number]', desc: 'Revoke command access', target: 'main' },
   sudo: { section: '⚙ CONFIGURATION', syntax: 'sudo', desc: 'List all sudo numbers', target: 'main' },
@@ -192,13 +203,17 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
   userinfo: { section: '⚙ CONFIGURATION', syntax: 'userinfo', desc: 'Show user JID, number & LID', target: 'main' },
   idea: { section: '⚙ CONFIGURATION', syntax: 'idea [msg]', desc: 'Send a suggestion or feedback to admin', target: 'both' },
   getinfo: { section: '⚙ CONFIGURATION', syntax: 'getinfo', desc: 'Alias for userinfo', target: 'main' },
-  spam: { section: '⚔ MODERATION', syntax: 'spam [msg]', desc: 'Run status loop (until stopspam)', target: 'main' },
+  spam: { section: '⚔ MODERATION', syntax: 'spam [msg]', desc: 'Run status loop (until stopspam)', target: 'main', navCategory: 'status' },
   menu: { section: '⚙ CONFIGURATION', syntax: 'menu', desc: 'Show general command menu', target: 'main',
     usage: 'Show the main command menu.',
     permissions: 'Public',
     examples: ['menu'],
     output: 'Premium OS-style menu.' },
-  help: { section: '⚙ CONFIGURATION', syntax: 'help', desc: 'Alias for menu', target: 'main' },
+  help: { section: '⚙ CONFIGURATION', syntax: 'help [page]', desc: 'List every command in plain-text pages (no buttons)', target: 'main',
+    usage: 'Show the complete command list. If it spans multiple messages, send .help 2, .help 3, and so on.',
+    permissions: 'Public',
+    examples: ['help', 'help 2'],
+    output: 'Numbered command pages with a next-page instruction.' },
   gmenu: { section: '⚙ CONFIGURATION', syntax: 'gmenu', desc: 'Show group moderation menu', target: 'group' },
 
   // ── Group Moderation ──────────────────────────────────────
@@ -294,7 +309,8 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
   antivnmsg: { section: '🛡 ANTI SYSTEM', syntax: 'antivnmsg [text]', desc: 'Custom AntiVN message', target: 'group' },
 
   // AntiText
-  antitxt: { section: '🛡 ANTI SYSTEM', syntax: 'antitxt <kick|warn N|delete|off>', desc: 'Block plain text messages', target: 'group' },
+  antitxt: { section: '🛡 ANTI SYSTEM', syntax: 'antitext <kick|warn N|delete|off>', desc: 'Block plain text messages only (no word list)', target: 'group' },
+  antitext: { section: '🛡 ANTI SYSTEM', syntax: 'antitext <kick|warn N|delete|off>', desc: 'Alias for AntiText plain-text blocking', target: 'group', hidden: true },
 
   // AntiEmoji
   antiemoji: { section: '🛡 ANTI SYSTEM', syntax: 'antiemoji <kick|warn N|delete|off>', desc: 'Block emoji messages', target: 'group' },
@@ -322,7 +338,10 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
   rmmentionpermit: { section: '🛡 ANTI SYSTEM', syntax: 'rmmentionpermit @user', desc: 'Remove AntiGroupMention exemption', target: 'group' },
 
   // AntiWords
-  antiwords: { section: '🛡 ANTI SYSTEM', syntax: 'antiwords <kick|warn N|delete|off>', desc: 'Block messages with blocked words', target: 'group' },
+  antiwords: { section: '🛡 ANTI SYSTEM', syntax: 'antiwords <kick|warn N|delete|off> [words]', desc: 'Block only configured words/phrases', target: 'group',
+    examples: ['antiwords warn 3 [scam, fraud, free money]', 'antiwords delete [casino]'],
+    usage: 'AntiWords owns the bracketed word list. AntiText remains plain-text-only.',
+  },
   antiaddword: { section: '🛡 ANTI SYSTEM', syntax: 'antiaddword <word>', desc: 'Add a word to the blocklist', target: 'group' },
   antirmword: { section: '🛡 ANTI SYSTEM', syntax: 'antirmword <word>', desc: 'Remove a word from the blocklist', target: 'group' },
   antiwordlist: { section: '🛡 ANTI SYSTEM', syntax: 'antiwordlist', desc: 'Show all blocked words', target: 'group' },
@@ -347,7 +366,7 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
   antipromote: { section: '🛡 ANTI SYSTEM', syntax: 'antipromote <kick|warn N|delete|off>', desc: 'React to unauthorized admin promotions', target: 'group' },
   antidemote: { section: '🛡 ANTI SYSTEM', syntax: 'antidemote <dwp|dnp|kwp|knp|off>', desc: 'React to unauthorized admin demotions', target: 'group' },
   // ── Missing-catalog registrations (kept out of the ◈ OTHER bucket) ──
-  allgstatus: { section: '📊 UTILITY', syntax: 'allgstatus [msg]', desc: 'Post to ALL group statuses', target: 'main' },
+  allgstatus: { section: '📊 UTILITY', syntax: 'allgstatus [msg]', desc: 'Post to ALL group statuses', target: 'main', navCategory: 'status' },
   mute: { section: '⚔ MODERATION', syntax: 'mute', desc: 'Mute the group', target: 'group' },
   unmute: { section: '⚔ MODERATION', syntax: 'unmute', desc: 'Unmute the group', target: 'group' },
   block: { section: '⚔ MODERATION', syntax: 'block [user]', desc: 'Block a user (reply / mention / number)', target: 'both' },
@@ -359,11 +378,14 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
   // ── Join Approval ─────────────────────────────────────────
   // Mirror of the Telegram per-group dashboard approval features,
   // now accessible directly from WhatsApp.
-  pendingjoin: { section: '📊 UTILITY', syntax: 'pendingjoin', desc: 'List pending join requests', target: 'group' },
-  approveall: { section: '📊 UTILITY', syntax: 'approveall', desc: 'Approve ALL pending join requests', target: 'group' },
-  rejectall: { section: '📊 UTILITY', syntax: 'rejectall', desc: 'Reject ALL pending join requests', target: 'group' },
-  approveamt: { section: '📊 UTILITY', syntax: 'approveamt <n>', desc: 'Approve first N pending requests', target: 'group' },
-  approvecountry: { section: '📊 UTILITY', syntax: 'approvecountry <+code>', desc: 'Approve requests by phone country code', target: 'group' },
+  // Join approval remains callable directly on WhatsApp, but these controls
+  // are intentionally not rendered in WhatsApp navigation menus. Telegram
+  // already provides the guided approval submenu.
+  pendingjoin: { section: '📊 UTILITY', syntax: 'pendingjoin', desc: 'List pending join requests', target: 'group', hidden: true },
+  approveall: { section: '📊 UTILITY', syntax: 'approveall', desc: 'Approve ALL pending join requests', target: 'group', hidden: true },
+  rejectall: { section: '📊 UTILITY', syntax: 'rejectall', desc: 'Reject ALL pending join requests', target: 'group', hidden: true },
+  approveamt: { section: '📊 UTILITY', syntax: 'approveamt <n>', desc: 'Approve first N pending requests', target: 'group', hidden: true },
+  approvecountry: { section: '📊 UTILITY', syntax: 'approvecountry <+code>', desc: 'Approve requests by phone country code', target: 'group', hidden: true },
 };
 
 // ── Section order ─────────────────────────────────────────
@@ -493,8 +515,7 @@ const GROUP_MODERATION_COMMANDS = [
   'resetwarn', 'warns', 'poll', 'blockall', 'autoblock', 'block', 'deleteall',
   'mute', 'unmute', 'stopjoin', 'setwelcome', 'welcomemsg', 'welcome',
   'setgoodbye', 'goodbyemsg', 'goodbye', 'kickmsg', 'warnmsg', 'banmsg',
-  'unbanmsg', 'eventstatus', 'pendingjoin', 'approveall', 'rejectall',
-  'approveamt', 'approvecountry',
+  'unbanmsg', 'eventstatus',
 ];
 
 const ANTI_COMMANDS = [
@@ -514,26 +535,50 @@ const ANTI_COMMANDS = [
   'setantiwords', 'rmantiwords', 'clearantiwords',
 ];
 
+// The hub stays compact, while every category page is complete for its
+// domain. Status commands intentionally span the status poster, broadcast,
+// personal-status, recovery, and automation engines.
+const UTILITY_NAV_COMMANDS = [
+  'tag', 'mtag', 'join', 'left', 'leave', 'joinall', 'leaveall', 'addlink',
+  'sticker', 'setpackname', 'setauthor', 'setcmd', 'delcmd', 'listcmd',
+  'setmenupic', 'setmenuvideo', 'delmenumedia',
+];
+
+const MESSAGING_NAV_COMMANDS = ['tochat', 'tochatx', 'allchat'];
+const SESSION_NAV_COMMANDS = [
+  'ls', 'curr', 'switch', 'sinfo', 'restart', 'disconnect', 'delete',
+  'rename', 'freeze', 'unfreeze',
+];
+const CONFIGURATION_NAV_COMMANDS = [
+  'setprefix', 'prefix', 'public', 'setmode', 'publicresponse', 'tagreply',
+  'swresponse', 'settimezone', 'setsudo', 'delsudo', 'sudo',
+  'setpfp', 'getpfp', 'removepfp', 'setname', 'setbio', 'wainfo', 'creategc',
+  'collect', 'autopromo', 'menu', 'help', 'gmenu',
+];
+
+// The command registry remains the source of truth for each live count and
+// category page; these arrays only define the domain boundaries.
 export const MAIN_NAV: NavCategory[] = [
   { id: 'pair', label: 'Pair', emoji: '🔗', desc: 'Use any prefix then pair your number', commands: ['pair'] },
+  { id: 'help', label: 'Help', emoji: '📖', desc: 'List every command in plain text — send .help 2 for the next page', commands: ['help'] },
+  { id: 'status', label: 'Status', emoji: '📲', desc: 'Every status, broadcast, recovery & automation command', commands: [], showAll: true },
+  { id: 'messaging', label: 'Messaging', emoji: '💬', desc: 'Send to one, many, or every group', commands: MESSAGING_NAV_COMMANDS },
   { id: 'group', label: 'Group', emoji: '⚔️', desc: 'Kick, ban, warn, polls & events', commands: GROUP_MODERATION_COMMANDS, showAll: true },
   { id: 'promo', label: 'Promotion', emoji: '⬆️', desc: 'Admin promotion, demotion & guards', commands: ['promote', 'demote', 'antipromote', 'antidemote'], showAll: true },
   { id: 'anti', label: 'Anti-System', emoji: '🛡️', desc: 'Link, spam, media & words', commands: ANTI_COMMANDS, showAll: true },
-  { id: 'info', label: 'Info', emoji: 'ℹ️', desc: 'Ping, status, groups & users', commands: ['ping', 'info', 'groups', 'jid', 'userinfo', 'getinfo', 'sudo', 'idea'] },
-  { id: 'utils', label: 'Utilities', emoji: '🧰', desc: 'Tag, mtag, stickers & extras', commands: ['tag', 'mtag', 'sticker'], fallback: true },
-  { id: 'status', label: 'Status', emoji: '📲', desc: 'View once, anti-delete & status platform', commands: ['vv', 'vvdm', 'autovv', 'antidelete', 'pstatus', 'autosend', 'autodstatus', 'autostatusreact', 'sstatus'] },
-  { id: 'system', label: 'System', emoji: '🖥️', desc: 'Status engine, broadcast & sessions', commands: ['godcast', 'statusdesign', 'settheme', 'smedia', 'gstatus', 'tochat', 'togstatus', 'tochatx', 'togstatusx', 'sstatus', 'allstatus', 'allgstatus', 'allstatusx', 'allchat', 'stopspam', 'stop', 'spam', 'join', 'joinall', 'left', 'leave', 'leaveall', 'addlink', 'ls', 'curr', 'switch', 'sinfo', 'restart', 'disconnect', 'delete', 'rename', 'freeze', 'unfreeze'] },
-  { id: 'settings', label: 'Settings', emoji: '⚙️', desc: 'Prefix, sudo, media, mode & stickers', commands: ['setprefix', 'prefix', 'public', 'setmode', 'swresponse', 'settimezone', 'publicresponse', 'tagreply', 'setmenupic', 'setmenuvideo', 'delmenumedia', 'setsudo', 'delsudo', 'sudo', 'setpackname', 'setauthor', 'setcmd', 'delcmd', 'listcmd'] },
-  { id: 'help', label: 'Help', emoji: '📖', desc: 'Navigation & command index', commands: ['menu', 'help', 'gmenu'] },
+  { id: 'info', label: 'Info', emoji: 'ℹ️', desc: 'Ping, status, groups & users', commands: ['ping', 'info', 'groups', 'jid', 'userinfo', 'getinfo', 'idea'], showAll: true },
+  { id: 'utils', label: 'Utilities', emoji: '🧰', desc: 'Tag, lifecycle, stickers & join tools', commands: UTILITY_NAV_COMMANDS, fallback: true },
+  { id: 'sessions', label: 'Sessions', emoji: '🖥️', desc: 'List, switch, restart & manage sessions', commands: SESSION_NAV_COMMANDS },
+  { id: 'config', label: 'Configuration', emoji: '⚙️', desc: 'Prefix, access, response & menu settings', commands: CONFIGURATION_NAV_COMMANDS },
 ];
 
 export const GROUP_NAV: NavCategory[] = [
   { id: 'group', label: 'Group', emoji: '⚔️', desc: 'Kick, ban, warn, polls & events', commands: GROUP_MODERATION_COMMANDS },
   { id: 'promo', label: 'Promotion', emoji: '⬆️', desc: 'Admin promotion, demotion & guards', commands: ['promote', 'demote', 'antipromote', 'antidemote'] },
   { id: 'anti', label: 'Anti', emoji: '🛡️', desc: 'Full Anti System — link, spam, media, words', commands: ANTI_COMMANDS },
-  { id: 'status', label: 'Status', emoji: '📲', desc: 'View once, anti-delete & status platform', commands: ['vv', 'vvdm', 'autovv', 'antidelete', 'pstatus', 'autosend', 'autodstatus', 'autostatusreact', 'sstatus'] },
-  { id: 'info', label: 'Info', emoji: 'ℹ️', desc: 'Ping, status, groups & users', commands: ['ping', 'info', 'groups', 'jid', 'userinfo', 'getinfo', 'sudo', 'idea'] },
-  { id: 'utils', label: 'Utilities', emoji: '🧰', desc: 'Tag, mtag, stickers & extras', commands: ['tag', 'mtag', 'sticker'], fallback: true },
+  { id: 'status', label: 'Status', emoji: '📲', desc: 'Every status, broadcast, recovery & automation command', commands: [], showAll: true },
+  { id: 'info', label: 'Info', emoji: 'ℹ️', desc: 'Ping, status, groups & users', commands: ['ping', 'info', 'groups', 'jid', 'userinfo', 'getinfo', 'idea'], showAll: true },
+  { id: 'utils', label: 'Utilities', emoji: '🧰', desc: 'Tag, lifecycle, stickers & join tools', commands: UTILITY_NAV_COMMANDS, fallback: true },
 ];
 
 export function navFor(menuTarget: 'main' | 'group'): NavCategory[] {
@@ -561,6 +606,40 @@ function entryMatchesTarget(entry: MenuEntry, menuTarget: 'main' | 'group'): boo
 }
 
 /** Resolve a nav category's command lines (catalog-driven, fallback-safe). */
+const PROMOTION_COMMANDS = new Set(['promote', 'demote', 'antipromote', 'antidemote']);
+/**
+ * Resolve the registry-owned command names for a hub category. The compact
+ * categories use catalog metadata rather than a second hardcoded count list;
+ * adding a registered command to the appropriate target/section updates the
+ * count and category page automatically.
+ */
+function registeredCommandsForNav(
+  nav: NavCategory,
+  menuTarget: 'main' | 'group'
+): string[] {
+  // These categories have explicit domain boundaries. Resolve their command
+  // lines from the registry below, rather than from a second partial list or
+  // from section names (status commands intentionally use several sections).
+  if (nav.id === 'status') {
+    return Object.entries(MENU_CATALOG)
+      .filter(([, entry]) => !entry.hidden && entry.navCategory === 'status')
+      .map(([name]) => name);
+  }
+  if (nav.id === 'group' || nav.id === 'info' || nav.id === 'utils'
+    || nav.id === 'messaging' || nav.id === 'sessions' || nav.id === 'config') {
+    return nav.commands;
+  }
+  if (nav.id === 'pair') return ['pair'];
+  if (nav.id === 'help') return ['help'];
+  if (nav.id === 'promo') return [...PROMOTION_COMMANDS];
+  if (nav.id === 'anti') {
+    return Object.entries(MENU_CATALOG)
+      .filter(([, entry]) => !entry.hidden && entry.section.includes('ANTI SYSTEM'))
+      .map(([name]) => name);
+  }
+  return nav.commands;
+}
+
 export function navCommandLines(
   prefix: string,
   nav: NavCategory,
@@ -568,14 +647,15 @@ export function navCommandLines(
   knownCommands: readonly string[]
 ): NavCommandLine[] {
   const lines: NavCommandLine[] = [];
-  for (const cmdName of nav.commands) {
+  const commandNames = registeredCommandsForNav(nav, menuTarget);
+  for (const cmdName of commandNames) {
     const entry = MENU_CATALOG[cmdName];
     if (entry?.hidden) continue;
-    // showAll categories (Group / Promotion / Anti-System in the main hub)
-    // expose their commands regardless of the menu target, so the hub counts
-    // and category pages never render empty.
+    // The command parser is authoritative when supplied. This keeps category
+    // counts and pages synchronized as commands are added or removed.
+    if (knownCommands.length > 0 && !knownCommands.includes(cmdName)) continue;
     if (entry && !nav.showAll && !entryMatchesTarget(entry, menuTarget)) continue;
-    if (!entry && !knownCommands.includes(cmdName)) continue;
+    if (!entry && knownCommands.length === 0) continue;
     lines.push({
       name: cmdName,
       cmd: prefix + (entry?.syntax ?? cmdName),
@@ -671,7 +751,43 @@ export function renderNavHub(
   return lines.join('\n');
 }
 
-/** One category page (5-7 commands) with usage + permissions + premium flag. */
+const BOLD_LOWER = '𝗮𝗯𝗰𝗱𝗲𝗳𝗴𝗵𝗶𝗷𝗸𝗹𝗺𝗻𝗼𝗽𝗾𝗿𝘀𝘁𝘂𝘃𝘄𝘅𝘆𝘇';
+const BOLD_UPPER = '𝗔𝗕𝗖𝗗𝗘𝗙𝗚𝗛𝗜𝗝𝗞𝗟𝗠𝗡𝗢𝗣𝗤𝗥𝗦𝗧𝗨𝗩𝗪𝗫𝗬𝗭';
+const BOLD_DIGITS = '𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵';
+const COMMAND_ITALIC_LOWER = '𝘢𝘣𝘤𝘥𝘦𝘧𝘨𝘩𝘪𝘫𝘬𝘭𝘮𝘯𝘰𝘱𝘲𝘳𝘴𝘵𝘶𝘷𝘸𝘹𝘺𝘻';
+
+function boldMenuText(value: string): string {
+  return [...value].map((char) => {
+    const lower = char.toLowerCase();
+    const lowerIndex = 'abcdefghijklmnopqrstuvwxyz'.indexOf(lower);
+    if (lowerIndex >= 0) {
+      const map = char === char.toUpperCase() ? BOLD_UPPER : BOLD_LOWER;
+      return [...map][lowerIndex] ?? char;
+    }
+    const digitIndex = '0123456789'.indexOf(char);
+    return digitIndex >= 0 ? [...BOLD_DIGITS][digitIndex] ?? char : char;
+  }).join('');
+}
+
+function compactMenuCommand(command: string, prefix: string): string {
+  const withoutPrefix = prefix && command.startsWith(prefix)
+    ? command.slice(prefix.length)
+    : command;
+  // Keep arguments readable; only the command token uses the compact bold font.
+  const match = withoutPrefix.match(/^(\S+)([\s\S]*)$/u);
+  if (!match) return boldMenuText(withoutPrefix);
+  return `${boldMenuText(match[1]!)}${match[2] ?? ''}`;
+}
+
+const COMPACT_CATEGORY_DESCRIPTIONS: Record<string, string> = {
+  vv: 'Recover View Once media (reply)',
+  vvdm: 'Recover View Once to Saved Messages',
+  autovv: 'Auto-recover every view-once in chat',
+  antidelete: 'Recover messages deleted by participants',
+  sstatus: 'Save a replied contact status',
+};
+
+/** One compact category page with bold commands and short permission lines. */
 export function renderNavCategoryPage(
   prefix: string,
   navId: string,
@@ -686,18 +802,19 @@ export function renderNavCategoryPage(
   const totalPages = Math.max(1, Math.ceil(lines.length / MENU_PAGE_SIZE));
   const p = clampPage(page, totalPages);
   const slice = lines.slice((p - 1) * MENU_PAGE_SIZE, p * MENU_PAGE_SIZE);
-  const body = slice.map((l) => {
-    const meta: string[] = [];
-    if (l.usage) meta.push(`Usage: ${l.usage}`);
-    if (l.permissions) meta.push(`Perm: ${l.permissions}`);
-    return `${l.cmd}${l.premium ? ' 💎' : ''}\n  ${l.desc}${meta.length > 0 ? `\n  ${meta.join(' • ')}` : ''}`;
+  const body = slice.flatMap((line) => {
+    const command = compactMenuCommand(line.cmd, prefix) + (line.premium ? ' 💎' : '');
+    const description = COMPACT_CATEGORY_DESCRIPTIONS[line.name] ?? line.desc;
+    const permission = line.permissions ? `• Perm: ${line.permissions}` : '';
+    return [`✦ ${command}`, `  └─ ${description}`, permission ? `  ${permission}` : '', ''].filter((line) => line !== undefined);
   });
   const text = [
-    `${nav.emoji} ${nav.label.toUpperCase()} — ${p}/${totalPages}`,
-    '─────────────────────',
-    ...body,
+    `${nav.emoji} ${[...nav.label.toUpperCase()].map((char) => boldMenuText(char)).join(' ')}  𝄜  ${boldMenuText(String(p))} / ${boldMenuText(String(totalPages))}`,
     '',
+    ...body,
+    '· · ────────────────────── · ·',
     'Use the buttons to navigate.',
+    '· · ——— 𝕻𝕬𝕻𝕻𝖞 ×͜× ——— · ·',
   ].join('\n');
   return { text, totalPages };
 }
@@ -705,13 +822,14 @@ export function renderNavCategoryPage(
 /** Flat, catalog-ordered help lines for the given menu target. */
 export function allHelpLines(
   prefix: string,
-  menuTarget: 'main' | 'group',
+  menuTarget: HelpTarget,
   knownCommands: readonly string[]
 ): NavCommandLine[] {
   const out: NavCommandLine[] = [];
   for (const [cmdName, entry] of Object.entries(MENU_CATALOG)) {
     if (entry.hidden) continue;
-    if (!entryMatchesTarget(entry, menuTarget)) continue;
+    if (knownCommands.length > 0 && !knownCommands.includes(cmdName)) continue;
+    if (menuTarget !== 'all' && !entryMatchesTarget(entry, menuTarget)) continue;
     out.push({
       name: cmdName,
       cmd: prefix + entry.syntax,
@@ -730,32 +848,116 @@ export function allHelpLines(
   return out;
 }
 
-/** Paginated help page — Help 1/N, 5-7 commands, never truncated. */
+/** Text-only help pagination with a stable public category order. */
+type HelpTarget = 'main' | 'group' | 'all';
+
+interface HelpCategoryDefinition {
+  title: string;
+  commands: string[];
+}
+
+const HELP_CATEGORY_DEFINITIONS: HelpCategoryDefinition[] = [
+  { title: 'Status Tools', commands: ['godcast', 'statusdesign', 'settheme', 'smedia', 'gstatus', 'pstatus', 'allstatus', 'allstatusx'] },
+  { title: 'Messaging', commands: ['tochat', 'togstatus', 'tochatx', 'togstatusx', 'allchat', 'stopspam', 'stop'] },
+  { title: 'Privacy', commands: ['vv', 'vvdm', 'autovv', 'sstatus', 'antidelete'] },
+  { title: 'Automation', commands: ['autosend', 'autodstatus', 'autostatusreact', 'antigstatus'] },
+  { title: 'Groups', commands: ['tag', 'mtag', 'join', 'left', 'leave', 'joinall', 'leaveall'] },
+  { title: 'Sessions', commands: ['ls', 'curr', 'switch', 'sinfo', 'restart', 'disconnect', 'delete', 'rename', 'freeze', 'unfreeze', 'pair'] },
+  { title: 'Stickers & Menu', commands: ['sticker', 'setpackname', 'setauthor', 'setcmd', 'delcmd', 'listcmd', 'setmenupic', 'setmenuvideo'] },
+  { title: 'Misc', commands: ['addlink', 'setprefix', 'prefix'] },
+  { title: 'Moderation', commands: [] },
+  { title: 'Anti-System', commands: [] },
+  { title: 'Configuration & Info', commands: [] },
+  { title: 'Join Approval', commands: ['pendingjoin', 'approveall', 'rejectall', 'approveamt', 'approvecountry'] },
+  { title: 'Other', commands: [] },
+];
+
+function helpCategoryEntries(prefix: string, menuTarget: HelpTarget, knownCommands: readonly string[]): NavCommandLine[][] {
+  const lines = allHelpLines(prefix, menuTarget, knownCommands);
+  const byName = new Map(lines.map((line) => [line.name, line]));
+  const used = new Set<string>();
+  const categories: NavCommandLine[][] = [];
+  for (const category of HELP_CATEGORY_DEFINITIONS) {
+    let entries = category.commands.map((name) => byName.get(name)).filter((line): line is NavCommandLine => Boolean(line));
+    if (category.commands.length === 0) {
+      const section = category.title === 'Moderation' ? '⚔ MODERATION'
+        : category.title === 'Anti-System' ? '🛡 ANTI SYSTEM'
+          : category.title === 'Configuration & Info' ? '⚙ CONFIGURATION' : '';
+      entries = lines.filter((line) => !used.has(line.name) && section && MENU_CATALOG[line.name]?.section === section);
+    }
+    if (category.title === 'Other') entries = lines.filter((line) => !used.has(line.name));
+    const unique = entries.filter((line, index, all) => all.findIndex((item) => item.name === line.name) === index);
+    unique.forEach((line) => used.add(line.name));
+    categories.push(unique);
+  }
+  return categories;
+}
+
+function helpFooter(prefix: string, page: number, totalPages: number): string[] {
+  if (page < totalPages) {
+    const next = `${prefix}help ${page + 1}`;
+    return [
+      '· · ────────────────────── · ·',
+      `Next: ${next}`,
+      `Send ${next} to continue.`,
+      '· · ——— 𝕻𝕬𝕻𝕻𝖄 ×͜× ——— · ·',
+    ];
+  }
+  return [
+    '· · ────────────────────── · ·',
+    'Last help page.',
+    '· · ——— 𝕻𝕬𝕻𝕻𝖄 ×͜× ——— · ·',
+  ];
+}
+
 export function helpPageText(
   prefix: string,
   page: number,
-  menuTarget: 'main' | 'group',
+  menuTarget: HelpTarget,
   knownCommands: readonly string[]
 ): { text: string; totalPages: number } {
-  const lines = allHelpLines(prefix, menuTarget, knownCommands);
-  if (lines.length === 0) return { text: 'No commands available.', totalPages: 1 };
-  const totalPages = Math.max(1, Math.ceil(lines.length / MENU_PAGE_SIZE));
+  const categories = helpCategoryEntries(prefix, menuTarget, knownCommands);
+  // Page 1 intentionally mirrors the requested guide: Status Tools through
+  // Stickers & Menu all remain together. Split the larger registry remainder
+  // into three readable pages without breaking the order of commands.
+  const firstPage = [0, 1, 2, 3, 4, 5, 6].flatMap((index) => categories[index] ?? []);
+  const remaining = [7, 8, 9, 10, 11, 12].flatMap((index) => categories[index] ?? []);
+  const blockLength = (line: NavCommandLine): number =>
+    `✦ ${compactMenuCommand(line.cmd, prefix)}${line.premium ? ' 💎' : ''}\n  └─ ${line.desc}`.length + 2;
+  const remainingPages: NavCommandLine[][] = [[], [], []];
+  let cursor = 0;
+  for (let bucket = 0; bucket < remainingPages.length; bucket++) {
+    const bucketsLeft = remainingPages.length - bucket;
+    const remainingLength = remaining.slice(cursor).reduce((sum, line) => sum + blockLength(line), 0);
+    const targetLength = Math.ceil(remainingLength / bucketsLeft);
+    let bucketLength = 0;
+    while (cursor < remaining.length) {
+      const nextLength = bucketLength + blockLength(remaining[cursor]!);
+      if (bucketLength > 0 && nextLength > targetLength && bucketsLeft > 1) break;
+      remainingPages[bucket]!.push(remaining[cursor]!);
+      cursor++;
+      bucketLength = nextLength;
+    }
+  }
+  const pages = [firstPage, ...remainingPages];
+  // Preserve the public four-page contract even for a filtered catalog.
+  for (let i = 0; i < pages.length; i++) {
+    if (pages[i]!.length === 0 && pages.flat().length > 0) {
+      pages[i]!.push(pages.flat()[Math.min(i, pages.flat().length - 1)]!);
+    }
+  }
+  const totalPages = 4;
   const p = clampPage(page, totalPages);
-  const slice = lines.slice((p - 1) * MENU_PAGE_SIZE, p * MENU_PAGE_SIZE);
-  const body = slice.map((l) => {
-    const meta: string[] = [];
-    if (l.usage) meta.push(`Usage: ${l.usage}`);
-    if (l.permissions) meta.push(`Perm: ${l.permissions}`);
-    return `${l.cmd}${l.premium ? ' 💎' : ''}\n  ${l.desc}${meta.length > 0 ? `\n  ${meta.join(' • ')}` : ''}`;
-  });
-  const text = [
-    `📖 HELP ${p}/${totalPages}`,
-    '─────────────────────',
-    ...body,
-    '',
-    `Reply ${prefix}help <n> or use the buttons.`,
-  ].join('\n');
-  return { text, totalPages };
+  const entries = pages[p - 1] ?? [];
+  const header = `📖 ${[...boldMenuText('HELP')].join(' ')}  𝄜  ${[...boldMenuText(String(p))].join(' ')} / ${[...boldMenuText(String(totalPages))].join(' ')}`;
+  const body = entries.map((line) => [
+    `✦ ${compactMenuCommand(line.cmd, prefix)}${line.premium ? ' 💎' : ''}`,
+    `  └─ ${line.desc}`,
+  ].join('\n')).join('\n\n');
+  return {
+    text: [header, '', body, '', ...helpFooter(prefix, p, totalPages)].join('\n'),
+    totalPages,
+  };
 }
 
 // ── Native flow quick_reply button builders ────────────────

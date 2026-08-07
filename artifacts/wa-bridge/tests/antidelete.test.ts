@@ -50,15 +50,15 @@ test('cmdAntiDelete sets and persists all four modes', async () => {
   const prefix = '.';
 
   const on = await cmdAntiDelete(socket, TG, SESSION, GROUP, ['on'], prefix);
-  assert.match(on, /ANTI DELETE/);
+  assert.match(on, /𝗔 𝗡 𝗧 𝗜  𝗗 𝗘 𝗟 𝗘 𝗧 𝗘/);
   assert.equal(getChatEngineConfig(TG, SESSION, GROUP).antiDelete?.mode, 'on');
 
   const dm = await cmdAntiDelete(socket, TG, SESSION, GROUP, ['dm'], prefix);
-  assert.match(dm, /ANTI DELETE/);
+  assert.match(dm, /𝗔 𝗡 𝗧 𝗜  𝗗 𝗘 𝗟 𝗘 𝗧 𝗘/);
   assert.equal(getChatEngineConfig(TG, SESSION, GROUP).antiDelete?.mode, 'dm');
 
   const link = await cmdAntiDelete(socket, TG, SESSION, GROUP, ['link', DEST], prefix);
-  assert.match(link, /ANTI DELETE/);
+  assert.match(link, /𝗔 𝗡 𝗧 𝗜  𝗗 𝗘 𝗟 𝗘 𝗧 𝗘/);
   assert.equal(getChatEngineConfig(TG, SESSION, GROUP).antiDelete?.mode, 'link');
   assert.equal(getChatEngineConfig(TG, SESSION, GROUP).antiDelete?.link, DEST);
 
@@ -67,7 +67,7 @@ test('cmdAntiDelete sets and persists all four modes', async () => {
   assert.match(bad, /Invalid destination/);
 
   const off = await cmdAntiDelete(socket, TG, SESSION, GROUP, ['off'], prefix);
-  assert.match(off, /ANTI DELETE/);
+  assert.match(off, /𝗔 𝗡 𝗧 𝗜  𝗗 𝗘 𝗟 𝗘 𝗧 𝗘/);
   assert.equal(getChatEngineConfig(TG, SESSION, GROUP).antiDelete?.mode, 'off');
 });
 
@@ -84,7 +84,7 @@ test('mode ON: recovers the cached message into the same chat via the fork revok
   assert.equal(sendLog.length, 1);
   assert.equal(sendLog[0]!.jid, GROUP);
   const text = sendLog[0]!.content['text'] as string;
-  assert.match(text, /DELETED MESSAGE RECOVERED/);
+  assert.match(text, /DELETED MESSAGE RECOVERED|Deleted:/);
   assert.match(text, /Chat: Test Group/);
   assert.match(text, /Sender: Sender Name/);
   assert.match(text, /classified content/);
