@@ -308,6 +308,78 @@ export function removeWord(
   saveSessionAntiConfig(telegramId, sessionId, all);
 }
 
+/**
+ * Append one or more words to the blocked list. Never overwrites the
+ * existing list. Case-insensitive (stored lowercase), duplicate-safe,
+ * Unicode-safe. Returns the words that were actually added.
+ */
+export function addWords(
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  words: string[],
+  enable = true
+): string[] {
+  const all = loadSessionAntiConfig(telegramId, sessionId);
+  if (!all[groupJid]) all[groupJid] = { groupJid };
+  if (!all[groupJid].antiwords) all[groupJid].antiwords = defaultWordsConfig();
+  const existing = new Set(all[groupJid].antiwords!.words);
+  const added: string[] = [];
+  for (const raw of words) {
+    const w = raw.trim().toLowerCase();
+    if (!w) continue;
+    if (!existing.has(w)) {
+      existing.add(w);
+      added.push(w);
+    }
+  }
+  all[groupJid].antiwords!.words = [...existing];
+  if (enable) all[groupJid].antiwords!.enabled = true;
+  saveSessionAntiConfig(telegramId, sessionId, all);
+  return added;
+}
+
+/**
+ * Remove one or more words from the blocked list. Returns the words
+ * that were actually removed.
+ */
+export function removeWords(
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  words: string[]
+): string[] {
+  const all = loadSessionAntiConfig(telegramId, sessionId);
+  if (!all[groupJid]?.antiwords) return [];
+  const existing = new Set(all[groupJid].antiwords!.words);
+  const removed: string[] = [];
+  for (const raw of words) {
+    const w = raw.trim().toLowerCase();
+    if (!w) continue;
+    if (existing.has(w)) {
+      existing.delete(w);
+      removed.push(w);
+    }
+  }
+  all[groupJid].antiwords!.words = [...existing];
+  saveSessionAntiConfig(telegramId, sessionId, all);
+  return removed;
+}
+
+/** Clear every blocked word for the group. */
+export function clearWords(
+  telegramId: string,
+  sessionId: string,
+  groupJid: string
+): number {
+  const all = loadSessionAntiConfig(telegramId, sessionId);
+  if (!all[groupJid]?.antiwords) return 0;
+  const count = all[groupJid].antiwords!.words.length;
+  all[groupJid].antiwords!.words = [];
+  saveSessionAntiConfig(telegramId, sessionId, all);
+  return count;
+}
+
 // ── AntiPromote mode update ────────────────────────────────
 
 export function setPromoteMode(

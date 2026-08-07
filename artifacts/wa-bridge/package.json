@@ -14,7 +14,7 @@
     "deploy": "tsx src/scripts/deploy.ts"
   },
   "dependencies": {
-    "@crysnovax/baileys": "2.7.0",
+    "@crysnovax/baileys": "^2.7.1",
     "@hapi/boom": "^10.0.1",
     "@types/multer": "^2.2.0",
     "archiver": "^7.0.1",

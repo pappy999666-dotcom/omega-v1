@@ -77,8 +77,78 @@ using the fork's own serializer.
 - New types in baileys-types.ts: `selectedDisplayText` on buttons/list responses,
   `templateButtonReplyMessage`.
 
+### 16. MODERATION ENGINE, RESPONSE MODE, MENU & GLOBAL PERMISSION REDESIGN ✅
+One coherent system, not per-command patches. All validated by typecheck + runtime smoke tests.
+
+**AntiText** — rewritten classification: deep unwrap of ephemeral/viewOnce wrappers, real
+plain-text detection (no media/command false positives), command exclusion, permit list, admin
+protection. No silent failures — every enforcement is logged.
+
+**AntiWords** — complete word management system (append-only, never overwrites):
+- `.setantiwords <w1, w2, …>` (multi-word, dedupe, case-insensitive, Unicode-safe, regex-safe)
+- `.rmantiwords <w1, w2, …>` • `.antiwordlist` • `.clearantiwords` (confirmation required)
+- Fast per-group lookup + proper persistence; module auto-enables on first add.
+
+**Ban = local restriction (no kick)** — banned member STAYS in the group but every message type
+(text, image, video, audio, voice note, document, contact, poll, sticker, location, mentions,
+reactions) is deleted immediately by the anti-engine, optionally re-sends the configured ban
+message (throttled), logs every attempt; `.unban` restores instantly. `cmdBan` rewritten to never
+call the removal pipeline.
+
+**AntiPromote / AntiDemote action engine** — structured actions replace the old aliases:
+`restorewarn <count>` (restore victim + warn actor with kick escalation), `d/p` (demote actor +
+promote victim), `d/d`, `p/p`, `p/k`; every action generates a clear response describing exactly
+what happened. Same engine powers AntiPromote with reversed logic.
+
+**Response Mode Engine (.swresponse)** — TXT ⇄ TABLE per session. `baseWhatsAppReply()` centrally
+routes every card through `tableFromCard()`: usage/config/error/module-status/info cards render
+as the fork's native `GenATableUXPrimitive` table; chat messages (warnings, welcomes, moderation
+notices) have no row structure → stay TXT. Verified: cards convert, chat messages don't.
+
+**Error Report Engine** — `utils/error-report.ts`: canonical `【 ❌ ERROR REPORT 】` card
+(Version/Command/Message/Error/Chat/Platform + `𝗢𝗠𝗘𝗚𝗔 • 𝗩𝟭`), rendered as native table in TABLE
+mode. Wired into the message-processing catch in `handleMessages()`.
+
+**Design language** — universal `╰─ 𝗢𝗠𝗘𝗚𝗔 • 𝗩𝟭` footer on every card (legacy PAPPY ×͜× removed).
+
+**Menu dashboard** — `.menu`/`.gmenu` hub now shows status, prefix, response mode (TXT/TABLE),
+timezone, date, time, user name + session status; `.help` = `.help <command>` detail cards only
+(menu only navigates). `.swresponse`, `.settimezone <IANA>` (validated, per-session).
+
+**Timezone** — `.settimezone` stored per session; threaded through welcome/goodbye templates,
+menu, status; all formatting via `formatInTimezone()` (IANA, falls back to server).
+
+**Private/Public mode** — `.setmode public|private` replaces the old toggle. Private = owners,
+sudo & authorized only, others get NO response. Public = anyone. **Pair always accessible** in
+both modes.
+
+**Pair prefix-independent** — `.pair` `!pair` `/pair` `#pair` `+pair` bare `pair` (optional
+leading whitespace) all work; `..pair`, `abcpair`, `nopair`, `randompair`, `pairing` rejected
+(anchored regex, verified).
+
+**Global Sudo & Omni Owner** — two platform permission layers in workspace.ts:
+- Global Sudo auto-merges into EVERY session's sudo list (newly paired sessions inherit it).
+- Omni Owner bypasses every permission check, inherits all Global Sudo capability.
+- Both hidden from normal users: `.sudo` filters them out; management commands
+  (`.globalsudo`/`.setglobalsudo`/`.delglobalsudo`, `.omni`/`.setomni`/`.delomni`) are gated to
+the configuring admin.
+
+**Baileys version check** — installed `@crysnovax/baileys` 2.7.0 vs npm latest 2.7.1 (one patch
+behind). package.json pinned to `^2.7.1` so the next update-bot run picks it up.
+
+**Smedia/media fixes** — `extractMedia()` now supports documents; audio keeps its real codec
+mimetype (`audio/ogg; codecs=opus`) + ptt flag (never forced to audio/mp4); image/video/audio
+document all pass their original mimetype through `sendGroupStatus`/`buildMediaContent`.
+
+**Telegram update-bot** — ONE live console message (no duplicate "Deployment Running" bubble);
+final "Update Complete" summary with the REAL file count is delivered BEFORE any restart;
+PM2 reload is now non-blocking/background (no more stuck at "Pm2"); file count computed
+deterministically via `git diff --name-only` instead of parsing the pull banner.
+
 ## Remaining Work
 1. Live-field verification on a real WhatsApp session: menu hub buttons → category sheets →
    command help cards → Prev/Next/Home; `.ping` native table rendering across Android/Web/iOS.
 2. If a client fails to render the GenAI table, confirm the compact-card fallback fires (it is
    wired in PreviewDispatcher).
+3. After the next deploy, confirm `pnpm install` resolves `@crysnovax/baileys@2.7.1` and the
+   update-bot summary shows the correct files-changed count.

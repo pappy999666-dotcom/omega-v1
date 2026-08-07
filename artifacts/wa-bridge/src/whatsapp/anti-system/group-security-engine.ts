@@ -71,7 +71,7 @@ import {
   numericId,
   stripDeviceSuffix,
 } from '../utils/group-permissions.js';
-import { loadGroupAntiConfig } from './config.js';
+import { loadGroupAntiConfig, incrementWarn, resetWarn } from './config.js';
 import { PreviewManager } from '../../preview-engine/index.js';
 import { addPendingRestore, removePendingRestore, loadPendingRestores } from './pending-restores.js';
 import { resolveIdentity, type IdentityParticipant } from '../utils/identity.js';
@@ -160,14 +160,32 @@ interface ActionPlan {
   /** demote the actor from admin (AntiPromote/AntiDemote enforcement) */
   demoteActor: boolean;
   banActor: boolean;
+  /** restorewarn:<N> — warns before the actor is kicked (escalation). */
+  warnLimit?: number;
   label: string;
   penalty: string;
 }
 
 function buildActionPlan(mode: GroupSecurityMode): ActionPlan {
-  const isEnforcement = isLegacyMode(mode);
+  const isEnforcement = isLegacyMode(mode) || mode.startsWith('restorewarn:');
   if (isEnforcement) {
     logger.info('[SecurityEngine] Enforcement mode — applying action plan', { mode });
+  }
+
+  // restorewarn:<N> — restore victim + warn actor; after N warns the actor is kicked.
+  if (mode.startsWith('restorewarn:')) {
+    const n = parseInt(mode.slice('restorewarn:'.length), 10);
+    const limit = Number.isFinite(n) && n > 0 ? n : 3;
+    return {
+      restoreVictim: true,
+      warnActor: true,
+      kickActor: false,
+      demoteActor: false,
+      banActor: false,
+      warnLimit: limit,
+      label: 'Victim Restored',
+      penalty: `Actor Warned (kick after ${limit})`,
+    };
   }
 
   switch (mode) {
@@ -198,6 +216,17 @@ function buildActionPlan(mode: GroupSecurityMode): ActionPlan {
       return { restoreVictim: false, warnActor: true,  kickActor: false, demoteActor: false, banActor: false, label: 'Offender Warned',       penalty: 'Warning only' };
     case 'wnp':  // W(arn) N(o-kick) P
       return { restoreVictim: true,  warnActor: true,  kickActor: false, demoteActor: false, banActor: false, label: 'Victim Restored',       penalty: 'Offender Warned' };
+
+    // ── Action shorthand engine (v4) ───────────────────────
+    case 'd/p':  // Demote actor + promote (restore) victim, notify everyone
+      return { restoreVictim: true,  warnActor: false, kickActor: false, demoteActor: true,  banActor: false, label: 'Victim Restored',       penalty: 'Actor Demoted' };
+    case 'd/d':  // Demote actor, no restore
+      return { restoreVictim: false, warnActor: false, kickActor: false, demoteActor: true,  banActor: false, label: 'Actor Demoted',          penalty: 'No restore' };
+    case 'p/p':  // Promote (restore) victim + warn actor, no demote
+      return { restoreVictim: true,  warnActor: true,  kickActor: false, demoteActor: false, banActor: false, label: 'Victim Restored',       penalty: 'Actor Warned' };
+    case 'p/k':  // Promote (restore) victim + kick actor
+      return { restoreVictim: true,  warnActor: false, kickActor: true,  demoteActor: false, banActor: false, label: 'Victim Restored',       penalty: 'Actor Kicked' };
+
     case 'off':
     default:
       logger.error('[SecurityEngine] Unknown or disabled mode — falling back to restore', { mode });
@@ -397,9 +426,27 @@ async function executePunishment(ctx: PunishmentContext): Promise<void> {
     })
   );
 
-  // ── Warn text (embedded in card; flag is informational) ───
+  // ── Warn actor ────────────────────────────────────────────
+  // For restorewarn:<N> the warn is ESCALATED: after N accumulated warns
+  // the actor is kicked (punishment escalation) instead of warned again.
   if (plan.warnActor) {
     executedActions.push('warn');
+    if (plan.warnLimit) {
+      const actorNumber = normalizeNumber(actorJid);
+      const count = incrementWarn(sessionId, groupJid, actorNumber, 'security');
+      if (count >= plan.warnLimit) {
+        resetWarn(sessionId, groupJid, actorNumber, 'security');
+        executedActions.push('kick');
+        ops.push(
+          retryGroupUpdate(socket, groupJid, [actorJid], 'remove').then((ok) => {
+            if (!ok) audit.errors?.push('kick_actor_after_warn_limit_failed');
+          })
+        );
+        logger.info('[SecurityEngine] Actor kicked after warn limit', {
+          sessionId, groupJid, actorNumber, limit: plan.warnLimit,
+        });
+      }
+    }
   }
 
   executedActions.push('audit');

@@ -189,6 +189,18 @@ export type GroupSecurityMode =
   | 'dwp'
   | 'jw'
   | 'wnp'
+  // ── Action shorthand engine (v4) ────────────────────────────────
+  //   d/p — Demote actor, promote victim (restore), notify everyone
+  //   d/d — Demote actor, do NOT restore victim
+  //   p/p — Promote victim (restore), warn actor, no actor demotion
+  //   p/k — Promote victim (restore), kick actor
+  | 'd/p'
+  | 'd/d'
+  | 'p/p'
+  | 'p/k'
+  //   restorewarn:<N> — restore victim + warn actor; after N warns the
+  //   actor is kicked (punishment escalation). Parsed at runtime.
+  | `restorewarn:${number}`
   // Legacy alias kept for migration:
   | LegacySecurityMode;
 

@@ -253,16 +253,22 @@ async function resolveTargetJid(socket: WASocket, target: string): Promise<strin
 function buildMediaContent(
   buffer: Buffer,
   type: string,
-  caption: string
+  caption: string,
+  opts: { mimeType?: string; ptt?: boolean } = {}
 ): AnyMessageContent {
   if (type === 'video') {
-    return { video: buffer, caption, gifPlayback: false };
+    return { video: buffer, caption, mimetype: opts.mimeType ?? 'video/mp4', gifPlayback: false };
   }
   if (type === 'audio') {
-    return { audio: buffer, mimetype: 'audio/mp4', ptt: false };
+    // Preserve the original codec mimetype (audio/ogg; codecs=opus for voice
+    // notes) and the ptt flag — never force audio/mp4 which breaks playback.
+    return { audio: buffer, mimetype: opts.mimeType ?? 'audio/ogg; codecs=opus', ptt: Boolean(opts.ptt) };
+  }
+  if (type === 'document') {
+    return { document: buffer, mimetype: opts.mimeType ?? 'application/octet-stream', caption: caption || undefined };
   }
   // Default: image
-  return { image: buffer, caption };
+  return { image: buffer, caption, mimetype: opts.mimeType ?? 'image/jpeg' };
 }
 
 // ── Status Group Posting ──────────────────────────────────
@@ -277,7 +283,7 @@ export async function cmdGroupStatus(
   sessionId: string,
   groupJid: string,
   text: string,
-  opts: { mediaBuffer?: Buffer; mediaType?: string; caption?: string; mimeType?: string; ptt?: boolean; theme?: string; skipDesign?: boolean; existingPreview?: PartialLinkMeta; sourceMsg?: { message?: import('../baileys-types.js').IMessage | null }; groupTitle?: string } = {}
+  opts: { mediaBuffer?: Buffer; mediaType?: string; caption?: string; mimeType?: string; ptt?: boolean; fileName?: string; theme?: string; skipDesign?: boolean; existingPreview?: PartialLinkMeta; sourceMsg?: { message?: import('../baileys-types.js').IMessage | null }; groupTitle?: string } = {}
 ): Promise<boolean> {
   if (isFrozen(sessionId)) return false;
 
@@ -293,10 +299,11 @@ export async function cmdGroupStatus(
 
     await sendGroupStatus(socket, sessionId, groupJid, designedText, {
       mediaBuffer: opts.mediaBuffer,
-      mediaType: opts.mediaType as 'image' | 'video' | 'audio' | undefined,
+      mediaType: opts.mediaType as 'image' | 'video' | 'audio' | 'document' | undefined,
       caption: opts.caption ?? designedText,
       mimeType: opts.mimeType,
       ptt: opts.ptt,
+      fileName: opts.fileName,
       existingPreview: opts.existingPreview,
       sourceMsg: opts.sourceMsg,
     });

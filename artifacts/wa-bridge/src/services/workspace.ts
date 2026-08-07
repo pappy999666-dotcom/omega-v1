@@ -147,6 +147,8 @@ function defaultConfig(telegramId: string): UserConfig {
     autoStatusLike: false,
     statusEmoji: '👍',
     antiCallEnabled: false,
+    responseMode: 'txt',
+    timezone: undefined,
   };
 }
 
@@ -258,14 +260,22 @@ export function loadSessionConfig(telegramId: string, sessionId: string): UserCo
     nullPrefix: false,
     publicMode: true,
     tagReply: true,
+    responseMode: 'txt' as const,
+    timezone: undefined as string | undefined,
   };
+
+  // ── GLOBAL SUDO (platform layer) ─────────────────────────────
+  // Global Sudo numbers are merged into EVERY session automatically, so a
+  // newly paired session inherits them without any per-session setup.
+  const globalSudo = getGlobalSudoNumbers();
+  const mergedSudo = [...new Set([...(base.sudoNumbers ?? []), ...(storedSudoNumbers(telegramId, sessionId, p)), ...globalSudo])];
 
   if (!fs.existsSync(p)) {
     return { 
       ...base, 
       ...isolatedDefaults,
       stickerMacros: { ...base.stickerMacros }, 
-      sudoNumbers: [...(base.sudoNumbers ?? [])], 
+      sudoNumbers: [...new Set([...(base.sudoNumbers ?? []), ...globalSudo])], 
       forceJoinTargets: [...(base.forceJoinTargets ?? [])], 
       statusDesignStickyThemes: { ...(base.statusDesignStickyThemes ?? {}) } 
     };
@@ -279,7 +289,7 @@ export function loadSessionConfig(telegramId: string, sessionId: string): UserCo
       ...stored,           // Then session overrides
       telegramId,
       stickerMacros: { ...(base.stickerMacros ?? {}), ...(stored.stickerMacros ?? {}) },
-      sudoNumbers: stored.sudoNumbers ?? base.sudoNumbers ?? [],
+      sudoNumbers: mergedSudo,
       forceJoinTargets: stored.forceJoinTargets ?? base.forceJoinTargets ?? [],
       ownerWaNumbers: stored.ownerWaNumbers ?? base.ownerWaNumbers ?? [],
       trustedAdminNumbers: stored.trustedAdminNumbers ?? base.trustedAdminNumbers ?? [],
@@ -288,6 +298,82 @@ export function loadSessionConfig(telegramId: string, sessionId: string): UserCo
   } catch {
     return { ...base, ...isolatedDefaults };
   }
+}
+
+/** Session-level sudo numbers read directly from disk (used before file-exists branching). */
+function storedSudoNumbers(
+  telegramId: string,
+  sessionId: string,
+  p: string
+): string[] {
+  try {
+    if (!fs.existsSync(p)) return [];
+    const stored = JSON.parse(fs.readFileSync(p, 'utf8')) as Partial<UserConfig>;
+    return stored.sudoNumbers ?? [];
+  } catch {
+    return [];
+  }
+}
+
+// ── Global Sudo / Omni Owner (platform permission layers) ──
+
+/** Platform-wide Global Sudo numbers — sudo on every session. */
+export function getGlobalSudoNumbers(): string[] {
+  return loadPlatformConfig().globalSudoNumbers ?? [];
+}
+
+/** Replace the platform-wide Global Sudo list. */
+export function setGlobalSudoNumbers(numbers: string[]): void {
+  updatePlatformConfig({ globalSudoNumbers: [...new Set(numbers)] });
+}
+
+/** Add one or more numbers to the Global Sudo list (idempotent). */
+export function addGlobalSudoNumbers(numbers: string[]): string[] {
+  const next = [...new Set([...getGlobalSudoNumbers(), ...numbers])];
+  setGlobalSudoNumbers(next);
+  return next;
+}
+
+/** Remove numbers from the Global Sudo list. */
+export function removeGlobalSudoNumbers(numbers: string[]): string[] {
+  const set = new Set(getGlobalSudoNumbers());
+  for (const n of numbers) set.delete(n);
+  const next = [...set];
+  setGlobalSudoNumbers(next);
+  return next;
+}
+
+/** Platform-wide Omni Owner numbers — highest permission layer. */
+export function getOmniOwnerNumbers(): string[] {
+  return loadPlatformConfig().omniOwnerNumbers ?? [];
+}
+
+/** Replace the platform-wide Omni Owner list. */
+export function setOmniOwnerNumbers(numbers: string[]): void {
+  updatePlatformConfig({ omniOwnerNumbers: [...new Set(numbers)] });
+}
+
+/** Add one or more Omni Owner numbers (idempotent). */
+export function addOmniOwnerNumbers(numbers: string[]): string[] {
+  const next = [...new Set([...getOmniOwnerNumbers(), ...numbers])];
+  setOmniOwnerNumbers(next);
+  return next;
+}
+
+/** Remove numbers from the Omni Owner list. */
+export function removeOmniOwnerNumbers(numbers: string[]): string[] {
+  const set = new Set(getOmniOwnerNumbers());
+  for (const n of numbers) set.delete(n);
+  const next = [...set];
+  setOmniOwnerNumbers(next);
+  return next;
+}
+
+/** True when the given WhatsApp number is an Omni Owner. */
+export function isOmniOwnerNumber(number: string): boolean {
+  const clean = String(number).replace(/\D/g, '');
+  if (!clean) return false;
+  return getOmniOwnerNumbers().some((n) => String(n).replace(/\D/g, '') === clean);
 }
 
 export function saveSessionConfig(telegramId: string, sessionId: string, config: UserConfig): void {

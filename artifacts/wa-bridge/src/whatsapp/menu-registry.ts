@@ -120,7 +120,16 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
   setsudo: { section: '⚙ CONFIGURATION', syntax: 'setsudo [number]', desc: 'Grant command access (or reply to msg)', target: 'main' },
   delsudo: { section: '⚙ CONFIGURATION', syntax: 'delsudo [number]', desc: 'Revoke command access', target: 'main' },
   sudo: { section: '⚙ CONFIGURATION', syntax: 'sudo', desc: 'List all sudo numbers', target: 'main' },
-  public: { section: '⚙ CONFIGURATION', syntax: 'public [on|off]', desc: 'Enable/disable public command access', target: 'main' },
+  public: { section: '⚙ CONFIGURATION', syntax: 'public [on|off]', desc: 'Legacy alias for setmode', target: 'main' },
+  setmode: { section: '⚙ CONFIGURATION', syntax: 'setmode <public|private>', desc: 'Public = anyone may use commands; Private = authorized only (Pair always works)', target: 'main' },
+  swresponse: { section: '⚙ CONFIGURATION', syntax: 'swresponse <txt|table>', desc: 'Switch response rendering mode (text or native table)', target: 'main' },
+  settimezone: { section: '⚙ CONFIGURATION', syntax: 'settimezone <IANA>', desc: 'Set session timezone (e.g. Africa/Lagos)', target: 'main' },
+  globalsudo: { section: '⚙ CONFIGURATION', syntax: 'globalsudo', desc: 'View Global Sudo (admin only)', target: 'main' },
+  setglobalsudo: { section: '⚙ CONFIGURATION', syntax: 'setglobalsudo [num]', desc: 'Grant Global Sudo (applies to every session)', target: 'main' },
+  delglobalsudo: { section: '⚙ CONFIGURATION', syntax: 'delglobalsudo [num]', desc: 'Revoke Global Sudo', target: 'main' },
+  omni: { section: '⚙ CONFIGURATION', syntax: 'omni', desc: 'View Omni Owner (highest permission)', target: 'main' },
+  setomni: { section: '⚙ CONFIGURATION', syntax: 'setomni [num]', desc: 'Grant Omni Owner (bypasses every permission check)', target: 'main' },
+  delomni: { section: '⚙ CONFIGURATION', syntax: 'delomni [num]', desc: 'Revoke Omni Owner', target: 'main' },
   publicresponse: { section: '⚙ CONFIGURATION', syntax: 'publicresponse [text]', desc: 'Set the permission denied message', target: 'main' },
   tagreply: { section: '⚙ CONFIGURATION', syntax: 'tagreply [on|off]', desc: 'Enable/disable tagging in bot replies', target: 'main' },
   info: { section: '⚙ CONFIGURATION', syntax: 'info', desc: 'Session info and status', target: 'main' },
@@ -152,7 +161,28 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
     output: 'Member removed from group.' },
   remove: { section: '⚔ MODERATION', syntax: 'remove', desc: 'Alias for kick', target: 'group' },
   dnkick: { section: '⚔ MODERATION', syntax: 'dnkick', desc: 'Demote then kick an admin safely', target: 'group' },
-  ban: { section: '⚔ MODERATION', syntax: 'ban', desc: 'Ban a member (kick + block)', target: 'group' },
+  ban: { section: '⚔ MODERATION', syntax: 'ban', desc: 'Locally restrict a member (stays in group, messages auto-deleted)', target: 'group',
+    usage: 'Ban a member without kicking them.\nThe member stays in the group but every message they send is deleted until .unban.',
+    permissions: 'Admin / Sudo / Owner',
+    inputs: ['Reply', '@Mention', 'Phone Number'],
+    examples: ['ban @user', 'ban 1234567890'],
+    output: 'Local restriction active + ban message sent.' },
+  setantiwords: { section: '🛡 ANTI SYSTEM', syntax: 'setantiwords <w1, w2, ...>', desc: 'Append blocked words (never overwrites)', target: 'group',
+    usage: 'Add one or more blocked words. Duplicates ignored, case-insensitive, Unicode-safe.',
+    permissions: 'Admin / Sudo / Owner',
+    inputs: ['Comma-separated words'],
+    examples: ['setantiwords scam', 'setantiwords scam,fraud,casino', 'setantiwords free money,loan'],
+    output: 'Words appended + module enabled.' },
+  rmantiwords: { section: '🛡 ANTI SYSTEM', syntax: 'rmantiwords <w1, w2, ...>', desc: 'Remove blocked words', target: 'group',
+    usage: 'Remove one or more blocked words.',
+    permissions: 'Admin / Sudo / Owner',
+    examples: ['rmantiwords scam', 'rmantiwords scam,fraud'],
+    output: 'Words removed from blocklist.' },
+  clearantiwords: { section: '🛡 ANTI SYSTEM', syntax: 'clearantiwords', desc: 'Clear ALL blocked words (confirmation required)', target: 'group',
+    usage: 'Remove every blocked word after confirmation.',
+    permissions: 'Admin / Sudo / Owner',
+    examples: ['clearantiwords', 'clearantiwords yes'],
+    output: 'Blocklist emptied.' },
   unban: { section: '⚔ MODERATION', syntax: 'unban', desc: 'Remove a member from the ban list', target: 'group' },
   banlist: { section: '⚔ MODERATION', syntax: 'banlist', desc: 'View the ban list for this group', target: 'group' },
   promote: { section: '⚔ MODERATION', syntax: 'promote', desc: 'Grant admin to a member', target: 'group' },
@@ -492,16 +522,61 @@ function clampPage(page: number, totalPages: number): number {
   return Math.min(Math.max(page, 1), totalPages);
 }
 
+export interface NavHubOptions {
+  /** Session response mode: 'txt' | 'table' */
+  responseMode?: 'txt' | 'table';
+  /** Session timezone (IANA). Falls back to server local time. */
+  timezone?: string;
+  /** Session status: ONLINE / FROZEN / PAIRING … */
+  status?: string;
+  /** The command sender's pushName / display name. */
+  userName?: string;
+}
+
+/** Format a timestamp in the session timezone (falls back to server time). */
+export function formatInTimezone(
+  timezone: string | undefined,
+  date: Date = new Date()
+): { date: string; time: string; timezone: string } {
+  const tz = timezone && timezone.trim() ? timezone.trim() : undefined;
+  try {
+    const fmtDate = new Intl.DateTimeFormat('en-GB', {
+      timeZone: tz,
+      day: '2-digit', month: 'short', year: 'numeric',
+    }).format(date);
+    const fmtTime = new Intl.DateTimeFormat('en-GB', {
+      timeZone: tz,
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
+    }).format(date);
+    const tzLabel = tz ?? new Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return { date: fmtDate, time: fmtTime, timezone: tzLabel };
+  } catch {
+    return {
+      date: date.toLocaleDateString('en-GB'),
+      time: date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+      timezone: new Intl.DateTimeFormat().resolvedOptions().timeZone,
+    };
+  }
+}
+
 /** Compact navigation-hub body (no giant borders, WhatsApp-mobile width). */
 export function renderNavHub(
   prefix: string,
   menuTarget: 'main' | 'group',
-  knownCommands: readonly string[]
+  knownCommands: readonly string[],
+  opts: NavHubOptions = {}
 ): string {
   const safePrefix = prefix && prefix.trim() ? prefix.trim() : '(none)';
+  const status = opts.status ?? 'ONLINE';
+  const response = opts.responseMode === 'table' ? '📊 TABLE' : '📝 TXT';
+  const tz = formatInTimezone(opts.timezone);
+  const who = opts.userName ? `▸ user: ${opts.userName}` : '';
   const lines: string[] = [
     '⚜ OMEGA • NAVIGATION ⚜',
-    `▸ prefix: ${safePrefix} ▸ status: ONLINE`,
+    `▸ status: ${status} ▸ prefix: ${safePrefix}`,
+    `▸ response: ${response} ▸ tz: ${tz.timezone}`,
+    `▸ ${tz.date} • ${tz.time}`,//
+    ...(who ? [who] : []),
     '',
   ];
   for (const nav of navFor(menuTarget)) {

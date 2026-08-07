@@ -16,6 +16,9 @@ import {
   setSpamLimit,
   addWord,
   removeWord,
+  addWords,
+  removeWords,
+  clearWords,
   setDemoteMode,
   setPromoteMode,
   setDemoteTargetMode,
@@ -264,6 +267,114 @@ export function handleAntiWordList(
   });
 }
 
+/**
+ * .setantiwords <w1, w2, ...> — append one or more blocked words.
+ * NEVER overwrites the existing list. Multi-word phrases allowed.
+ * Case-insensitive, duplicate-safe, Unicode-safe. Enables the module.
+ */
+export function handleSetAntiWords(
+  args: string[],
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  prefix: string
+): string {
+  if (!groupJid.endsWith('@g.us')) {
+    return errorCard('AntiWords', 'This command must be used inside a WhatsApp group.');
+  }
+  const input = args.join(' ').trim();
+  if (!input) {
+    return errorCard(
+      'AntiWords',
+      `Usage: ${prefix}setantiwords <word1, word2, ...>\n` +
+      `Examples:\n` +
+      `  ${prefix}setantiwords scam\n` +
+      `  ${prefix}setantiwords scam,fraud,casino\n` +
+      `  ${prefix}setantiwords free money,loan`
+    );
+  }
+  const words = input.split(',').map((w) => w.trim()).filter(Boolean);
+  const added = addWords(telegramId, sessionId, groupJid, words, true);
+  if (added.length === 0) {
+    return warningCard('AntiWords', 'All provided words were already blocked — list unchanged.');
+  }
+  const gc = loadGroupAntiConfig(telegramId, sessionId, groupJid);
+  const total = gc.antiwords?.words.length ?? 0;
+  return successCard(
+    'AntiWords Updated',
+    `${added.length} word(s) added — module enabled.\n${italic('Never overwrites existing words; duplicates ignored.')}`,
+    [
+      ['Added', added.join(', ')],
+      ['Total blocked', String(total)],
+    ]
+  );
+}
+
+/**
+ * .rmantiwords <w1, w2, ...> — remove one or more blocked words.
+ */
+export function handleRemoveAntiWords(
+  args: string[],
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  prefix: string
+): string {
+  if (!groupJid.endsWith('@g.us')) {
+    return errorCard('AntiWords', 'This command must be used inside a WhatsApp group.');
+  }
+  const input = args.join(' ').trim();
+  if (!input) {
+    return errorCard('AntiWords', `Usage: ${prefix}rmantiwords <word1, word2, ...>\nExample: ${prefix}rmantiwords scam,fraud`);
+  }
+  const words = input.split(',').map((w) => w.trim()).filter(Boolean);
+  const removed = removeWords(telegramId, sessionId, groupJid, words);
+  if (removed.length === 0) {
+    return warningCard('AntiWords', 'None of the provided words were in the blocked list.');
+  }
+  const gc = loadGroupAntiConfig(telegramId, sessionId, groupJid);
+  return successCard(
+    'AntiWords Updated',
+    `${removed.length} word(s) removed from the blocked list.`,
+    [
+      ['Removed', removed.join(', ')],
+      ['Total remaining', String(gc.antiwords?.words.length ?? 0)],
+    ]
+  );
+}
+
+/**
+ * .clearantiwords — clears every blocked word AFTER confirmation.
+ *   .clearantiwords            → confirmation card
+ *   .clearantiwords yes/confirm → executes
+ */
+export function handleClearAntiWords(
+  args: string[],
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  prefix: string
+): string {
+  if (!groupJid.endsWith('@g.us')) {
+    return errorCard('AntiWords', 'This command must be used inside a WhatsApp group.');
+  }
+  const gc = loadGroupAntiConfig(telegramId, sessionId, groupJid);
+  const count = gc.antiwords?.words.length ?? 0;
+  if (count === 0) {
+    return warningCard('AntiWords', 'No blocked words configured for this group.');
+  }
+  const confirm = (args[0] ?? '').toLowerCase();
+  if (confirm !== 'yes' && confirm !== 'confirm' && confirm !== 'y') {
+    return warningCard(
+      'AntiWords — Confirm Clear',
+      `This will remove all ${count} blocked word(s).\n\n` +
+      `Reply: ${italic(`${prefix}clearantiwords yes`)} to confirm.`
+    );
+  }
+  const cleared = clearWords(telegramId, sessionId, groupJid);
+  return successCard('AntiWords Cleared', `${cleared} blocked word(s) removed. The blocklist is now empty.`);
+}
+
 // ── Security module parsers ───────────────────────────────────
 
 function parseSecurityMode(arg: string): GroupSecurityMode | null {
@@ -275,8 +386,13 @@ function parseSecurityMode(arg: string): GroupSecurityMode | null {
     'revert', 'warn', 'kick', 'ban',
     // Legacy modes — mapped internally by the security engine:
     'dwp', 'dnp', 'kwp', 'knp',
+    // Action shorthand engine (v4):
+    'd/p', 'd/d', 'p/p', 'p/k',
   ];
   if (valid.includes(arg as GroupSecurityMode)) return arg as GroupSecurityMode;
+  // restorewarn:<count> — restore + warn with kick escalation after <count>
+  const rw = arg.match(/^restorewarn:(\d+)$/);
+  if (rw) return `restorewarn:${parseInt(rw[1] ?? '3', 10)}` as GroupSecurityMode;
   return null;
 }
 
@@ -288,9 +404,14 @@ function parseTargetMode(arg: string): TargetMode | null {
 const SECURITY_MODE_USAGE =
   `${bold('restore')}      — restore victim, no actor punishment\n` +
   `${bold('restorewarn')}  — restore victim + warn actor\n` +
+  `${bold('restorewarn <N>')} — restore victim + warn actor, kick actor after N warns\n` +
   `${bold('restorekick')}  — restore victim + kick actor\n` +
   `${bold('restoreban')}   — restore victim + kick + block actor\n` +
-  `${italic('Legacy:')} dwp (restore+warn) · dnp (restore) · kwp (kick+warn, no restore) · knp (kick, no restore)\n` +
+  `${bold('d/p')}          — demote actor + restore victim, notify everyone\n` +
+  `${bold('d/d')}          — demote actor, no restore\n` +
+  `${bold('p/p')}          — restore victim + warn actor (no demotion)\n` +
+  `${bold('p/k')}          — restore victim + kick actor\n` +
+  `${italic('Legacy:')} dwp (demote) · dnp (demote+restore) · kwp (kick+warn, no restore) · knp (kick, no restore)\n` +
   `${italic('Aliases:')} revert=restore · warn=restorewarn · kick=restorekick · ban=restoreban`;
 
 const TARGET_MODE_USAGE =
@@ -306,6 +427,8 @@ const TARGET_MODE_USAGE =
  *   .antipromote on                    → enable with current/default mode
  *   .antipromote off                   → disable
  *   .antipromote mode restorekick      → set punishment mode
+ *   .antipromote mode d/p              → demote actor + restore victim
+ *   .antipromote mode restorewarn 3    → restore + warn, kick after 3
  *   .antipromote target admins         → protect all admins from unauthorized promotions
  *   .antipromote target protected      → default: only monitor bot-targeting events
  *   .antipromote status                → show config
@@ -356,13 +479,13 @@ export function handleAntiPromoteCmd(
       'AntiPromote Enabled',
       `Mode: ${bold(existing.mode)}\n` +
       `Target: ${bold(existing.targetMode ?? 'protected')}\n` +
-      `To change mode: ${italic(`${prefix}antipromote mode <mode>`)}\n` +
-      `To change target: ${italic(`${prefix}antipromote target <protected|admins>`)}\n` +
+      `To change mode: ${italic(`${prefix}antipromote mode <mode>`)},\n` +
+      `To change target: ${italic(`${prefix}antipromote target <protected|admins>`)},\n` +
       `To disable: ${italic(`${prefix}antipromote off`)}`,
     );
   }
 
-  // Mode subcommand: .antipromote mode <restore|restorewarn|restorekick|restoreban>
+  // Mode subcommand: .antipromote mode <mode>
   if (subCmd === 'mode') {
     const modeArg = args[1]?.toLowerCase();
     const mode = modeArg ? parseSecurityMode(modeArg) : null;
@@ -396,13 +519,24 @@ export function handleAntiPromoteCmd(
     );
   }
 
-  // Direct mode shorthand: .antipromote restore|restorekick|...
+  // Direct mode shorthand: .antipromote restore|restorekick|d/p|...
   const directMode = parseSecurityMode(subCmd ?? '');
   if (directMode && directMode !== 'off') {
     setPromoteMode(telegramId, sessionId, groupJid, directMode);
     return successCard(
       'AntiPromote Enabled',
       `Mode: ${bold(directMode)}\nTo disable: ${italic(`${prefix}antipromote off`)}`,
+    );
+  }
+
+  // restorewarn <count> shorthand: .antipromote restorewarn 3
+  if (subCmd === 'restorewarn') {
+    const n = parseInt(args[1] ?? '3', 10);
+    const mode = `restorewarn:${Number.isFinite(n) && n > 0 ? n : 3}` as GroupSecurityMode;
+    setPromoteMode(telegramId, sessionId, groupJid, mode);
+    return successCard(
+      'AntiPromote Enabled',
+      `Mode: ${bold(mode)} — restore victim, warn actor, kick after ${n} warns.\nTo disable: ${italic(`${prefix}antipromote off`)}`,
     );
   }
 
@@ -414,6 +548,8 @@ export function handleAntiPromoteCmd(
     `Examples:\n` +
     `  ${prefix}antipromote on\n` +
     `  ${prefix}antipromote mode restorekick\n` +
+    `  ${prefix}antipromote mode d/p\n` +
+    `  ${prefix}antipromote mode restorewarn 3\n` +
     `  ${prefix}antipromote target admins\n` +
     `  ${prefix}antipromote off`
   );
@@ -428,6 +564,7 @@ export function handleAntiPromoteCmd(
  *   .antidemote on                    → enable with current/default mode
  *   .antidemote off                   → disable
  *   .antidemote mode restorekick      → set punishment mode
+ *   .antidemote mode d/p              → demote actor + restore victim
  *   .antidemote target admins         → protect every administrator from demotion
  *   .antidemote target protected      → default: only protect the bot
  *   .antidemote status                → show config
@@ -478,13 +615,13 @@ export function handleAntiDemote(
       'AntiDemote Enabled',
       `Mode: ${bold(existing.mode)}\n` +
       `Target: ${bold(existing.targetMode ?? 'protected')}\n` +
-      `To change mode: ${italic(`${prefix}antidemote mode <mode>`)}\n` +
-      `To change target: ${italic(`${prefix}antidemote target <protected|admins>`)}\n` +
+      `To change mode: ${italic(`${prefix}antidemote mode <mode>`)},\n` +
+      `To change target: ${italic(`${prefix}antidemote target <protected|admins>`)},\n` +
       `To disable: ${italic(`${prefix}antidemote off`)}`,
     );
   }
 
-  // Mode subcommand: .antidemote mode <restore|restorewarn|restorekick|restoreban>
+  // Mode subcommand: .antidemote mode <mode>
   if (subCmd === 'mode') {
     const modeArg = args[1]?.toLowerCase();
     const mode = modeArg ? parseSecurityMode(modeArg) : null;
@@ -518,13 +655,24 @@ export function handleAntiDemote(
     );
   }
 
-  // Direct mode shorthand: .antidemote restore|restorekick|...
+  // Direct mode shorthand: .antidemote restore|restorekick|d/p|...
   const directMode = parseSecurityMode(subCmd ?? '');
   if (directMode && directMode !== 'off') {
     setDemoteMode(telegramId, sessionId, groupJid, directMode);
     return successCard(
       'AntiDemote Enabled',
       `Mode: ${bold(directMode)}\nTo disable: ${italic(`${prefix}antidemote off`)}`,
+    );
+  }
+
+  // restorewarn <count> shorthand: .antidemote restorewarn 3
+  if (subCmd === 'restorewarn') {
+    const n = parseInt(args[1] ?? '3', 10);
+    const mode = `restorewarn:${Number.isFinite(n) && n > 0 ? n : 3}` as GroupSecurityMode;
+    setDemoteMode(telegramId, sessionId, groupJid, mode);
+    return successCard(
+      'AntiDemote Enabled',
+      `Mode: ${bold(mode)} — restore victim, warn actor, kick after ${n} warns.\nTo disable: ${italic(`${prefix}antidemote off`)}`,
     );
   }
 
@@ -536,6 +684,8 @@ export function handleAntiDemote(
     `Examples:\n` +
     `  ${prefix}antidemote on\n` +
     `  ${prefix}antidemote mode restorekick\n` +
+    `  ${prefix}antidemote mode d/p\n` +
+    `  ${prefix}antidemote mode restorewarn 3\n` +
     `  ${prefix}antidemote target admins\n` +
     `  ${prefix}antidemote off`
   );

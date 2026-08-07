@@ -39,10 +39,11 @@ async function getBaileys() {
 
 export interface GroupStatusOptions {
   mediaBuffer?: Buffer;
-  mediaType?: 'image' | 'video' | 'audio';
+  mediaType?: 'image' | 'video' | 'audio' | 'document';
   caption?: string;
   mimeType?: string;
   ptt?: boolean;
+  fileName?: string;
   likeThis?: boolean;
   existingPreview?: PartialLinkMeta;
   /** Raw source message for as-is relay (PATH 0) */
@@ -122,7 +123,9 @@ export async function sendGroupStatus(
         ...(options.mediaType === 'video'
           ? { video: options.mediaBuffer, caption: options.caption ?? text, mimetype: options.mimeType ?? 'video/mp4', gifPlayback: false }
           : options.mediaType === 'audio'
-          ? { audio: options.mediaBuffer, mimetype: options.mimeType ?? 'audio/mp4', ptt: Boolean(options.ptt) }
+          ? { audio: options.mediaBuffer, mimetype: options.mimeType ?? 'audio/ogg; codecs=opus', ptt: Boolean(options.ptt) }
+          : options.mediaType === 'document'
+          ? { document: options.mediaBuffer, mimetype: options.mimeType ?? 'application/octet-stream', caption: options.caption ?? text, fileName: options.fileName }
           : { image: options.mediaBuffer, caption: options.caption ?? text, mimetype: options.mimeType ?? 'image/jpeg' }),
         groupStatus: true,
         ...(options.likeThis ? { likeThis: true } : {}),

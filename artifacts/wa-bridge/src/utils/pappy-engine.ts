@@ -20,7 +20,7 @@ export interface Theme {
 export const THEMES: Theme[] = [
   { name: 'Omega Core', header: '⟦ ◈ OMEGA • CORE ◈ ⟧', border: '│', divider: '────────', symbol: '⚡', footer: '╰─── OMEGA ───╯', layout: 'compact' },
   { name: 'Dark Terminal', header: '『 DARK TERMINAL 』', border: '│', divider: '----------', symbol: '>', footer: '└──────────────┘', layout: 'compact' },
-  { name: 'Royal Gothic', header: '⚜ ROYAL GOTHIC ⚜', border: '│', divider: '── ⚜ ──', symbol: '◈', footer: '⚜ 𝕻𝕬𝕻𝕻𝖄 ⚜', layout: 'compact' },
+  { name: 'Royal Gothic', header: '⚜ ROYAL GOTHIC ⚜', border: '│', divider: '── ⚜ ──', symbol: '◈', footer: '⚜ 𝗢𝗠𝗘𝗚𝗔 • 𝗩𝟭 ⚜', layout: 'compact' },
   { name: 'Matrix Console', header: '［ MATRIX ］', border: '│', divider: '══ ⚡ ══', symbol: '◈', footer: '［ SYSTEM OK ］', layout: 'compact' },
   { name: 'Shadow Protocol', header: '👤 SHADOW PROTOCOL', border: '│', divider: '── 👤 ──', symbol: '✖', footer: '👤 SHADOW 👤', layout: 'compact' },
   { name: 'Obsidian', header: '🌑 OBSIDIAN 🌑', border: '│', divider: '── 🌑 ──', symbol: '✦', footer: '🌑 OBSIDIAN 🌑', layout: 'compact' },
@@ -81,9 +81,10 @@ export function pappyBox(opts: PappyBoxOptions): string {
     lines.push(opts.footer);
   }
 
-  // 5. Compact Box Footer
+  // 5. Compact Box Footer — unified OMEGA • V1 brand (replaces the legacy
+  //    PAPPY ×͜× signature across every card/response in the system).
   lines.push(border);
-  lines.push(`╰─ 𝕻𝕬𝕻𝕻𝖄 ×͜×`);
+  lines.push(`╰─ 𝗢𝗠𝗘𝗚𝗔 • 𝗩𝟭`);
 
   return lines.join('\n');
 }

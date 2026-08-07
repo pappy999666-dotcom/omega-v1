@@ -37,6 +37,8 @@ export interface ResponseContext {
    * senderJid is an unresolved @lid JID.
    */
   mentionNumber?: string;
+  /** IANA session timezone — used by &date / &time when provided. */
+  timezone?: string;
 }
 
 /**
@@ -53,8 +55,20 @@ function mentionDigits(senderJid: string, mentionNumber?: string): string {
   return user.replace(/\D/g, '');
 }
 
-/** The configured timezone (OMEGA_TZ → TZ → server default). */
-export function configuredTimeZone(): string | undefined {
+/**
+ * The configured timezone. Priority: explicit session timezone → OMEGA_TZ →
+ * TZ → server default. Session timezones are set per-session via .settimezone.
+ */
+export function configuredTimeZone(sessionTimezone?: string): string | undefined {
+  if (sessionTimezone && sessionTimezone.trim()) {
+    // Validate: only accept real IANA zones (Intl throws on invalid ones).
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: sessionTimezone.trim() });
+      return sessionTimezone.trim();
+    } catch {
+      /* invalid IANA zone — fall through to env */
+    }
+  }
   const tz = process.env.OMEGA_TZ ?? process.env.TZ;
   return tz && tz.trim() ? tz.trim() : undefined;
 }
@@ -62,9 +76,10 @@ export function configuredTimeZone(): string | undefined {
 /** Format a date in the configured timezone. Falls back to locale string. */
 export function formatInTimeZone(
   date: Date,
-  options: Intl.DateTimeFormatOptions
+  options: Intl.DateTimeFormatOptions,
+  sessionTimezone?: string
 ): string {
-  const tz = configuredTimeZone();
+  const tz = configuredTimeZone(sessionTimezone);
   try {
     return new Intl.DateTimeFormat('en-US', { timeZone: tz, ...options }).format(date);
   } catch {
@@ -73,13 +88,18 @@ export function formatInTimeZone(
 }
 
 /** Current date string in the configured timezone. */
-export function currentDateString(): string {
-  return formatInTimeZone(new Date(), { year: 'numeric', month: 'short', day: 'numeric' });
+export function currentDateString(sessionTimezone?: string): string {
+  return formatInTimeZone(new Date(), { year: 'numeric', month: 'short', day: 'numeric' }, sessionTimezone);
 }
 
 /** Current time string (24h) in the configured timezone. */
-export function currentTimeString(): string {
-  return formatInTimeZone(new Date(), { hour: '2-digit', minute: '2-digit', hour12: false });
+export function currentTimeString(sessionTimezone?: string): string {
+  return formatInTimeZone(new Date(), { hour: '2-digit', minute: '2-digit', hour12: false }, sessionTimezone);
+}
+
+/** Current time with seconds (24h) in the configured timezone. */
+export function currentTimeWithSecondsString(sessionTimezone?: string): string {
+  return formatInTimeZone(new Date(), { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }, sessionTimezone);
 }
 
 /** True when the template contains a given variable token (e.g. 'pp'). */
@@ -109,11 +129,13 @@ export async function renderTemplate(
   let result = template;
 
   // ── Synchronous substitutions ─────────────────────────────
-  // Standard variables
+  // Standard variables — &date / &time honour the session timezone when
+  // provided, otherwise fall back to the configured env timezone.
+  const { timezone } = ctx;
   result = result.replace(/@mention/gi, mentionText);
   result = result.replace(/&gcname/gi, gcName);
-  result = result.replace(/&date/gi, currentDateString());
-  result = result.replace(/&time/gi, currentTimeString());
+  result = result.replace(/&date/gi, currentDateString(timezone));
+  result = result.replace(/&time/gi, currentTimeString(timezone));
 
   // User requested aliases
   result = result.replace(/@user/gi, userText);

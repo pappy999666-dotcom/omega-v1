@@ -94,3 +94,66 @@ export function pingTableData(
     ],
   };
 }
+
+// ── Card → Native Table conversion (Response Mode engine) ──
+//
+// The TXT/TABLE response mode renders every table-friendly card
+// (usage cards, config summaries, error reports, module status,
+// anti config, info cards, session summaries) as the fork's native
+// GenATableUXPrimitive table. Chat messages such as warnings,
+// welcomes and moderation notices never go through this path — they
+// are sent directly via PreviewManager and stay TXT.
+//
+// The pappyBox card layout is stable and machine-parseable:
+//   ╭─〔 ✅ TITLE 〕          (or ╭─〔 ✅ MODULE.IDENTITY 〕)
+//   │
+//   │ message…
+//   │
+//   │ ⚡ *Label*: value
+//   │ ⚡ *Label*: value
+//   ╰─ 𝗢𝗠𝗘𝗚𝗔 • 𝗩𝟭
+//
+// Returns null when the text is not a table-friendly card (message-
+// style bodies with no rows), so callers fall back to plain TXT.
+
+export function tableFromCard(text: string): NativeTableContent | null {
+  if (!text || typeof text !== 'string') return null;
+  const lines = text.split('\n');
+
+  // Only cards with the compact box header qualify.
+  const headerLine = lines.find((l) => l.includes('〔'));
+  if (!headerLine) return null;
+  const titleMatch = headerLine.match(/〔\s*(?:✅|⚠️|❌|⚡|●|📊|🖥️|📱|🔐|📋|🛡️|⚔|👋|🚫|⏳|🔄|🏓|📖|🌍|🏷️|🛠️|⚙️|🚀|📝)?\s*(.+?)\s*〕/);
+  const title = titleMatch?.[1]?.trim() || 'OMEGA • STATUS';
+
+  const rows: (string | number)[][] = [];
+  let bodyLines: string[] = [];
+
+  for (const line of lines) {
+    // Row line: `│ ⚡ *Label*: value` (symbol + bold label + colon value)
+    const rowMatch = line.match(/^│\s+[^\s*]+\s+\*(.+?)\*:\s*(.*)$/);
+    if (rowMatch) {
+      const label = rowMatch[1]!.trim();
+      const value = rowMatch[2]!.trim();
+      if (label) rows.push([label, value]);
+      continue;
+    }
+    // Plain content line inside the box (not a row, not the footer/header)
+    const content = line.replace(/^│\s*/, '').trim();
+    if (content && !content.startsWith('╰─') && !content.includes('〔')) {
+      bodyLines.push(content);
+    }
+  }
+
+  // Cards with zero rows (pure message cards) are NOT table material —
+  // warnings / welcomes / moderation notices must stay TXT.
+  if (rows.length === 0) return null;
+
+  const tableRows: (string | number)[][] = [['Field', 'Value'], ...rows];
+  // A body message (footer text of the card) becomes the table title suffix.
+  const body = bodyLines.filter((b) => b.length > 0).join(' · ');
+  return {
+    title: body ? `${title} — ${body.slice(0, 60)}` : title,
+    rows: tableRows,
+  };
+}

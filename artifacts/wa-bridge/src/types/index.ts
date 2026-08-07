@@ -39,6 +39,10 @@ export interface UserConfig {
   statusEmoji?: string;
   /** Reject incoming calls (anti-call). */
   antiCallEnabled?: boolean;
+  /** Global response rendering mode: 'txt' (cards) or 'table' (native Baileys tables). */
+  responseMode?: 'txt' | 'table';
+  /** IANA timezone for this session (e.g. Africa/Lagos). Overrides OMEGA_TZ/TZ. */
+  timezone?: string;
 }
 
 export interface MenuButton {
@@ -57,6 +61,17 @@ export interface PlatformConfig {
   globalMenuUrls?: string[];
   releaseChannelUsername?: string;
   releasePostsEnabled?: boolean;
+  /**
+   * GLOBAL SUDO — platform-wide WhatsApp numbers that become sudo on EVERY
+   * session automatically. Hidden from normal session users; visible only
+   * to the administrator who configured them.
+   */
+  globalSudoNumbers?: string[];
+  /**
+   * OMNI OWNER — highest permission layer. Bypasses every permission check
+   * and inherits every Global Sudo capability. Invisible to ordinary users.
+   */
+  omniOwnerNumbers?: string[];
 }
 
 export interface SessionMenuMedia {

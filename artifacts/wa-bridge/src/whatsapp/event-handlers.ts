@@ -11,7 +11,21 @@ import { parseCommand, parseStickerCommand, hashSticker } from './command-parser
 import { resolveTarget, resolveTargetNumbers } from './utils/resolve-target.js';
 import { normalizeParticipantUpdateJids, getContextInfoAny } from './utils/identity.js';
 import { resolveMention, sanitizeMentionJids } from './utils/mention-engine.js';
-import { loadSessionConfig, loadSessionMeta, updateSessionMeta, saveSessionMeta } from '../services/workspace.js';
+import {
+  loadSessionConfig,
+  loadSessionMeta,
+  updateSessionMeta,
+  saveSessionMeta,
+  getGlobalSudoNumbers,
+  setGlobalSudoNumbers,
+  addGlobalSudoNumbers,
+  removeGlobalSudoNumbers,
+  getOmniOwnerNumbers,
+  setOmniOwnerNumbers,
+  addOmniOwnerNumbers,
+  removeOmniOwnerNumbers,
+  isOmniOwnerNumber,
+} from '../services/workspace.js';
 import { stopSpamLoop, isSpamLoopActive, cmdToChat, cmdToChatX, cmdSStatus, cmdGroupStatus } from './commands/status.js';
 import { cmdAllStatus, cmdAllGStatus, stopAllStatus, isAllStatusRunning } from './commands/all-status.js';
 import { cmdAllChat, stopOutreach, isOutreachRunning } from './commands/mass-outreach.js';
@@ -45,11 +59,10 @@ import {
   MENU_CATALOG,
   renderNavHub,
   navHubButtons,
-  helpPageText,
-  helpPageButtons,
 } from './menu-registry.js';
 import { parseInteraction, routeInteraction } from './interaction-router.js';
-import { pingTableData } from './utils/native-rich.js';
+import { pingTableData, nativeTableContent, tableFromCard } from './utils/native-rich.js';
+import { errorReportText, errorReportTable, BOT_VERSION, platformLabel } from '../utils/error-report.js';
 import { addIdea } from '../services/ideas.js';
 // ── Anti System ───────────────────────────────────────────
 import { runAntiChecks, handleParticipantUpdate } from './anti-system/index.js';
@@ -70,6 +83,9 @@ import {
   handleAntiAddWord,
   handleAntiRemoveWord,
   handleAntiWordList,
+  handleSetAntiWords,
+  handleRemoveAntiWords,
+  handleClearAntiWords,
   handleAntiDemote,
   handleAntiPromoteCmd,
   handleAntiStatus,
@@ -611,11 +627,47 @@ async function handleMessages(
       logger.warn('[AntiSystem] runAntiChecks threw', { err: String(err) });
     }
 
-    await processMessage(sessionId, telegramId, msg, socket).catch((err) => {
+    await processMessage(sessionId, telegramId, msg, socket).catch(async (err) => {
+      const errorText = err instanceof Error ? err.message : String(err);
       logger.error('[EventHandler] Message processing error', {
         sessionId,
-        err: err.message,
+        err: errorText,
       });
+
+      // ── ERROR REPORT ENGINE ──
+      // Internal errors are reported with the canonical OMEGA error report,
+      // rendered in the session's response mode (TXT card or native table).
+      // Only report for command-like messages in a chat we can reply to.
+      const rawCmdText = extractMessageText(msg.message).trim();
+      if (rawCmdText && !msg.key.fromMe && msg.key.remoteJid) {
+        try {
+          const cfg = loadSessionConfig(telegramId, sessionId);
+          const reportData = {
+            version: BOT_VERSION,
+            command: rawCmdText.split(/\s+/)[0]?.replace(/^[^a-zA-Z0-9]+/, '')?.slice(0, 20) || '—',
+            message: rawCmdText.slice(0, 80),
+            error: errorText.slice(0, 120),
+            chat: msg.key.remoteJid,
+            platform: platformLabel(),
+          };
+          const reportTxt = errorReportText(reportData);
+          if (cfg.responseMode === 'table') {
+            await PreviewManager.send(socket as any, msg.key.remoteJid, reportTxt, {
+              nativeTable: errorReportTable(reportData),
+              tableFallbackText: reportTxt,
+              sessionId,
+              telegramId,
+            });
+          } else {
+            await PreviewManager.send(socket as any, msg.key.remoteJid, reportTxt, {
+              sessionId,
+              telegramId,
+            });
+          }
+        } catch {
+          /* error reporting must never throw */
+        }
+      }
     });
 
     // ── Status pipeline: auto-view / auto-like incoming status posts ──
@@ -697,7 +749,26 @@ async function processMessageWithConfig(
   // routed by the Central Interaction Router in handleMessages().
 
   // Parse command. Unknown text and unbound stickers are always ignored.
+  // ── Prefix-independent Pair ────────────────────────────────
+  // Accept .pair, !pair, /pair, #pair, +pair and bare `pair` (with
+  // optional leading whitespace). Reject malformed variants such as
+  // ..pair, abcpair, nopair, randompair — the regex anchors the word so
+  // only a standalone "pair" invocation (optionally with a single
+  // leading symbol) ever executes.
   let parsed = text ? parseCommand(text, config) : null;
+  if (!parsed && text) {
+    const pairMatch = text.match(/^\s*[.!\/#+]?pair(?:\s|$)/i);
+    if (pairMatch && !text.match(/^\s*\.\./)) {
+      const pairArgs = text.slice(pairMatch[0].length).trim();
+      parsed = {
+        prefix: config.prefix,
+        command: 'pair',
+        args: pairArgs ? pairArgs.split(/ +/) : [],
+        rawRemainder: pairArgs ? ` ${pairArgs}` : '',
+        raw: text,
+      };
+    }
+  }
   if (!parsed && stickerMsg) {
     // Unified fingerprint: fileSha256 fast path (can be Uint8Array or base64
     // string depending on Baileys version), then content-hash fallback for
@@ -749,9 +820,33 @@ async function processMessageWithConfig(
 
   // ── Enriched WhatsApp reply ───────────────────────────────
   // Central URL button attachment for all normal bot responses.
+  //
+  // RESPONSE MODE ENGINE: when the session is in TABLE mode, any
+  // table-friendly card (usage cards, configuration summaries, error
+  // reports, module status, anti config, info cards, session summaries)
+  // is rendered as the fork's NATIVE table (GenATableUXPrimitive). Chat
+  // messages such as warnings, welcomes and moderation notices have no
+  // row structure, so tableFromCard() returns null and they stay TXT.
   const baseWhatsAppReply = async (replyText: string, opts?: { suppressPreview?: boolean }): Promise<void> => {
     const mentions = await getGroupParticipants();
     
+    const mode = config.responseMode;
+    const table = mode === 'table' ? tableFromCard(replyText) : null;
+    if (table) {
+      // Native table with graceful fallback to the card if the client
+      // rejects the GenAI payload.
+      await PreviewManager.send(socket as any, groupJid, replyText, {
+        nativeTable: table,
+        tableFallbackText: replyText,
+        quoted: msg,
+        extra: mentions.length > 0 ? { mentions } : undefined,
+        sessionId,
+        telegramId,
+        ...(opts?.suppressPreview ? { suppressPreview: true } : {}),
+      });
+      return;
+    }
+
     // Formatting and Global Buttons are now handled by the Preview Pipeline.
     // We just pass the raw replyText.
     await PreviewManager.send(socket as any, groupJid, replyText, {
@@ -765,8 +860,8 @@ async function processMessageWithConfig(
 
   const reply = replyOverride ?? baseWhatsAppReply;
 
-  type MediaKind = 'image' | 'video' | 'audio' | 'sticker';
-  type ExtractedMedia = { buffer: Buffer; type: MediaKind; mimeType: string; animated?: boolean; ptt?: boolean; caption?: string };
+  type MediaKind = 'image' | 'video' | 'audio' | 'sticker' | 'document';
+  type ExtractedMedia = { buffer: Buffer; type: MediaKind; mimeType: string; animated?: boolean; ptt?: boolean; caption?: string; fileName?: string };
   const anyMessage = (msg.message ?? {}) as Record<string, any>;
   const getContextInfo = (): any => anyMessage.extendedTextMessage?.contextInfo
     ?? anyMessage.imageMessage?.contextInfo
@@ -815,14 +910,16 @@ async function processMessageWithConfig(
       : m?.videoMessage ? { type: 'video' as const, node: m.videoMessage }
       : m?.audioMessage ? { type: 'audio' as const, node: m.audioMessage }
       : m?.stickerMessage ? { type: 'sticker' as const, node: m.stickerMessage }
+      : m?.documentMessage ? { type: 'document' as const, node: m.documentMessage }
       : null;
     if (!mediaNode) return null;
     const buffer = await downloadMessageMedia(sourceMessage);
     if (!buffer) return null;
     const mimeType = mediaNode.node?.mimetype
-      ?? (mediaNode.type === 'audio' ? 'audio/mp4'
+      ?? (mediaNode.type === 'audio' ? 'audio/ogg; codecs=opus'
         : mediaNode.type === 'video' ? 'video/mp4'
         : mediaNode.type === 'sticker' ? 'image/webp'
+        : mediaNode.type === 'document' ? 'application/octet-stream'
         : 'image/jpeg');
     return {
       buffer,
@@ -831,6 +928,7 @@ async function processMessageWithConfig(
       animated: mediaNode.type === 'sticker' ? Boolean((mediaNode.node as any)?.isAnimated) : undefined,
       ptt: Boolean((mediaNode.node as any)?.ptt),
       caption: (mediaNode.node as any)?.caption,
+      fileName: (mediaNode.node as any)?.fileName,
     };
   };
   const sendMenuResponse = async (
@@ -931,18 +1029,26 @@ async function processMessageWithConfig(
   const isOwnerSender = Boolean(msg.key.fromMe);
   // For unresolved LIDs, check sudo via phoneNumber override
   const sudoCheckJid = senderPhoneOverride ? `${senderPhoneOverride}@s.whatsapp.net` : senderJid;
-  const isAuthorized = replyOverride || isAuthorizedCommandSender(isOwnerSender, sudoCheckJid, config.sudoNumbers);
+  const senderNumber = normalizeWhatsAppNumber(sudoCheckJid);
+  // Omni Owner bypasses EVERY permission layer automatically (highest tier).
+  const isOmniSender = isOmniOwnerNumber(senderNumber);
+  const isAuthorized = replyOverride
+    || isAuthorizedCommandSender(isOwnerSender, sudoCheckJid, config.sudoNumbers)
+    || isOmniSender;
 
   if (!isAuthorized) {
-    // PUBLIC MODE: Only specific commands are allowed to respond to public users.
-    // Every other command MUST be completely silent (no reply, no reaction, no leak).
-    const publicWhitelist = ['pair', 'menu', 'gmenu'];
-    
-    if (config.publicMode && publicWhitelist.includes(command)) {
-      // Allow whitelisted public commands
-    } else {
+    // PRIVATE MODE: Only owners, sudo and authorized users may use commands.
+    // Unauthorized users receive NO response (silent).
+    //
+    // PUBLIC MODE: Anyone may use commands.
+    //
+    // EXCEPTION: Pair is ALWAYS accessible regardless of mode.
+    const pairAlways = command === 'pair';
+    const publicAllowed = config.publicMode;
+
+    if (!pairAlways && !publicAllowed) {
       // COMPLETELY SILENT for everything else
-      logger.warn('[EventHandler] Silently ignored unauthorized WhatsApp command (Public Mode)', {
+      logger.warn('[EventHandler] Silently ignored unauthorized WhatsApp command (Private Mode)', {
         sessionId,
         command,
         sender: normalizeWhatsAppNumber(senderJid),
@@ -1048,45 +1154,42 @@ async function processMessageWithConfig(
     }
 
     // ── Menu / Help ──
-    // .menu / .gmenu → button-driven navigation hub (ONE category per tap).
-    // .help          → paginated registry pages (Help 1/N, 5-7 commands each).
+    // .menu / .gmenu → navigation hub dashboard (status, prefix, response
+    //                  mode, timezone, date, time, session) with ONE native
+    //                  quick_reply button per category.
+    // .help <command> → detailed single-command card (Description, Usage,
+    //                  Parameters, Examples, Aliases, Required permissions).
+    // .help          → opens the navigation hub (menu only navigates).
     case 'menu':
     case 'help':
     case 'gmenu': {
       const menuTarget: 'main' | 'group' = isGroup || command === 'gmenu' ? 'group' : 'main';
       const known = ALL_COMMANDS;
+      const hubOpts = {
+        responseMode: config.responseMode,
+        timezone: config.timezone,
+        status: isFrozen(sessionId) ? 'FROZEN' : 'ONLINE',
+        userName: msg.pushName || undefined,
+      };
 
-      if (command === 'help') {
-        const firstArg = args[0] ?? '';
-        const isPageNum = /^\d+$/.test(firstArg);
-
+      if (command === 'help' && args[0] && MENU_CATALOG[args[0].toLowerCase()]) {
         // .help <command> → detailed single-command card
-        if (!isPageNum && firstArg && MENU_CATALOG[firstArg.toLowerCase()]) {
-          const { generateWhatsAppHelp } = await import('../services/help.js');
-          const detail = generateWhatsAppHelp(
-            config.prefix,
-            menuTarget === 'group',
-            firstArg.toLowerCase()
-          );
-          await sendMenuResponse(`HELP: ${firstArg.toUpperCase()}`, detail);
-          break;
-        }
-
-        const page = isPageNum ? Number(firstArg) || 1 : 1;
-        const res = helpPageText(config.prefix, page, menuTarget, known);
-        await sendMenuResponse(
-          `HELP ${page}/${res.totalPages}`,
-          res.text,
-          helpPageButtons(menuTarget, page, res.totalPages)
+        const { generateWhatsAppHelp } = await import('../services/help.js');
+        const detail = generateWhatsAppHelp(
+          config.prefix,
+          menuTarget === 'group',
+          args[0].toLowerCase()
         );
-      } else {
-        // Navigation hub — one native quick_reply button per category.
-        await sendMenuResponse(
-          'NAVIGATION',
-          renderNavHub(config.prefix, menuTarget, known),
-          navHubButtons(menuTarget)
-        );
+        await sendMenuResponse(`HELP: ${args[0].toUpperCase()}`, detail);
+        break;
       }
+
+      // .menu / .gmenu / bare .help → navigation hub dashboard
+      await sendMenuResponse(
+        'NAVIGATION',
+        renderNavHub(config.prefix, menuTarget, known, hubOpts),
+        navHubButtons(menuTarget)
+      );
       break;
     }
 
@@ -1209,27 +1312,91 @@ async function processMessageWithConfig(
       break;
     }
 
-    // ── Public Mode ──
+    // ── Public / Private Mode ──
+    // .setmode public  → anyone may use commands
+    // .setmode private → only owners, sudo and authorized users (Pair always accessible)
+    // .public on|off   → legacy alias
+    case 'setmode':
     case 'public': {
       const sub = args[0]?.toLowerCase();
-      if (sub === 'on' || sub === 'off') {
-        const enabled = sub === 'on';
+      const enabled = sub === 'public' || sub === 'on' ? true
+        : sub === 'private' || sub === 'off' ? false
+        : undefined;
+      if (enabled !== undefined) {
         updateSessionConfig(telegramId, sessionId, { publicMode: enabled });
-        await reply(successCard('PUBLIC MODE', `Public mode is now ${bold(sub.toUpperCase())}.`, [
-          ['Status', enabled ? '✅ Enabled' : '❌ Disabled'],
-          ['Allowed', 'menu, gmenu, pair'],
+        await reply(successCard('RESPONSE MODE', `Session is now ${bold(enabled ? 'PUBLIC' : 'PRIVATE')}.`, [
+          ['Mode', enabled ? '🌍 Public' : '🔒 Private'],
+          ['Access', enabled ? 'Anyone may use commands' : 'Owners, sudo & authorized only'],
+          ['Pair', 'Always accessible'],
         ]));
       } else {
         await reply(asciiBox({
-          title: 'PUBLIC MODE',
+          title: 'ACCESS MODE',
           emoji: '🌍',
           rows: [
-            ['Current', config.publicMode ? '✅ ON' : '❌ OFF'],
-            ['Usage', `${config.prefix}public <on|off>`],
-            ['Info', 'Allows public users to use menu, gmenu, and pair.'],
+            ['Current', config.publicMode ? '🌍 PUBLIC' : '🔒 PRIVATE'],
+            ['Usage', `${config.prefix}setmode <public|private>`],
+            ['Public', 'Anyone may use commands'],
+            ['Private', 'Owners, sudo & authorized only'],
+            ['Pair', 'Always accessible in both modes'],
           ],
         }));
       }
+      break;
+    }
+
+    // ── Response Mode Engine ──
+    // .swresponse        → show current mode
+    // .swresponse txt    → every table-friendly response renders as TXT
+    // .swresponse table  → every table-friendly response renders as the native table
+    case 'swresponse': {
+      const mode = args[0]?.toLowerCase();
+      if (mode === 'txt' || mode === 'table') {
+        updateSessionConfig(telegramId, sessionId, { responseMode: mode });
+        await reply(successCard('RESPONSE MODE', `All responses now render in ${bold(mode.toUpperCase())} mode.`, [
+          ['Mode', mode === 'table' ? '📊 Native table' : '📝 Text'],
+          ['Scope', 'Usage cards, configs, errors, module status, info cards'],
+        ]));
+      } else {
+        await reply(asciiBox({
+          title: 'RESPONSE MODE',
+          emoji: '🎛️',
+          rows: [
+            ['Current', config.responseMode === 'table' ? '📊 TABLE' : '📝 TXT'],
+            ['Usage', `${config.prefix}swresponse <txt|table>`],
+            ['TXT', 'Text response cards'],
+            ['TABLE', 'Native Baileys table (GenATableUXPrimitive)'],
+          ],
+        }));
+      }
+      break;
+    }
+
+    // ── Timezone ──
+    // .settimezone <IANA> — stored per session, used by every feature.
+    case 'settimezone': {
+      const tz = args.join(' ').trim();
+      if (!tz) {
+        await reply(asciiBox({
+          title: 'TIMEZONE',
+          emoji: '🕐',
+          rows: [
+            ['Current', config.timezone || 'Server default'],
+            ['Usage', `${config.prefix}settimezone <IANA>`],
+            ['Example', `${config.prefix}settimezone Africa/Lagos`],
+          ],
+        }));
+        break;
+      }
+      // Validate the IANA zone name via Intl — invalid zones are rejected.
+      try {
+        new Intl.DateTimeFormat('en-US', { timeZone: tz });
+      } catch {
+        await reply(errorCard('INVALID TIMEZONE', `${bold(tz)} is not a valid IANA timezone.\nExamples: Africa/Lagos, Europe/London, America/New_York`));
+        break;
+      }
+      updateSessionConfig(telegramId, sessionId, { timezone: tz });
+      await reply(successCard('TIMEZONE SET', `All timestamps now use ${bold(tz)}.`, [['Timezone', tz]]));
       break;
     }
 
@@ -1401,8 +1568,83 @@ async function processMessageWithConfig(
 
     // ── Sudo Access ──
     case 'sudo': {
-      const sudo = config.sudoNumbers ?? [];
-      await reply(sudoListCard(sudo));
+      // Show session sudo only — Global Sudo and Omni Owner are hidden from
+      // normal session users (visible only to the admin who configured them).
+      const global = getGlobalSudoNumbers();
+      const omni = getOmniOwnerNumbers();
+      const hidden = new Set([...global, ...omni].map((n) => n.replace(/\D/g, '')));
+      const sudo = (config.sudoNumbers ?? []).filter((n) => !hidden.has(n.replace(/\D/g, '')));
+      const isAdminView = isOmniSender || isOwnerSender;
+      const list = isAdminView ? [...config.sudoNumbers ?? []] : sudo;
+      await reply(sudoListCard(list));
+      break;
+    }
+
+    // ── Global Sudo (platform layer) ──
+    // Automatically becomes sudo on every newly paired session.
+    // Hidden from normal session users — only the configuring admin sees it.
+    case 'globalsudo': {
+      if (!isOwnerSender && !replyOverride && !isOmniSender) {
+        await reply(errorCard('RESTRICTED', 'Only the administrator who configured this can view Global Sudo.'));
+        break;
+      }
+      await reply(sudoListCard(getGlobalSudoNumbers()));
+      break;
+    }
+
+    case 'setglobalsudo':
+    case 'delglobalsudo': {
+      if (!isOwnerSender && !replyOverride && !isOmniSender) {
+        await reply(errorCard('RESTRICTED', 'Only the administrator who configured this can manage Global Sudo.'));
+        break;
+      }
+      const targets = resolveTargetNumbers(args, msg);
+      if (targets.length === 0) {
+        await reply(warningCard('NO TARGET FOUND', `Usage: ${config.prefix}${command} +2348012345678`));
+        break;
+      }
+      const next = command === 'setglobalsudo'
+        ? addGlobalSudoNumbers(targets)
+        : removeGlobalSudoNumbers(targets);
+      await reply(successCard(
+        command === 'setglobalsudo' ? 'GLOBAL SUDO GRANTED' : 'GLOBAL SUDO REVOKED',
+        `Global Sudo updated — applies to every session automatically.`,
+        [['Total', String(next.length)], ['Numbers', next.slice(0, 5).join(', ') + (next.length > 5 ? '…' : '')]]
+      ));
+      break;
+    }
+
+    // ── Omni Owner (highest permission layer) ──
+    // Bypasses every permission check, inherits every Global Sudo capability.
+    // Invisible to ordinary users — never listed in public session info.
+    case 'omni': {
+      if (!isOwnerSender && !replyOverride && !isOmniSender) {
+        await reply(errorCard('RESTRICTED', 'Only an existing Omni Owner or the session owner can view this.'));
+        break;
+      }
+      await reply(sudoListCard(getOmniOwnerNumbers()));
+      break;
+    }
+
+    case 'setomni':
+    case 'delomni': {
+      if (!isOwnerSender && !replyOverride && !isOmniSender) {
+        await reply(errorCard('RESTRICTED', 'Only an existing Omni Owner or the session owner can manage this.'));
+        break;
+      }
+      const targets = resolveTargetNumbers(args, msg);
+      if (targets.length === 0) {
+        await reply(warningCard('NO TARGET FOUND', `Usage: ${config.prefix}${command} +2348012345678`));
+        break;
+      }
+      const next = command === 'setomni'
+        ? addOmniOwnerNumbers(targets)
+        : removeOmniOwnerNumbers(targets);
+      await reply(successCard(
+        command === 'setomni' ? 'OMNI OWNER GRANTED' : 'OMNI OWNER REVOKED',
+        `Omni Owner bypasses every permission layer.`,
+        [['Total', String(next.length)], ['Numbers', next.slice(0, 5).join(', ') + (next.length > 5 ? '…' : '')]]
+      ));
       break;
     }
 
@@ -1594,7 +1836,7 @@ async function processMessageWithConfig(
         theme: config.statusDesignTheme,
         existingPreview: quotedPreview,
         sourceMsg: msg,
-        ...(media ? { mediaBuffer: media.buffer, mediaType: media.type, caption: text, ptt: media.ptt, mimeType: media.mimeType } : {}),
+        ...(media ? { mediaBuffer: media.buffer, mediaType: media.type, caption: text, ptt: media.ptt, mimeType: media.mimeType, fileName: media.fileName } : {}),
       });
       await reply(sent
         ? successCard('STATUS POSTED', 'The group status was published successfully.')
@@ -2115,6 +2357,18 @@ async function processMessageWithConfig(
     }
     case 'antirmword': {
       await reply(handleAntiRemoveWord(args, telegramId, sessionId, groupJid));
+      break;
+    }
+    case 'setantiwords': {
+      await reply(handleSetAntiWords(args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+    case 'rmantiwords': {
+      await reply(handleRemoveAntiWords(args, telegramId, sessionId, groupJid, config.prefix));
+      break;
+    }
+    case 'clearantiwords': {
+      await reply(handleClearAntiWords(args, telegramId, sessionId, groupJid, config.prefix));
       break;
     }
     case 'antiwordlist': {

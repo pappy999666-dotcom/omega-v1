@@ -44,7 +44,7 @@ import { runRemoveModerationPipeline } from '../utils/moderation-pipeline.js';
 import { loadSessionConfig } from '../../services/workspace.js';
 import { logger } from '../../utils/logger.js';
 import { bold, italic, successCard, warningCard, errorCard, asciiBox } from '../../utils/ascii-art.js';
-import { renderTemplate, renderTemplatePreview, hasTemplateVariable } from '../../utils/response-engine.js';
+import { renderTemplate, renderTemplatePreview, renderTemplateWithMentions, hasTemplateVariable } from '../../utils/response-engine.js';
 import {
   loadGroupEventConfig,
   setGroupMessage,
@@ -159,7 +159,16 @@ export async function cmdKick(
   return result.reply;
 }
 
-// ── Ban ──────────────────────────────────────────────────
+// ── Ban (local restriction — NO kick) ─────────────────────
+//
+// Ban does NOT remove the member from the group.
+//
+// Instead it creates a LOCAL group restriction: the banned member stays
+// in the group but cannot speak. Every message type they send (text,
+// image, video, audio, voice note, document, contact, poll, sticker,
+// location, live location, group mentions, reactions) is deleted
+// immediately by the anti-engine, and the configured ban message is
+// optionally re-sent (throttled). Unban restores normal permissions.
 
 export async function cmdBan(
   args: string[],
@@ -173,23 +182,89 @@ export async function cmdBan(
   const permErr = await checkRequesterPermission(msg, socket, telegramId, sessionId, groupJid, 'Ban');
   if (permErr) return permErr;
 
-  const template = getGroupMessage(telegramId, sessionId, groupJid, 'ban') ?? undefined;
-  const result = await runRemoveModerationPipeline({
-    action: 'ban',
-    args,
-    msg,
-    socket,
-    groupJid,
-    prefix,
-    template,
-    onSuccess: (number) => addBannedNumber(telegramId, sessionId, groupJid, number),
-    sessionId,
-    telegramId,
-  });
-  if (!result.ok) return result.reply;
-  // The pipeline already sent the group announcement — return result.reply (empty string)
-  // so the caller does not post a second success message to the group.
-  return result.reply;
+  if (!groupJid.endsWith('@g.us')) {
+    return errorCard('Ban', 'This command must be used inside a WhatsApp group.');
+  }
+
+  const meta = await fetchGroupMeta(socket, groupJid, true);
+  if (!meta?.botIsAdmin) {
+    return errorCard('Ban', BOT_NOT_ADMIN_MSG);
+  }
+
+  const target = await resolveTarget(args, msg, socket, groupJid, meta);
+  if (!target?.participant) {
+    return warningCard(
+      'Ban',
+      `Provide a group member phone number, reply to a message, or @mention someone.\nUsage: ${prefix}ban @user`
+    );
+  }
+
+  const participant = target.participant;
+
+  if (isAdminJid(meta.participants, participant.id)) {
+    return warningCard(
+      'Ban',
+      `@${target.number} is a group admin and cannot be banned directly.\nUse ${prefix}dnkick to demote then remove them.`
+    );
+  }
+
+  // Real phone JID (never a LID) for the native mention + mentions array.
+  const targetJid = target.jid && !target.jid.endsWith('@lid')
+    ? target.jid
+    : stripDeviceSuffix(participant.id);
+
+  // ── LOCAL RESTRICTION ONLY — the member stays in the group ──
+  addBannedNumber(telegramId, sessionId, groupJid, target.number);
+
+  // Delete the triggering quoted message (reply-ban) for immediate effect.
+  const quotedKey = msg.message?.extendedTextMessage?.contextInfo?.stanzaId
+    ? {
+        remoteJid: groupJid,
+        id: msg.message.extendedTextMessage.contextInfo.stanzaId,
+        participant: msg.message.extendedTextMessage.contextInfo.participant,
+        fromMe: false,
+      }
+    : null;
+  if (quotedKey) {
+    await (socket as unknown as {
+      sendMessage(jid: string, content: Record<string, unknown>): Promise<unknown>;
+    }).sendMessage(groupJid, { delete: quotedKey }).catch(() => {});
+  }
+
+  // ── Announcement (native mention, custom ban template if configured) ──
+  try {
+    const template = getGroupMessage(telegramId, sessionId, groupJid, 'ban')
+      ?? '🔨 @mention has been locally banned in *&gcname*.\nThey remain in the group but their messages will be deleted.';
+    const { text: rendered, mentions: mentionJids } = await renderTemplateWithMentions(
+      template,
+      {
+        senderJid: targetJid,
+        gcName: meta.subject,
+        socket,
+        groupJid,
+      }
+    );
+    let pfpBuffer: Buffer | null = null;
+    try {
+      const { fetchProfilePicture } = await import('../socket-manager.js');
+      pfpBuffer = await fetchProfilePicture(sessionId, targetJid);
+    } catch { /* ignore */ }
+
+    await PreviewManager.send(socket as any, groupJid, rendered, {
+      extra: { mentions: mentionJids },
+      forceMentions: true,
+      sessionId,
+      telegramId,
+      ...(pfpBuffer ? { media: { buffer: pfpBuffer as any, type: 'image', caption: rendered } } : {}),
+    });
+  } catch (announceErr) {
+    logger.warn('[Ban] Announcement failed after local ban', { err: String(announceErr), groupJid });
+  }
+
+  return successCard('Ban', `@${target.number} is now locally restricted.\nThey stay in the group but every message they send will be deleted until ${prefix}unban.`, [
+    ['Number', target.number],
+    ['Action', 'Local restriction (no kick)'],
+  ]);
 }
 
 // ── Unban ────────────────────────────────────────────────

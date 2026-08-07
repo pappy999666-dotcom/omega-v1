@@ -139,7 +139,11 @@ export const ALL_COMMANDS = [
   // Stop
   'stop', 'stopspam', 'spam',
   // Settings
-  'setprefix', 'setcmd', 'delcmd', 'setmenupic', 'setmenuvideo', 'delmenumedia', 'setsudo', 'delsudo', 'sudo', 'prefix', 'public', 'publicresponse', 'tagreply',
+  'setprefix', 'setcmd', 'delcmd', 'setmenupic', 'setmenuvideo', 'delmenumedia', 'setsudo', 'delsudo', 'sudo', 'prefix', 'public', 'setmode', 'publicresponse', 'tagreply',
+  // Response Mode + Timezone
+  'swresponse', 'settimezone',
+  // Global Sudo & Omni Owner (platform permission layers)
+  'globalsudo', 'setglobalsudo', 'delglobalsudo', 'omni', 'setomni', 'delomni',
   // Info
   'menu', 'help', 'gmenu', 'ping', 'info', 'groups', 'jid', 'userinfo', 'getinfo', 'idea',
   // Bucket
@@ -194,6 +198,7 @@ export const ALL_COMMANDS = [
   'antigm', 'gmpermit', 'rmgmpermit',
   // AntiWords
   'antiwords', 'antiaddword', 'antirmword', 'antiwordlist', 'antiwordsmsg',
+  'setantiwords', 'rmantiwords', 'clearantiwords',
   // AntiPoll
   'antipoll', 'pollpermit', 'rmpollpermit',
   // AntiForward

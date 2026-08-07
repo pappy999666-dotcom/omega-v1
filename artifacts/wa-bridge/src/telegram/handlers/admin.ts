@@ -515,12 +515,10 @@ export async function handleUpdateBot(ctx: Context & { telegramId: string }): Pr
 
   activeDeployments.add(ctx.telegramId);
   await ctx.answerCbQuery('Deployment started').catch(() => {});
-  await ctx.editMessageText(
-    `${header('Deployment Running', '\ud83d\udd04')}\n\nLive console opened below.`,
-    { parse_mode: 'HTML', reply_markup: backKeyboard('admin:panel') }
-  ).catch(() => {});
 
-  // Send initial console message
+  // ONE live message only — the console is created here and progressively
+  // edited by onProgress until it becomes the final summary. No separate
+  // "Deployment Running" message (the old flow sent two live logs).
   let msgId: number;
   try {
     const sent = await ctx.telegram.sendMessage(

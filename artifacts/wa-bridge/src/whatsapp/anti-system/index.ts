@@ -20,7 +20,7 @@ import { loadGroupAntiConfig } from './config.js';
 import { normalizeWhatsAppNumber } from '../event-handlers.js';
 import { executeAction, deleteMessage } from './actions.js';
 import type { ViolationContext } from './types.js';
-import { loadGroupEventConfig } from '../../services/group-config.js';
+import { loadGroupEventConfig, isBannedNumber, getGroupMessage } from '../../services/group-config.js';
 import { renderTemplate, hasTemplateVariable } from '../../utils/response-engine.js';
 import { PreviewManager } from '../../preview-engine/index.js';
 import { resolveIdentity, profilePicBuffer } from '../utils/identity.js';
@@ -39,7 +39,7 @@ import { messageIsFromBot } from './modules/anti-bot.js';
 import { recordSpamMessage, resetSpamWindow } from './config.js';
 import { messageIsImage, messageIsVideo, messageIsAudio } from './modules/anti-media.js';
 import { messageIsVoiceNote } from './modules/anti-vn.js';
-import { messageIsPlainText } from './modules/anti-text.js';
+import { messageIsPlainText, isBotCommandText } from './modules/anti-text.js';
 import { messageContainsEmoji } from './modules/anti-emoji.js';
 import { messageIsSticker } from './modules/anti-sticker.js';
 import { messageIsGroupCall } from './modules/anti-group-call.js';
@@ -135,17 +135,65 @@ export async function runAntiChecks(
 
   const senderNumber = normalizeWhatsAppNumber(senderJid);
 
-  // ── Protected-participant guard ──────────────────────────────────────
-  // Never apply any anti-module to admins, the bot itself, or sudo users.
-  if (meta) {
-    const config = await import('../../services/workspace.js').then((m) =>
-      m.loadSessionConfig(telegramId, sessionId)
-    ).catch(() => null);
+  // ── Session config (once) ────────────────────────────────────────────
+  const config = await import('../../services/workspace.js').then((m) =>
+    m.loadSessionConfig(telegramId, sessionId)
+  ).catch(() => null);
 
+  // ── Protected-participant guard ──────────────────────────────────────
+  // Never apply any anti-module to admins, the bot itself, sudo or omni owners.
+  if (meta) {
     if (isProtectedJid(meta, senderJid, config?.sudoNumbers ?? [])) {
       logger.debug('[AntiSystem] Skipping protected participant', { senderJid, groupJid });
       return false;
     }
+  }
+
+  // ── BANNED-MEMBER ENFORCEMENT (local restriction) ────────────────────
+  // A banned member REMAINS in the group but is muted: EVERY message type
+  // (text, image, video, audio, voice note, document, contact, poll,
+  // sticker, location, live location, group mentions, reactions) is deleted
+  // immediately. Optionally resend the configured ban message (throttled to
+  // one notice per user per 60s) and always log the attempt.
+  if (isBannedNumber(telegramId, sessionId, groupJid, senderNumber)) {
+    const deletion = deleteMessage(socket, msg);
+    const notice = getGroupMessage(telegramId, sessionId, groupJid, 'ban');
+    const throttleKey = `${sessionId}:${groupJid}:${senderNumber}`;
+    const now = Date.now();
+    const last = bannedNoticeAt.get(throttleKey) ?? 0;
+    bannedNoticeAt.set(throttleKey, now);
+
+    if (notice && now - last > BANNED_NOTICE_COOLDOWN_MS) {
+      let gcName = groupJid.split('@')[0] ?? 'Group';
+      try {
+        const banMeta = await (socket as unknown as {
+          groupMetadata(jid: string): Promise<{ subject?: string; participants?: { id: string; phoneNumber?: string }[] }>;
+        }).groupMetadata(groupJid);
+        gcName = banMeta?.subject ?? gcName;
+      } catch { /* non-critical */ }
+      const rendered = await renderTemplate(notice, {
+        senderJid,
+        mentionNumber: senderNumber,
+        gcName,
+        socket,
+        groupJid,
+        timezone: config?.timezone,
+      }).catch(() => notice);
+      deletion.then(async () => {
+        await PreviewManager.send(socket as any, groupJid, rendered, {
+          extra: { mentions: [senderJid] },
+          forceMentions: true,
+          sessionId,
+          telegramId,
+        }).catch(() => {});
+      });
+    }
+    await deletion;
+    logger.info('[AntiSystem] BANNED MEMBER — message deleted', {
+      sessionId, groupJid, senderNumber,
+      messageType: Object.keys(msg.message ?? {}).join(','),
+    });
+    return true; // consumed — never reaches command parsing
   }
 
   // Load group anti-config once
@@ -219,7 +267,13 @@ export async function runAntiChecks(
   tryModule('antivn', 'AntiVN', () => messageIsVoiceNote(msg), 'antivn');
 
   // ── AntiText ─────────────────────────────────────────────
-  tryModule('antitxt', 'AntiText', () => messageIsPlainText(msg), 'antitxt');
+  // Command exclusion: a message that parses as a bot command is NEVER
+  // classified as a plain-text violation (so commands reach the dispatcher).
+  tryModule('antitxt', 'AntiText', () => {
+    const rawText = extractIncomingText(msg);
+    if (config?.prefix && rawText && isBotCommandText(rawText, config.prefix)) return false;
+    return messageIsPlainText(msg, { prefix: config?.prefix });
+  }, 'antitxt');
 
   // ── AntiEmoji ────────────────────────────────────────────
   tryModule('antiemoji', 'AntiEmoji', () => messageContainsEmoji(msg), 'antiemoji');
@@ -280,6 +334,28 @@ export async function runAntiChecks(
   }
 
   return triggered;
+}
+
+// ── Ban-notice throttling ─────────────────────────────────
+const bannedNoticeAt = new Map<string, number>();
+const BANNED_NOTICE_COOLDOWN_MS = 60_000;
+
+/** Extract the raw text of a message (for command-exclusion checks). */
+function extractIncomingText(msg: WebMessageInfo): string {
+  const m = msg.message as Record<string, any> | null | undefined;
+  if (!m) return '';
+  const inner =
+    m['ephemeralMessage']?.message ??
+    m['viewOnceMessage']?.message ??
+    m['viewOnceMessageV2']?.message ??
+    m;
+  return String(
+    inner['conversation'] ??
+    inner['extendedTextMessage']?.text ??
+    inner['imageMessage']?.caption ??
+    inner['videoMessage']?.caption ??
+    ''
+  );
 }
 
 // ── Built-in default templates ─────────────────────────────
@@ -405,6 +481,9 @@ export async function handleParticipantUpdate(
             gcName,
             socket,
             groupJid,
+            timezone: (await import('../../services/workspace.js').then((m) =>
+              m.loadSessionConfig(telegramId, sessionId)
+            ).catch(() => null))?.timezone,
           });
 
           // &pp → attach the joining member's profile picture as media.
@@ -494,6 +573,9 @@ export async function handleParticipantUpdate(
             gcName,
             socket,
             groupJid,
+            timezone: (await import('../../services/workspace.js').then((m) =>
+              m.loadSessionConfig(telegramId, sessionId)
+            ).catch(() => null))?.timezone,
           });
 
           const mentionList = mentionJid ? [mentionJid] : undefined;

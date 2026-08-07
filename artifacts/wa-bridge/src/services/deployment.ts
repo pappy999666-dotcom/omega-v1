@@ -183,14 +183,22 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
     try {
       await runLive('git', ['pull', 'origin', 'main'], APP_DIR, (l) => {
         push(`  <code>${l}</code>`);
-        if (l.includes('file changed')) {
-          const m = l.match(/(\d+) file/);
-          if (m) filesChanged += parseInt(m[1] ?? '0', 10);
-        }
       });
     } catch (e: any) { e.step = 'Pull Commits'; throw e; }
     currCommit = await safeExec('git rev-parse --short HEAD');
     log.push(`✅ Pulled → <code>${currCommit}</code>`);
+
+    // 3b. Compute the EXACT file-change count deterministically — never rely on
+    // parsing git's human-readable pull banner (which can be localized or show
+    // "Already up to date"). Files changed = diff between prev..curr, counted
+    // from the merge-base to handle fast-forwards and diverged histories.
+    if (prevCommit && currCommit && prevCommit !== currCommit) {
+      const base = await safeExec(`git merge-base ${prevCommit} ${currCommit}`, APP_DIR);
+      const range = base ? `${base}..${currCommit}` : `${prevCommit}..${currCommit}`;
+      const changedFiles = await safeExec(`git diff --name-only ${range}`, APP_DIR);
+      filesChanged = changedFiles ? changedFiles.split(String.fromCharCode(10)).filter((l) => l.trim()).length : 0;
+      log.push(`✅ Files changed: ${filesChanged}`);
+    }
 
     // 4. Install dependencies
     log.push('📦 <b>[4/13] Checking dependencies...</b>');
@@ -263,60 +271,41 @@ export async function runDeployment(onProgress: ProgressCallback): Promise<Deplo
       log.push('⚠️ Failed to generate release notes');
     }
 
-    // 10. Return summary (deploy SUCCEEDED — restart is handled separately)
+    // 10. Return summary (deploy SUCCEEDED)
     const totalDurationMs = Date.now() - startedAt;
     log.push('', `🚀 <b>[10/13] Deployment Summary</b>`, 
       `• Duration: ${(totalDurationMs / 1000).toFixed(1)}s`,
       `• Version: ${currCommit}`,
-      `• Files: ${filesChanged}`,
-      ``,
-      `🔄 Restarting PM2...`
-    );
-    await flush();
-
-    // 11. Graceful PM2 reload (reload = zero-downtime, keeps process alive during swap)
-    // Use reload instead of restart so the current request completes before the new worker picks up.
-    log.push('🔄 <b>[11/13] Reloading PM2 process...</b>');
-    const reloadResult = await safeExec('pm2 reload wa-bridge --update-env', APP_DIR);
-    if (reloadResult) {
-      log.push(`  - PM2 reload output: <code>${reloadResult.slice(0, 200)}</code>`);
-    }
-    
-    // Wait for PM2 to confirm online status
-    let isOnline = false;
-    for (let i = 0; i < 20; i++) {
-      const check = JSON.parse(await safeExec('pm2 jlist') || '[]');
-      const p = check.find((x: any) => x.name === 'wa-bridge');
-      if (p && p.pm2_env?.status === 'online') { isOnline = true; break; }
-      await new Promise(r => setTimeout(r, 1000));
-    }
-    
-    if (isOnline) {
-      log.push('✅ PM2 reloaded successfully');
-    } else {
-      log.push('⚠️ PM2 reload may have failed — check logs');
-    }
-
-    // 12. Post-restart stability check
-    log.push('🔍 <b>[12/13] Post-restart stability check...</b>');
-    await new Promise(r => setTimeout(r, 5000));
-    
-    const jlistFinal = await safeExec('pm2 jlist');
-    const procFinal = JSON.parse(jlistFinal || '[]').find((p: any) => p.name === 'wa-bridge');
-    if (procFinal && procFinal.pm2_env?.status === 'online') {
-      log.push('✅ Process stable and online');
-    } else {
-      log.push('⚠️ Process status unclear — check pm2 logs');
-    }
-
-    // 13. Final summary
-    const finalDurationMs = Date.now() - startedAt;
-    log.push('', `✅ <b>[13/13] Update Complete</b>`,
-      `• Total Duration: ${(finalDurationMs / 1000).toFixed(1)}s`,
-      `• From: ${prevCommit} → ${currCommit}`,
       `• Files Changed: ${filesChanged}`
     );
     await flush();
+
+    // 11. FINAL SUMMARY FIRST — always delivered before any restart.
+    // The PM2 reload below restarts the very process running this deploy; if we
+    // awaited it, the "done" message would never arrive (the old bug: stuck at
+    // "Pm2" with the files count missing). Sending the summary before reloading
+    // guarantees the user always sees the real file count.
+    const finalDurationMs = Date.now() - startedAt;
+    log.push('', `✅ <b>[11/13] Update Complete</b>`,
+      `• Total Duration: ${(finalDurationMs / 1000).toFixed(1)}s`,
+      `• From: ${prevCommit} → ${currCommit}`,
+      `• Files Changed: ${filesChanged}`,
+      ``,
+      `🔄 Reloading PM2 in background…`
+    );
+    await flush();
+
+    // 12. Background PM2 reload — non-blocking, fire-and-forget with a short
+    // delay so the summary edit above is fully delivered first. The reload is
+    // what makes the new build live; if it fails, the deploy still SUCCEEDED
+    // (files are on disk — a manual pm2 reload will pick them up).
+    setTimeout(() => {
+      safeExec('pm2 reload wa-bridge --update-env', APP_DIR).then(() => {
+        logger.info('[Deploy] PM2 background reload completed');
+      }).catch((err) => {
+        logger.warn('[Deploy] PM2 background reload failed', { err: String(err) });
+      });
+    }, 2000);
 
     return { success: true, prevCommit, currCommit, filesChanged, buildDurationMs, totalDurationMs: finalDurationMs };
 
