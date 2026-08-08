@@ -2035,17 +2035,26 @@ async function routeCallback(
       const meta = access?.meta;
       if (!access || !ownerId || !meta) { await ctx.answerCbQuery('Session unavailable', { show_alert: true }).catch(() => {}); return; }
       const cfg = loadSessionConfig(ownerId, sessionId);
-      const statusText = cfg.gameApiKey ? 'Configured (key hidden)' : 'Not configured';
+      const statusText = cfg.gameApiKey ? '✅ Configured · key hidden' : '⚪ Not configured';
+      const sessionLabel = meta.label ?? meta.sessionName ?? sessionId;
       const statusBody = [
         header('Game API • Session Setup', '🎮'),
         '',
-        'This interface controls only the selected WhatsApp session.',
+        H.blockquote([
+          H.bold('Selected session') + `\n${H.code(sessionLabel)}`,
+          '',
+          H.bold('Status') + `  ${statusText}`,
+          H.bold('Provider') + `  ${safe(cfg.gameApiEndpoint ?? 'Groq · default')}`,
+          H.bold('Model') + `  ${H.code(cfg.gameApiModel ?? 'llama-3.3-70b-versatile')}`,
+        ].join('\\n')),
         '',
-        H.bold('Current status:') + ` ${statusText}`,
-        H.bold('Provider:') + ` ${safe(cfg.gameApiEndpoint ?? 'Groq (default)')}`,
-        H.bold('Model:') + ` ${safe(cfg.gameApiModel ?? 'llama-3.3-70b-versatile')}`,
-        '',
-        'Use Setup / Change API Key to save credentials privately, Test API to verify the current key, or Tutorial for provider instructions.',
+        H.blockquote(
+          `${H.bold('How to continue')}\n` +
+          'Use <b>Setup / Change API Key</b> to save credentials privately.\n' +
+          'Use <b>Test API</b> to verify the current key.\n' +
+          'Use <b>Tutorial</b> for provider instructions.',
+          true
+        ),
       ].join('\\n');
       await ctx.editMessageText(statusBody, { parse_mode: 'HTML', reply_markup: gameApiKeyboard(sessionId, Boolean(cfg.gameApiKey)) }).catch(async (error) => {
         logger.warn('[Bot] Game API interface edit failed, replying fresh', { sessionId, err: String(error) });
