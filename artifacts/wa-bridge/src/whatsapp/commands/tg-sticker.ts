@@ -1,11 +1,16 @@
 // ============================================================
 // WA-Bridge — TG Sticker (Telegram Sticker Downloader)
 //
-// `.tg <link>` resolves a Telegram sticker pack link through the
-// Telegram Bot API (getStickerSet → getFile → download), converts
-// the chosen sticker into a WhatsApp-compatible WebP sticker and
-// sends it. Animated (TGS/Lottie) stickers cannot be converted by
-// the installed dependencies, so they fail with a clear error.
+// `.tg <link> [number]` resolves Telegram sticker content and
+// converts it into a WhatsApp-compatible WebP sticker:
+//
+//   • Pack links  t.me/addstickers/<name>        → Bot API getStickerSet
+//   • Pack names  <name> [number]                → Bot API getStickerSet
+//   • Post links  t.me/<channel>/<id>            → t.me/s/<channel> feed
+//     (public sticker posts; animated TGS fails clearly)
+//
+// Animated (TGS/Lottie) stickers cannot be converted by the
+// installed dependencies, so they fail with a clear error.
 // ============================================================
 
 import type { BridgeWASocket as WASocket } from '../baileys-types.js';
@@ -13,6 +18,7 @@ import { PreviewManager } from '../../preview-engine/index.js';
 import { asciiBox, errorCard, warningCard } from '../../utils/ascii-art.js';
 import { logger } from '../../utils/logger.js';
 import { addStickerMetadata, validateWebP } from './sticker.js';
+import { singleSelectButton, type NativeListRow, type NativeListSection } from '../utils/native-rich.js';
 import sharp from 'sharp';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -24,32 +30,32 @@ const execPromise = promisify(exec);
 const API_BASE = 'https://api.telegram.org';
 const DOWNLOAD_TIMEOUT_MS = 20_000;
 const MAX_PACK_PREVIEW = 15;
+const PICKER_ROWS = 10; // WhatsApp single_select sheet: 10 rows/section, 10 sections
+const PICKER_SECTIONS = 3; // → up to 30 quick picks per sheet
 
 // ── Link parsing ────────────────────────────────────────────
 
-export interface TgStickerRef {
-  packName: string;
-  /** Optional 1-based selection provided in the same message. */
-  selection?: number;
-  selectionEmoji?: string;
-}
+export type TgStickerRef =
+  | { kind: 'pack'; packName: string; selection?: number }
+  | { kind: 'post'; username: string; postId: string };
 
 /**
  * Parse a Telegram sticker link.
- * Accepts: t.me/addstickers/<name>, t.me/addsticker/<name>,
- * telegram.me/addstickers/<name>, tg://addstickers?set=<name>
- * and bare pack names. Returns null for anything else.
+ * Accepts pack links (addstickers/addsticker/telegram.me/tg://), bare pack
+ * names with an optional 1-based index, and individual post links
+ * (t.me/<channel>/<id>). Returns null for anything else.
  */
 export function parseTgLink(raw: string): TgStickerRef | null {
   const trimmed = (raw || '').trim();
   if (!trimmed) return null;
 
-  // Full link forms
+  // Full pack link forms
   const linkMatch = trimmed.match(
     /^(?:https?:\/\/)?(?:t|telegram)\.me\/(?:addsticker|addstickers)\/([A-Za-z0-9_]{1,64})(?:\s+(\d{1,3}))?$/i
   );
   if (linkMatch) {
     return {
+      kind: 'pack',
       packName: linkMatch[1]!,
       selection: linkMatch[2] ? Math.max(1, parseInt(linkMatch[2]!, 10)) : undefined,
     };
@@ -59,15 +65,25 @@ export function parseTgLink(raw: string): TgStickerRef | null {
   const deepMatch = trimmed.match(/^tg:\/\/addstickers\?set=([A-Za-z0-9_]{1,64})(?:\s+(\d{1,3}))?$/i);
   if (deepMatch) {
     return {
+      kind: 'pack',
       packName: deepMatch[1]!,
       selection: deepMatch[2] ? Math.max(1, parseInt(deepMatch[2]!, 10)) : undefined,
     };
+  }
+
+  // Individual post link: t.me/<channel>/<id> (also t.me/s/<channel>/<id>)
+  const postMatch = trimmed.match(
+    /^(?:https?:\/\/)?(?:t|telegram)\.me\/(?:s\/)?([A-Za-z0-9_]{1,64})\/(\d{1,15})(?:\?[^\s]*)?$/i
+  );
+  if (postMatch) {
+    return { kind: 'post', username: postMatch[1]!, postId: postMatch[2]! };
   }
 
   // Bare pack name with optional index
   const bareMatch = trimmed.match(/^([A-Za-z0-9_]{1,64})(?:\s+(\d{1,3}))?$/);
   if (bareMatch) {
     return {
+      kind: 'pack',
       packName: bareMatch[1]!,
       selection: bareMatch[2] ? Math.max(1, parseInt(bareMatch[2]!, 10)) : undefined,
     };
@@ -125,7 +141,58 @@ async function botApi<T>(method: string, params: Record<string, unknown>, timeou
   }
 }
 
+async function httpGetText(url: string, timeoutMs = 15_000): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+      },
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`Telegram page request failed (HTTP ${res.status}).`);
+    return await res.text();
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error('Telegram page request timed out.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024; // hard cap — never buffer oversized media
+
+/** Stream-safe fetch of an absolute URL with timeout + size caps (post media). */
+async function downloadDirect(url: string): Promise<Buffer> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36' },
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`Download failed (HTTP ${res.status}).`);
+    const declared = Number(res.headers.get('content-length') ?? 0);
+    if (declared > MAX_DOWNLOAD_BYTES) {
+      throw new Error(`Sticker is too large (${Math.round(declared / 1024 / 1024)} MB) — the bot only downloads up to 25 MB.`);
+    }
+    const buffer = Buffer.from(await res.arrayBuffer());
+    if (buffer.length > MAX_DOWNLOAD_BYTES) {
+      throw new Error(`Sticker is too large (${Math.round(buffer.length / 1024 / 1024)} MB) — the bot only downloads up to 25 MB.`);
+    }
+    return buffer;
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error('Sticker download timed out.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 async function downloadFile(filePath: string, knownSize?: number): Promise<Buffer> {
   const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
@@ -157,6 +224,58 @@ async function downloadFile(filePath: string, knownSize?: number): Promise<Buffe
   }
 }
 
+// ── Post feed resolution (t.me/<channel>/<id>) ──────────────
+// The public `t.me/s/<channel>` feed embeds sticker media per post.
+// We locate the target post block by its data-post attribute and
+// extract the media URL (animated → .tgs, video → .webm, static → .webp).
+
+export interface PostMedia {
+  kind: 'animated' | 'video' | 'static';
+  url: string;
+}
+
+export function extractPostMedia(feedHtml: string, username: string, postId: string): PostMedia | null {
+  const postKey = `${username}/${postId}`;
+  const idx = feedHtml.indexOf(`data-post="${postKey}"`);
+  if (idx === -1) return null;
+  // Bound the block to THIS post — cut at the next post block (or the end of
+  // the widget wrapper) so neighbouring posts' media can never leak in.
+  const nextPost = feedHtml.indexOf('data-post="', idx + postKey.length + 2);
+  const end = nextPost === -1 ? feedHtml.length : nextPost;
+  const block = feedHtml.slice(idx, Math.min(end, idx + 12_000));
+
+  // Animated: <source type="application/x-tgsticker" srcset="…tgs…">
+  const tgs = block.match(/application\/x-tgsticker"[^>]*srcset="([^"]+\.tgs[^"]*)"/);
+  if (tgs) return { kind: 'animated', url: tgs[1]!.replace(/&amp;/g, '&') };
+
+  // Video: <video … src="…webm…">  (some clients embed <video> without class)
+  const video = block.match(/<(?:video|source)[^>]*src(?:set)?="([^"]+\.webm[^"]*)"/i);
+  if (video) return { kind: 'video', url: video[1]!.replace(/&amp;/g, '&') };
+
+  // Static: <img … src="…webp…"> or <source type="image/webp" srcset="…">
+  const webp = block.match(/src(?:set)?="([^"]+\.webp[^"]*)"/);
+  if (webp) return { kind: 'static', url: webp[1]!.replace(/&amp;/g, '&') };
+
+  // Generic CDN image (jpg/png served by telesco for some static posts)
+  const img = block.match(/src="(https:\/\/cdn\d*\.telesco\.pe\/file\/[^"]+)"/);
+  if (img) return { kind: 'static', url: img[1]!.replace(/&amp;/g, '&') };
+
+  return null;
+}
+
+export async function resolvePostMedia(username: string, postId: string): Promise<PostMedia> {
+  const feedUrl = `https://t.me/s/${encodeURIComponent(username)}`;
+  const html = await httpGetText(feedUrl);
+  if (!html || html.length < 500) {
+    throw new Error('Channel feed is unavailable (private or deleted channel?).');
+  }
+  const media = extractPostMedia(html, username, postId);
+  if (!media) {
+    throw new Error('Sticker post not found in the channel feed (post may be private, deleted, or not a sticker).');
+  }
+  return media;
+}
+
 // ── Conversion ──────────────────────────────────────────────
 
 async function staticToSticker(buffer: Buffer): Promise<Buffer> {
@@ -168,7 +287,6 @@ async function staticToSticker(buffer: Buffer): Promise<Buffer> {
 }
 
 async function videoToSticker(buffer: Buffer): Promise<Buffer> {
-  // Reuse the same ffmpeg animated-WebP pipeline as the local sticker engine.
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-sticker-'));
   const inputPath = path.join(tempDir, 'input.webm');
   const outputPath = path.join(tempDir, 'output.webp');
@@ -200,6 +318,89 @@ async function videoToSticker(buffer: Buffer): Promise<Buffer> {
   }
 }
 
+// ── Shared download + send (command path AND picker router) ─
+
+export interface TgSendOptions {
+  /** WhatsApp sticker pack name shown in the sticker metadata (default: pack title). */
+  packname?: string;
+  /** WhatsApp sticker author shown in the sticker metadata (default: 'Telegram'). */
+  author?: string;
+}
+
+/**
+ * Download and send a single pack sticker (1-based index) as a WhatsApp sticker.
+ * Returns true on success. Shared by `.tg <pack> <n>` and the picker router.
+ */
+export async function downloadPackSticker(
+  socket: WASocket,
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  packName: string,
+  selection: number,
+  options: TgSendOptions = {}
+): Promise<boolean> {
+  const send = (body: string, opts: Record<string, unknown> = {}): Promise<unknown> =>
+    PreviewManager.send(socket as any, groupJid, body, { sessionId, telegramId, ...opts });
+
+  const pack = await botApi<TgApiSet>('getStickerSet', { name: packName });
+  const stickers = pack.stickers ?? [];
+  const idx = selection - 1;
+  if (idx >= stickers.length) {
+    await send(errorCard('TG STICKER', `Sticker #${selection} not found. The pack has ${stickers.length} stickers.`, undefined, 'TG STICKER'));
+    return false;
+  }
+  const sticker = stickers[idx]!;
+
+  if (pack.is_animated) {
+    await send(errorCard(
+      'TG STICKER',
+      'Animated Telegram stickers (TGS/Lottie) are not supported: the installed image pipeline cannot convert this format.',
+      'Try a static or video sticker pack instead.',
+      'TG STICKER'
+    ));
+    return false;
+  }
+
+  const file = await botApi<{ file_path: string; file_size?: number }>('getFile', { file_id: sticker.file_id });
+  if (!file?.file_path) {
+    throw new Error('Telegram could not resolve the sticker file.');
+  }
+
+  const rawBuffer = await downloadFile(file.file_path, file.file_size);
+  const ext = path.extname(file.file_path).toLowerCase();
+
+  let stickerBuffer: Buffer;
+  if (ext === '.webm' || ext === '.mp4' || pack.is_video) {
+    stickerBuffer = await videoToSticker(rawBuffer);
+  } else {
+    stickerBuffer = await staticToSticker(rawBuffer);
+  }
+
+  validateWebP(stickerBuffer);
+  stickerBuffer = addStickerMetadata(stickerBuffer, options.packname ?? pack.title ?? packName, options.author ?? 'Telegram');
+  validateWebP(stickerBuffer);
+
+  await PreviewManager.send(socket as any, groupJid, '', {
+    media: { type: 'sticker', buffer: stickerBuffer, mimetype: 'image/webp' },
+    sessionId,
+    telegramId,
+  });
+
+  await send(asciiBox({
+    title: 'TG STICKER',
+    emoji: '✅',
+    moduleIdentity: 'TG STICKER',
+    rows: [
+      ['Pack', pack.title ?? packName],
+      ['Sticker', `#${selection}`],
+      ['Format', pack.is_video ? 'video → animated' : 'static webp'],
+      ['Status', 'Sticker downloaded & converted.'],
+    ],
+  }));
+  return true;
+}
+
 // ── Public API ──────────────────────────────────────────────
 
 export async function cmdTgSticker(
@@ -224,91 +425,92 @@ export async function cmdTgSticker(
   }
 
   try {
+    // ── Individual post link (t.me/<channel>/<id>) ──
+    if (ref.kind === 'post') {
+      const media = await resolvePostMedia(ref.username, ref.postId);
+      if (media.kind === 'animated') {
+        await send(errorCard(
+          'TG STICKER',
+          'This post is an animated Telegram sticker (TGS/Lottie), which the installed image pipeline cannot convert.',
+          'Try a static or video sticker post instead.',
+          'TG STICKER'
+        ));
+        return;
+      }
+      const rawBuffer = await downloadDirect(media.url);
+      const stickerBuffer = media.kind === 'video' ? await videoToSticker(rawBuffer) : await staticToSticker(rawBuffer);
+      const finalBuffer = addStickerMetadata(stickerBuffer, `@${ref.username}`, 'Telegram');
+      validateWebP(finalBuffer);
+
+      await PreviewManager.send(socket as any, groupJid, '', {
+        media: { type: 'sticker', buffer: finalBuffer, mimetype: 'image/webp' },
+        sessionId,
+        telegramId,
+      });
+      await send(asciiBox({
+        title: 'TG STICKER',
+        emoji: '✅',
+        moduleIdentity: 'TG STICKER',
+        rows: [
+          ['Source', `t.me/${ref.username}/${ref.postId}`],
+          ['Format', media.kind === 'video' ? 'video → animated' : 'static'],
+          ['Status', 'Sticker downloaded & converted.'],
+        ],
+      }));
+      return;
+    }
+
+    // ── Pack link / bare name ──
     const pack = await botApi<TgApiSet>('getStickerSet', { name: ref.packName });
     const stickers = pack.stickers ?? [];
 
     if (!ref.selection) {
-      // Pack overview — list a preview and instruct how to select.
       if (stickers.length === 0) {
         await send(errorCard('TG STICKER', 'This sticker pack is empty.', undefined, 'TG STICKER'));
         return;
       }
-      const rows: [string, string][] = stickers
+
+      // Visual picker: native single_select sheet with quick picks, plus a
+      // text fallback list for larger packs.
+      const rows: NativeListRow[] = stickers.slice(0, PICKER_ROWS * PICKER_SECTIONS).map((s, i) => ({
+        title: `${i + 1}. ${s.emoji ?? '🎯'}`,
+        description: `${s.width ?? '?'}×${s.height ?? '?'}`,
+        rowId: `tg:pick:${ref.packName}:${i + 1}`,
+      }));
+      const sections: NativeListSection[] = [];
+      for (let s = 0; s < PICKER_SECTIONS && rows.length > 0; s++) {
+        sections.push({
+          title: `Stickers ${s * PICKER_ROWS + 1}–${Math.min((s + 1) * PICKER_ROWS, rows.length)}`,
+          rows: rows.splice(0, PICKER_ROWS),
+        });
+      }
+
+      const textRows: [string, string][] = stickers
         .slice(0, MAX_PACK_PREVIEW)
         .map((s, i) => [`#${i + 1}`, `${s.emoji ?? '🎯'} (${s.width ?? '?'}×${s.height ?? '?'})`]);
       if (stickers.length > MAX_PACK_PREVIEW) {
-        rows.push(['…', `+${stickers.length - MAX_PACK_PREVIEW} more`]);
+        textRows.push(['…', `+${stickers.length - MAX_PACK_PREVIEW} more`]);
       }
-      await send(asciiBox({
+
+      const card = asciiBox({
         title: 'TG STICKER PACK',
         emoji: '📦',
         moduleIdentity: 'TG STICKER',
         rows: [
           ['Pack', pack.title ?? ref.packName],
           ['Stickers', `${stickers.length} (${pack.is_animated ? 'animated' : pack.is_video ? 'video' : 'static'})`],
-          ...rows,
+          ...textRows,
         ],
-        footer: `Reply with .tg ${ref.packName} <number> to download that sticker.`,
-      }));
+        footer: 'Tap a sticker below to download it, or reply .tg <pack> <number>.',
+      });
+      await send(card, {
+        extra: { buttons: [singleSelectButton(`📦 ${pack.title ?? ref.packName}`, sections)] },
+      });
       return;
     }
 
     // Direct selection by index.
-    const idx = ref.selection - 1;
-    if (idx >= stickers.length) {
-      await send(errorCard('TG STICKER', `Sticker #${ref.selection} not found. The pack has ${stickers.length} stickers.`, undefined, 'TG STICKER'));
-      return;
-    }
-    const sticker = stickers[idx]!;
-
-    // Animated (Lottie/TGS) stickers cannot be rasterized by the installed
-    // dependencies — fail clearly instead of pretending it worked.
-    if (pack.is_animated) {
-      await send(errorCard(
-        'TG STICKER',
-        'Animated Telegram stickers (TGS/Lottie) are not supported: the installed image pipeline cannot convert this format.',
-        'Try a static or video sticker pack instead.',
-        'TG STICKER'
-      ));
-      return;
-    }
-
-    const file = await botApi<{ file_path: string; file_size?: number }>('getFile', { file_id: sticker.file_id });
-    if (!file?.file_path) {
-      throw new Error('Telegram could not resolve the sticker file.');
-    }
-
-    const rawBuffer = await downloadFile(file.file_path, file.file_size);
-    const ext = path.extname(file.file_path).toLowerCase();
-
-    let stickerBuffer: Buffer;
-    if (ext === '.webm' || ext === '.mp4' || pack.is_video) {
-      stickerBuffer = await videoToSticker(rawBuffer);
-    } else {
-      stickerBuffer = await staticToSticker(rawBuffer);
-    }
-
-    validateWebP(stickerBuffer);
-    stickerBuffer = addStickerMetadata(stickerBuffer, pack.title ?? ref.packName, 'Telegram');
-    validateWebP(stickerBuffer);
-
-    await PreviewManager.send(socket as any, groupJid, '', {
-      media: { type: 'sticker', buffer: stickerBuffer, mimetype: 'image/webp' },
-      sessionId,
-      telegramId,
-    });
-
-    await send(asciiBox({
-      title: 'TG STICKER',
-      emoji: '✅',
-      moduleIdentity: 'TG STICKER',
-      rows: [
-        ['Pack', pack.title ?? ref.packName],
-        ['Sticker', `#${ref.selection}`],
-        ['Format', pack.is_video ? 'video → animated' : 'static webp'],
-        ['Status', 'Sticker downloaded & converted.'],
-      ],
-    }));
+    await downloadPackSticker(socket, telegramId, sessionId, groupJid, ref.packName, ref.selection);
   } catch (err) {
     const error = err as { code?: string; message?: string };
     logger.error('[TG] Sticker download failed', { err: error.message ?? String(err) });
