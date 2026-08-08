@@ -143,6 +143,12 @@ export interface PollVoteInput {
   vote: EncryptedVote;
   /** Optional already-decrypted vote event data from Baileys' messages.update path. */
   decrypted?: DecryptedVote;
+  /**
+   * Creator JID derived from the actual pollCreationMessageKey using the
+   * installed fork's getKeyAuthor(). This is authoritative for decryption;
+   * credential-derived candidates remain as compatibility fallbacks.
+   */
+  pollCreatorJid?: string;
   /** Our own JID (creds.me.id — may carry a :N device suffix). */
   meId: string;
   /**

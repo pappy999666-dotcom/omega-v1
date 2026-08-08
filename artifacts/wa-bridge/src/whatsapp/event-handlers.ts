@@ -885,7 +885,13 @@ async function handleMessages(
   for (const msg of upsert.messages) {
     if (!msg.message) continue;
     const rawPollUpdate = (msg.message as { pollUpdateMessage?: {
-      pollCreationMessageKey?: { id?: string | null; remoteJid?: string | null } | null;
+      pollCreationMessageKey?: {
+        id?: string | null;
+        remoteJid?: string | null;
+        fromMe?: boolean | null;
+        participant?: string | null;
+        participantAlt?: string | null;
+      } | null;
       vote?: { encPayload?: Uint8Array | null; encIv?: Uint8Array | null } | null;
       senderTimestampMs?: number | null;
     } | null }).pollUpdateMessage;
@@ -1059,7 +1065,26 @@ async function resolveGetKeyAuthor(): Promise<typeof getKeyAuthorFn> {
         // participant → remoteJid) so the HMAC sign + GCM AAD receive the
         // exact key-author bytes the voters used.
         const authorFn = await resolveGetKeyAuthor();
-        const voterJid = authorFn?.(msg.key as never, meId) ?? msg.key.participant ?? msg.key.remoteJid ?? '';
+        const baileys = await import('@crysnovax/baileys') as unknown as { jidNormalizedUser?: (jid: string) => string };
+        const normalizedMeId = baileys.jidNormalizedUser?.(meId) ?? meId.replace(/:\d+(?=@)/, '');
+        const pollCreatorJid = authorFn?.(pollUpdate.pollCreationMessageKey as never, normalizedMeId) ?? '';
+        const voterJid = authorFn?.(msg.key as never, normalizedMeId) ?? msg.key.participant ?? msg.key.remoteJid ?? '';
+        logger.info('[PollGame] poll crypto context', {
+          sessionId,
+          pollMsgId: pollUpdate.pollCreationMessageKey.id,
+          creatorJid: pollCreatorJid,
+          creatorKey: {
+            fromMe: pollUpdate.pollCreationMessageKey.fromMe ?? false,
+            remoteJid: pollUpdate.pollCreationMessageKey.remoteJid ?? '',
+            participant: pollUpdate.pollCreationMessageKey.participant ?? '',
+            participantAlt: pollUpdate.pollCreationMessageKey.participantAlt ?? '',
+          },
+          voterJid,
+          votePayload: {
+            payloadBytes: pollUpdate.vote.encPayload?.byteLength ?? 0,
+            ivBytes: pollUpdate.vote.encIv?.byteLength ?? 0,
+          },
+        });
         const trackedQuestions = [
           ...(pollGameEngine.getGame({ sessionId, chatJid: pollChatJid }, 'wyr')?.questions ?? []),
           ...(pollGameEngine.getGame({ sessionId, chatJid: pollChatJid }, 'quiz')?.questions ?? []),
@@ -1074,6 +1099,7 @@ async function resolveGetKeyAuthor(): Promise<typeof getKeyAuthorFn> {
         await pollGameEngine.handleVote({
           scope: { sessionId, chatJid: pollChatJid },
           pollMsgId: pollUpdate.pollCreationMessageKey.id,
+          pollCreatorJid,
           voterJid,
           vote: { encPayload: pollUpdate.vote.encPayload ?? undefined, encIv: pollUpdate.vote.encIv ?? undefined },
           meId,

@@ -73,12 +73,20 @@ function stripDevice(jid: string): string {
  * device-stripped phone, raw phone (with :N device), device-stripped LID,
  * raw LID. Deduplicated, in likelihood order.
  */
-function creatorJidCandidates(meId: string, meLid: string | undefined): string[] {
+function creatorJidCandidates(
+  meId: string,
+  meLid: string | undefined,
+  pollCreatorJid: string | undefined
+): string[] {
   const out: string[] = [];
   const push = (value: string | undefined): void => {
     const s = value?.trim().toLowerCase();
     if (s && !out.includes(s)) out.push(s);
   };
+  // The pollCreationMessageKey is authoritative. The installed fork uses
+  // getKeyAuthor(creationMsgKey, jidNormalizedUser(meId)) directly; try that
+  // exact value first before credential-derived compatibility candidates.
+  push(pollCreatorJid);
   push(stripDevice(meId));
   push(meId);
   push(stripDevice(meLid ?? ''));
@@ -145,7 +153,7 @@ export async function decryptVoteToOption(
   // GCM auth is deterministic: we try every candidate permutation until one
   // verifies — never guessing, always proven by the auth tag.
   let decoded: { selectedOptions?: Array<Uint8Array | Buffer | string> } | undefined;
-  const creators = creatorJidCandidates(input.meId || '', input.meLid);
+  const creators = creatorJidCandidates(input.meId || '', input.meLid, input.pollCreatorJid);
   const voters = voterJidCandidates(input.voterJid);
   let lastErr: unknown = null;
   outer:
