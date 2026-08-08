@@ -28,6 +28,7 @@ import { cmdTag, cmdMTag, tagSummary } from './commands/tag.js';
 import { updateSessionConfig, addToMainBucket } from '../services/workspace.js';
 import { logger } from '../utils/logger.js';
 import { isFrozen, reinitSocket, normalizePairingPhone, getSocket } from './socket-manager.js';
+import { formatCountryCodeGuide } from './utils/country-codes.js';
 import {
   whatsappMenu,
   asciiBox,
@@ -105,7 +106,6 @@ import {
   handleAntiPromoteCmd,
   handleAntiStatus,
 } from './anti-system/commands.js';
-// ── Group Moderation Commands ─────────────────────────────
 import {
   cmdKick,
   cmdBan,
@@ -133,7 +133,7 @@ import {
 import { setAutoblockConfig, loadGroupEventConfig } from '../services/group-config.js';
 import { fetchGroupMeta, resolveRealJidFromMeta, bustGroupMetaCache } from './utils/group-permissions.js';
 import { filterPendingRequestsByCountry } from './utils/join-approval.js';
-import { updateSessionProfilePicture } from './utils/profile-controls.js';
+import { updateSessionProfilePicture, updateGroupProfilePicture } from './utils/profile-controls.js';
 import { parseUrlButtons } from './utils/url-buttons.js';
 import fs from 'fs';
 import path from 'path';
@@ -3537,6 +3537,31 @@ async function processMessageWithConfig(
 
     // ──────────────────────────────────────────────────────────
 
+    // ── Group profile picture ──
+    case 'setgpp': {
+      if (!isGroup) {
+        await reply(warningCard('GROUP ONLY', 'Use .setgpp inside the existing WhatsApp group whose picture you want to change.'));
+        break;
+      }
+      const groupMeta = await fetchGroupMeta(socket, groupJid).catch(() => null);
+      if (!groupMeta?.botIsAdmin) {
+        await reply(errorCard('SET GROUP PFP FAILED', 'I need to be a group admin to change this group picture.'));
+        break;
+      }
+      const media = await extractMedia();
+      if (!media || media.type !== 'image') {
+        await reply(warningCard('REPLY TO IMAGE', `Reply to an image with ${config.prefix}setgpp. The existing group will be updated; it will not be dropped or recreated.`));
+        break;
+      }
+      try {
+        await updateGroupProfilePicture(socket as any, groupJid, media.buffer);
+        await reply(successCard('GROUP PICTURE UPDATED', 'The existing group picture was replaced with the original image in HD. The group was not dropped or recreated.'));
+      } catch (err) {
+        await reply(errorCard('SET GROUP PFP FAILED', String(err)));
+      }
+      break;
+    }
+
     // ──────────────────────────────────────────────────────────
     // ◈ GROUP MODERATION COMMANDS
     // All require groupJid.endsWith('@g.us') — enforced inside each handler
@@ -4018,23 +4043,34 @@ async function processMessageWithConfig(
 
     // ── .pair — pair a new WhatsApp session from WhatsApp ──
     case 'pair': {
-      const rawPhone = args[0];
+      const rawPhone = args.join(' ').trim();
       if (!rawPhone) {
         await reply(asciiBox({
           title: 'PAIR NEW SESSION',
           emoji: '🔗',
           rows: [
             ['Usage', `${config.prefix}pair [phone]`],
-            ['Example', `${config.prefix}pair +2348012345678`],
+            ['Example', `${config.prefix}pair +234 816 416 7112`],
+            ['Codes', `${config.prefix}pair codes`],
           ],
-          footer: 'The new number will be paired under your account.',
+          footer: 'Use the full international number. Spaces, hyphens and parentheses are accepted.',
+        }));
+        break;
+      }
+
+      if (rawPhone.toLowerCase() === 'codes') {
+        await reply(asciiBox({
+          title: 'INTERNATIONAL COUNTRY CODES',
+          emoji: 'ℹ️',
+          rows: [],
+          footer: formatCountryCodeGuide(),
         }));
         break;
       }
 
       let normalizedPhone: string;
       try {
-        normalizedPhone = normalizePairingPhone(rawPhone);
+        normalizedPhone = normalizePairingPhone(rawPhone, { requireAssignedCountryCode: true });
       } catch (err) {
         await reply(errorCard('INVALID PHONE', err instanceof Error ? err.message : String(err)));
         break;

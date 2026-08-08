@@ -33,6 +33,7 @@ import {
 import { logger, sessionLogger } from '../utils/logger.js';
 import { sleep } from '../utils/delay.js';
 import { loadMessage } from './message-store.js';
+import { findCountryCallingCode } from './utils/country-codes.js';
 
 // ── Type Definitions ──────────────────────────────────────
 
@@ -57,10 +58,29 @@ export interface SocketInitOptions {
   onConnected?: (sessionId: string, isFirstTime: boolean) => Promise<void>;
 }
 
-export function normalizePairingPhone(phone: string): string {
-  const normalized = phone.replace(/[^0-9]/g, '');
+export function normalizePairingPhone(
+  phone: string,
+  options: { requireAssignedCountryCode?: boolean } = {}
+): string {
+  const input = String(phone ?? '').trim();
+  if (!input || !/^\+?[0-9][0-9 .()\-]*$/u.test(input)) {
+    throw new Error('Use digits with an optional leading + and normal separators only, for example +234 816 416 7112.');
+  }
+  const normalized = input.replace(/[^0-9]/g, '');
+  if (!normalized) {
+    throw new Error('Enter a phone number with its international country code, for example +234 816 416 7112.');
+  }
+  if (normalized.startsWith('0')) {
+    const localFormatHint = input.startsWith('+')
+      ? '+0 does not exist'
+      : 'local numbers starting with 0 need their country code first';
+    throw new Error(`Invalid international number: ${localFormatHint}. Start with the real code, for example +234 for Nigeria, +1 for the US/Canada, or +44 for the UK. Use .pair codes to view the directory.`);
+  }
   if (!/^[1-9][0-9]{7,14}$/.test(normalized)) {
-    throw new Error('Phone number must include a valid country code and contain 8 to 15 digits.');
+    throw new Error('Phone number must include a valid country code and contain 8 to 15 digits. Use .pair codes to view the directory.');
+  }
+  if (options.requireAssignedCountryCode && !findCountryCallingCode(normalized)) {
+    throw new Error(`Unknown country code +${normalized.slice(0, Math.min(3, normalized.length))}. Use .pair codes to view the international country-code directory.`);
   }
   return normalized;
 }

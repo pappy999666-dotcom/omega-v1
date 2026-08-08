@@ -197,11 +197,11 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
   rename: { section: '⚙ CONFIGURATION', syntax: 'rename [id] [name]', desc: 'Assign a custom label to a session', target: 'main' },
   freeze: { section: '⚙ CONFIGURATION', syntax: 'freeze [id]', desc: 'Pause all event processing for a session', target: 'main' },
   unfreeze: { section: '⚙ CONFIGURATION', syntax: 'unfreeze [id]', desc: 'Resume event processing for a session', target: 'main' },
-  pair: { section: '⚙ CONFIGURATION', syntax: 'pair [phone]', desc: 'Link a new WhatsApp session via code', target: 'main',
-    usage: 'Pair a new session via phone number.',
+  pair: { section: '⚙ CONFIGURATION', syntax: 'pair [phone|codes]', desc: 'Link a new WhatsApp session via code', target: 'main',
+    usage: 'Pair a new session via phone number. Spaces, hyphens and parentheses are accepted. Use pair codes to view the international country-code directory.',
     permissions: 'Public',
     inputs: ['Phone Number'],
-    examples: ['pair 1234567890'],
+    examples: ['pair +234 816 416 7112', 'pair codes'],
     output: 'Pairing code generated.' },
 
   // ── Bucket ────────────────────────────────────────────────
@@ -232,6 +232,7 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
   setmenuvideo: { section: '⚙ CONFIGURATION', syntax: 'setmenuvideo', desc: 'Set replied video as menu media', target: 'main' },
   delmenumedia: { section: '⚙ CONFIGURATION', syntax: 'delmenumedia', desc: 'Restore default text-only menus', target: 'main' },
   setpfp: { section: '⚙ CONFIGURATION', syntax: 'setpfp', desc: 'Set the session profile picture from a replied image', target: 'main', inputs: ['Reply (Image)'] },
+  setgpp: { section: '⚙ CONFIGURATION', syntax: 'setgpp', desc: 'Replace the current group profile picture', target: 'group', inputs: ['Reply (Image)'], usage: 'Use inside an existing group and reply to an image. Requires the bot to be a group admin. The group is updated in place — never dropped or recreated.' },
   getpfp: { section: '⚙ CONFIGURATION', syntax: 'getpfp', desc: 'Send the session profile picture', target: 'main' },
   removepfp: { section: '⚙ CONFIGURATION', syntax: 'removepfp', desc: 'Remove the session profile picture', target: 'main' },
   setname: { section: '⚙ CONFIGURATION', syntax: 'setname <name>', desc: 'Set the WhatsApp display name', target: 'main' },

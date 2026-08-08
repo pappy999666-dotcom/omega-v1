@@ -22,3 +22,20 @@ export async function updateSessionProfilePicture(
   await socket.updateProfilePicture(identity.jid, image, { hd: true });
   return identity.jid;
 }
+
+/**
+ * Replace the profile picture of an existing WhatsApp group.
+ * This only updates the supplied group JID; it never creates, leaves, or
+ * deletes a group. The caller is responsible for checking group/admin access.
+ */
+export async function updateGroupProfilePicture(
+  socket: ProfilePictureSocket,
+  groupJid: string,
+  image: Buffer
+): Promise<string> {
+  if (!groupJid.endsWith('@g.us')) {
+    throw new Error('This command must target an existing WhatsApp group.');
+  }
+  await socket.updateProfilePicture(groupJid, image, { hd: true });
+  return groupJid;
+}

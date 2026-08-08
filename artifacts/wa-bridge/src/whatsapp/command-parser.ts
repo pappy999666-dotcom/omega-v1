@@ -162,7 +162,7 @@ export const ALL_COMMANDS = [
   // Stop
   'stop', 'stopspam', 'spam',
   // Settings
-  'setprefix', 'setcmd', 'delcmd', 'setmenupic', 'setmenuvideo', 'delmenumedia', 'setpfp', 'getpfp', 'removepfp', 'setname', 'setbio', 'wainfo', 'creategc', 'collect', 'autopromo', 'setsudo', 'delsudo', 'sudo', 'prefix', 'public', 'setmode', 'publicresponse', 'tagreply',
+  'setprefix', 'setcmd', 'delcmd', 'setmenupic', 'setmenuvideo', 'delmenumedia', 'setpfp', 'setgpp', 'getpfp', 'removepfp', 'setname', 'setbio', 'wainfo', 'creategc', 'collect', 'autopromo', 'setsudo', 'delsudo', 'sudo', 'prefix', 'public', 'setmode', 'publicresponse', 'tagreply',
   // Response Mode + Timezone
   'swresponse', 'settimezone',
   // Info
