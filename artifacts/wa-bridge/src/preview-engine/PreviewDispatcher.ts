@@ -20,6 +20,7 @@ import {
   syncMentionTokens,
   MENTION_TOKEN_RE,
 } from '../whatsapp/utils/mention-engine.js';
+import { isAnimatedWebP } from '../whatsapp/utils/webp.js';
 import {
   nativeTableContent,
   type NativeTableContent,
@@ -388,7 +389,14 @@ export class PreviewDispatcher {
         if (type === 'image') content = { image: buffer, caption: caption ?? sendText };
         else if (type === 'video') content = { video: buffer, caption: caption ?? sendText, gifPlayback };
         else if (type === 'audio') content = { audio: buffer, mimetype: mimetype ?? 'audio/mp4', ptt };
-        else if (type === 'sticker') content = { sticker: buffer, mimetype: mimetype ?? 'image/webp' };
+        else if (type === 'sticker') {
+          // The Baileys fork only sets isAnimated for sticker *packs* — regular
+          // sticker sends render animated WebP as a STATIC image unless the flag
+          // is carried on the message. Detect it centrally from the buffer so
+          // every sticker send (.sticker, .qc, .tg) animates correctly.
+          content = { sticker: buffer, mimetype: mimetype ?? 'image/webp' };
+          if (isAnimatedWebP(buffer)) content.isAnimated = true;
+        }
         else if (type === 'document') content = { document: buffer, mimetype: mimetype ?? 'application/octet-stream', fileName, caption: caption ?? sendText };
         else content = { text: sendText, ...(options.extra ?? {}) };
 

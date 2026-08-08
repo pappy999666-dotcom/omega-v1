@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildSvg, layoutLines, parseBgFlag, QC_BG_PRESETS } from '../src/whatsapp/commands/qc-sticker.js';
 import { parseTgLink, extractPostMedia } from '../src/whatsapp/commands/tg-sticker.js';
+import { isAnimatedWebP } from '../src/whatsapp/utils/webp.js';
 import { ALL_COMMANDS } from '../src/whatsapp/command-parser.js';
 import { MENU_CATALOG } from '../src/whatsapp/menu-registry.js';
 
@@ -175,6 +176,50 @@ test('TG extractPostMedia never leaks media from neighbouring posts', () => {
   assert.deepEqual(media, { kind: 'video', url: 'https://cdn4.telesco.pe/file/xx.webm?token=vv' });
 });
 
+// ── Animated WebP detection ────────────────────────────────
+
+function makeWebP(chunks: { fourCC: string; data: Buffer }[]): Buffer {
+  const chunkBuffers = chunks.map(({ fourCC, data }) => {
+    const header = Buffer.alloc(8);
+    header.write(fourCC, 0, 'ascii');
+    header.writeUInt32LE(data.length, 4);
+    const body = Buffer.concat([header, data]);
+    return body.length % 2 === 0 ? body : Buffer.concat([body, Buffer.from([0x00])]);
+  });
+  const riff = Buffer.alloc(12);
+  riff.write('RIFF', 0, 'ascii');
+  riff.writeUInt32LE(4 + chunkBuffers.reduce((n, c) => n + c.length, 0), 4);
+  riff.write('WEBP', 8, 'ascii');
+  return Buffer.concat([riff, ...chunkBuffers]);
+}
+
+function vp8x(animated: boolean): Buffer {
+  const flags = Buffer.alloc(10);
+  flags.writeUInt8(animated ? 0x02 : 0x00, 0); // bit 1 = animation
+  return flags;
+}
+
+test('isAnimatedWebP detects static VP8X as not animated', () => {
+  const buffer = makeWebP([{ fourCC: 'VP8X', data: vp8x(false) }]);
+  assert.equal(isAnimatedWebP(buffer), false);
+});
+
+test('isAnimatedWebP detects animated VP8X (animation flag set)', () => {
+  const buffer = makeWebP([{ fourCC: 'VP8X', data: vp8x(true) }]);
+  assert.equal(isAnimatedWebP(buffer), true);
+});
+
+test('isAnimatedWebP detects ANIM chunk as animated', () => {
+  const buffer = makeWebP([{ fourCC: 'ANIM', data: Buffer.from([0, 0, 0, 0, 0, 0]) }]);
+  assert.equal(isAnimatedWebP(buffer), true);
+});
+
+test('isAnimatedWebP returns false for non-webp buffers', () => {
+  assert.equal(isAnimatedWebP(Buffer.from('not a webp at all')), false);
+  assert.equal(isAnimatedWebP(Buffer.from('RIFFxxxxWEBP')), false); // truncated
+  assert.equal(isAnimatedWebP(Buffer.alloc(0)), false);
+});
+
 // ── Registry integration ────────────────────────────────────
 
 test('qc and tg are registered commands', () => {
@@ -185,4 +230,18 @@ test('qc and tg are registered commands', () => {
 test('qc and tg appear in the menu catalog under STICKER ENGINE', () => {
   assert.equal(MENU_CATALOG.qc?.section, '🎨 STICKER ENGINE');
   assert.equal(MENU_CATALOG.tg?.section, '🎨 STICKER ENGINE');
+});
+
+test('tg menu entry documents the whole-pack download flow', () => {
+  assert.match(MENU_CATALOG.tg!.desc, /whole Telegram sticker pack/i);
+  assert.match(MENU_CATALOG.tg!.usage!, /EVERY sticker/i);
+  assert.match(MENU_CATALOG.tg!.usage!, /Total stickers found/i);
+});
+
+test('tg pack links without a number mean send-all (selection undefined)', () => {
+  const ref = parseTgLink('https://t.me/addstickers/StickerPackName');
+  assert.equal(ref?.kind, 'pack');
+  assert.equal(ref?.selection, undefined); // → downloadPackAll
+  const withNumber = parseTgLink('https://t.me/addstickers/StickerPackName 3');
+  assert.equal(withNumber?.selection, 3); // → single downloadPackSticker
 });

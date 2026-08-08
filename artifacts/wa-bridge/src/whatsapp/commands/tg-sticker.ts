@@ -5,6 +5,8 @@
 // converts it into a WhatsApp-compatible WebP sticker:
 //
 //   • Pack links  t.me/addstickers/<name>        → Bot API getStickerSet
+//     (no number → sends EVERY sticker in the pack with a
+//      "Total stickers found, downloading…" progress card first)
 //   • Pack names  <name> [number]                → Bot API getStickerSet
 //   • Post links  t.me/<channel>/<id>            → t.me/s/<channel> feed
 //     (public sticker posts; animated TGS fails clearly)
@@ -18,6 +20,7 @@ import { PreviewManager } from '../../preview-engine/index.js';
 import { asciiBox, errorCard, warningCard } from '../../utils/ascii-art.js';
 import { logger } from '../../utils/logger.js';
 import { addStickerMetadata, validateWebP } from './sticker.js';
+import { sleep } from '../../utils/delay.js';
 import sharp from 'sharp';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -28,6 +31,9 @@ import path from 'path';
 const execPromise = promisify(exec);
 const API_BASE = 'https://api.telegram.org';
 const DOWNLOAD_TIMEOUT_MS = 20_000;
+// Pause between bulk sticker sends — pacing prevents WhatsApp rate-limit bans
+// when a large pack is downloaded all at once.
+const PACK_SEND_DELAY_MS = 700;
 
 // ── Link parsing ────────────────────────────────────────────
 
@@ -314,7 +320,7 @@ async function videoToSticker(buffer: Buffer): Promise<Buffer> {
   }
 }
 
-// ── Pack download (single sticker) ──────────────────────────
+// ── Pack download ──────────────────────────────────────────
 
 export interface TgSendOptions {
   /** WhatsApp sticker pack name in the metadata (default: 'PAPPY'). */
@@ -323,10 +329,119 @@ export interface TgSendOptions {
   author?: string;
 }
 
+/** Fetch + convert one pack sticker into a WhatsApp WebP buffer. */
+async function convertPackSticker(
+  pack: TgApiSet,
+  sticker: TgApiSticker,
+  options: TgSendOptions
+): Promise<Buffer> {
+  const file = await botApi<{ file_path: string; file_size?: number }>('getFile', { file_id: sticker.file_id });
+  if (!file?.file_path) {
+    throw new Error('Telegram could not resolve the sticker file.');
+  }
+  const rawBuffer = await downloadFile(file.file_path, file.file_size);
+  const ext = path.extname(file.file_path).toLowerCase();
+  const stickerBuffer = ext === '.webm' || ext === '.mp4' || pack.is_video
+    ? await videoToSticker(rawBuffer)
+    : await staticToSticker(rawBuffer);
+  validateWebP(stickerBuffer);
+  const finalBuffer = addStickerMetadata(stickerBuffer, options.packname || 'PAPPY', options.author || 'OMEGA');
+  validateWebP(finalBuffer);
+  return finalBuffer;
+}
+
+async function sendSticker(
+  socket: WASocket,
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  buffer: Buffer
+): Promise<void> {
+  await PreviewManager.send(socket as any, groupJid, '', {
+    media: { type: 'sticker', buffer, mimetype: 'image/webp' },
+    sessionId,
+    telegramId,
+  });
+}
+
+/**
+ * Noob flow: download EVERY sticker in the pack and send them one by one.
+ * A progress card announcing the total count goes out FIRST, then every
+ * sticker, then a final summary. Uses the session's configured pack
+ * name/author (setpackname / setauthor) — never the Telegram pack title.
+ */
+async function downloadPackAll(
+  socket: WASocket,
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  packName: string,
+  options: TgSendOptions = {}
+): Promise<void> {
+  const send = (body: string, opts: Record<string, unknown> = {}): Promise<unknown> =>
+    PreviewManager.send(socket as any, groupJid, body, { sessionId, telegramId, ...opts });
+
+  const pack = await botApi<TgApiSet>('getStickerSet', { name: packName });
+  const stickers = pack.stickers ?? [];
+  if (stickers.length === 0) {
+    await send(errorCard('TG STICKER', 'This sticker pack is empty or no longer available.', undefined, 'TG STICKER'));
+    return;
+  }
+  if (pack.is_animated) {
+    await send(errorCard(
+      'TG STICKER',
+      'This is an animated Telegram sticker pack (TGS/Lottie), which the installed image pipeline cannot convert.',
+      'Try a static or video sticker pack instead.',
+      'TG STICKER'
+    ));
+    return;
+  }
+
+  // 1. Progress card announcing the total — sent BEFORE any download.
+  await send(asciiBox({
+    title: 'TG STICKER',
+    emoji: '📦',
+    moduleIdentity: 'TG STICKER',
+    rows: [
+      ['Pack', pack.title ?? packName],
+      ['Total Stickers', `${stickers.length}`],
+      ['Status', 'Downloading & converting…'],
+    ],
+  }));
+
+  // 2. Send every sticker, best-effort (one failure never blocks the rest),
+  // paced so a large pack does not trip WhatsApp's rate limiter.
+  let sent = 0;
+  const failed: number[] = [];
+  for (let i = 0; i < stickers.length; i++) {
+    try {
+      const finalBuffer = await convertPackSticker(pack, stickers[i]!, options);
+      await sendSticker(socket, telegramId, sessionId, groupJid, finalBuffer);
+      sent++;
+    } catch (err) {
+      failed.push(i + 1);
+      logger.warn(`[TG] Sticker #${i + 1} failed`, { err: String(err).slice(0, 200) });
+    }
+    if (i < stickers.length - 1) await sleep(PACK_SEND_DELAY_MS);
+  }
+
+  // 3. Final summary.
+  const allOk = failed.length === 0;
+  await send(asciiBox({
+    title: 'TG STICKER',
+    emoji: allOk ? '✅' : '⚠️',
+    moduleIdentity: 'TG STICKER',
+    rows: [
+      ['Pack', pack.title ?? packName],
+      ['Sent', `${sent} / ${stickers.length}`],
+      ['Status', allOk ? 'All stickers downloaded & converted.' : `${failed.length} sticker(s) failed (#${failed.join(', #')}).`],
+    ],
+  }));
+}
+
 /**
  * Download and send a single pack sticker (1-based index) as a WhatsApp
- * sticker. Uses the session's configured pack name/author (setpackname /
- * setauthor) or the engine defaults — never the Telegram pack title.
+ * sticker (power-user path: `.tg <pack> <n>`).
  * Returns true on success.
  */
 async function downloadPackSticker(
@@ -360,30 +475,8 @@ async function downloadPackSticker(
     return false;
   }
 
-  const file = await botApi<{ file_path: string; file_size?: number }>('getFile', { file_id: sticker.file_id });
-  if (!file?.file_path) {
-    throw new Error('Telegram could not resolve the sticker file.');
-  }
-
-  const rawBuffer = await downloadFile(file.file_path, file.file_size);
-  const ext = path.extname(file.file_path).toLowerCase();
-
-  let stickerBuffer: Buffer;
-  if (ext === '.webm' || ext === '.mp4' || pack.is_video) {
-    stickerBuffer = await videoToSticker(rawBuffer);
-  } else {
-    stickerBuffer = await staticToSticker(rawBuffer);
-  }
-
-  validateWebP(stickerBuffer);
-  stickerBuffer = addStickerMetadata(stickerBuffer, options.packname || 'PAPPY', options.author || 'OMEGA');
-  validateWebP(stickerBuffer);
-
-  await PreviewManager.send(socket as any, groupJid, '', {
-    media: { type: 'sticker', buffer: stickerBuffer, mimetype: 'image/webp' },
-    sessionId,
-    telegramId,
-  });
+  const finalBuffer = await convertPackSticker(pack, sticker, options);
+  await sendSticker(socket, telegramId, sessionId, groupJid, finalBuffer);
 
   await send(asciiBox({
     title: 'TG STICKER',
@@ -460,10 +553,14 @@ export async function cmdTgSticker(
     }
 
     // ── Pack link / bare name ──
-    // No selection → send the pack's first sticker directly (noob-friendly).
-    // Explicit `.tg <pack> <n>` still downloads sticker #n.
-    const selection = ref.selection ?? 1;
-    await downloadPackSticker(socket, telegramId, sessionId, groupJid, ref.packName, selection, config);
+    // No selection → send the ENTIRE pack (progress card first, then every
+    // sticker, then a summary). Explicit `.tg <pack> <n>` still downloads a
+    // single sticker for power users.
+    if (ref.selection === undefined) {
+      await downloadPackAll(socket, telegramId, sessionId, groupJid, ref.packName, config);
+    } else {
+      await downloadPackSticker(socket, telegramId, sessionId, groupJid, ref.packName, ref.selection, config);
+    }
   } catch (err) {
     const error = err as { code?: string; message?: string };
     logger.error('[TG] Sticker download failed', { err: error.message ?? String(err) });
