@@ -133,6 +133,14 @@ export class PollGameEngine {
     return this.games.size;
   }
 
+  /** Stop one game in exactly one session/chat scope. */
+  public stop(scope: GameScope, type: PollGameType): boolean {
+    const game = this.games.get(gameKey(scope, type));
+    if (!game) return false;
+    this.cleanupGame(game);
+    return true;
+  }
+
   public getGame(scope: GameScope, type: PollGameType): PollGameState | undefined {
     return this.games.get(gameKey(scope, type));
   }

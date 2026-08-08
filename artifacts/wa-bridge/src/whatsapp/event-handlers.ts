@@ -2857,8 +2857,23 @@ async function processMessageWithConfig(
     // ── AI Poll Games (WYR / Quiz) ───────────────────────────
     // .wyr [duration] → fresh AI question as a native timed poll
     // .quiz <duration> → AI quiz split into timed questions + leaderboard
+    // .stopwyr / .stopquiz → stop only that game in this group/session
     // Games are per-group isolated; the engine emits polls/tables/results
     // through sendPollGameEvent (native timed polls + decryption secret).
+    case 'stopwyr':
+    case 'stopquiz': {
+      if (!isGroup) {
+        await reply(warningCard('GROUP ONLY', `${command.toUpperCase()} can only run inside a WhatsApp group.`));
+        break;
+      }
+      const gameType = command === 'stopwyr' ? 'wyr' : 'quiz';
+      const stopped = pollGameEngine.stop({ sessionId, chatJid: groupJid }, gameType);
+      await reply(stopped
+        ? successCard(`${gameType.toUpperCase()} STOPPED`, `The active ${gameType.toUpperCase()} game was stopped. Its timers and vote tracking were cleared.`)
+        : warningCard(`${gameType.toUpperCase()} NOT ACTIVE`, `There is no active ${gameType.toUpperCase()} game in this group.`));
+      break;
+    }
+
     case 'wyr':
     case 'quiz': {
       if (!isGroup) {

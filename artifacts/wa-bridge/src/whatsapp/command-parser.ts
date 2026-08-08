@@ -146,7 +146,7 @@ export const ALL_COMMANDS = [
   // Games
   'wcg', 'ttt', 'tictactoe',
   // ── Poll Game Engine (AI-powered) ──
-  'wyr', 'quiz', 'gameapi',
+  'wyr', 'quiz', 'stopwyr', 'stopquiz', 'gameapi',
   // Stop
   'stop', 'stopspam', 'spam',
   // Settings

@@ -299,6 +299,24 @@ test('games in different groups run independently (isolation)', async () => {
   engine.dispose();
 });
 
+test('stop is scoped to one game type and group', async () => {
+  const engine = createPollGameEngine({
+    ai: makeAi({ question: 'wyr-q', optionA: 'a', optionB: 'b' }, {
+      questions: [{ question: 'Quiz q', options: ['a', 'b', 'c', 'd'], correctIndex: 0, explanation: 'e', category: 'General Knowledge', difficulty: 'easy' }],
+    }),
+  });
+  await engine.start(scopeA, 'wyr', ['5min'], { onEvent: async () => undefined });
+  await engine.start(scopeA, 'quiz', ['5min'], { onEvent: async () => undefined });
+  await engine.start(scopeB, 'wyr', ['5min'], { onEvent: async () => undefined });
+
+  assert.equal(engine.stop(scopeA, 'wyr'), true);
+  assert.equal(engine.hasActive(scopeA, 'wyr'), false);
+  assert.equal(engine.hasActive(scopeA, 'quiz'), true);
+  assert.equal(engine.hasActive(scopeB, 'wyr'), true);
+  assert.equal(engine.stop(scopeA, 'wyr'), false);
+  engine.dispose();
+});
+
 test('same-type duplicate games are rejected in one group but different types can coexist', async () => {
   const engine = createPollGameEngine({
     ai: makeAi(
