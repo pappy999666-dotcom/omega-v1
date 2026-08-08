@@ -498,6 +498,24 @@ export function loadAllSessions(
   return sessions;
 }
 
+/** All sessions across every workspace — used by the wildcard remote allowlist. */
+export function loadAllSessionsGlobally(): Array<{ telegramId: string; sessionId: string; meta: SessionMeta }> {
+  try {
+    if (!fs.existsSync(WORKSPACE_ROOT)) return [];
+    const all: Array<{ telegramId: string; sessionId: string; meta: SessionMeta }> = [];
+    for (const entry of fs.readdirSync(WORKSPACE_ROOT, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const sessions = loadAllSessions(entry.name);
+      for (const [sessionId, meta] of Object.entries(sessions)) {
+        all.push({ telegramId: entry.name, sessionId, meta });
+      }
+    }
+    return all;
+  } catch {
+    return [];
+  }
+}
+
 export function updateSessionMeta(
   telegramId: string,
   sessionId: string,

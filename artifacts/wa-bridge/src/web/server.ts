@@ -7,9 +7,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { createWebUser, verifyWebUser, createSession, resolveSession, deleteSession } from './auth.js';
-import { addToMainBucket, loadBucket, loadSessionMeta, loadWorkspace, purgeSession, saveBucket, saveSessionMeta, updateConfig, updateSessionMeta } from '../services/workspace.js';
+import { addToMainBucket, findSessionOwner, loadAllSessionsGlobally, loadBucket, loadSessionMeta, loadWorkspace, purgeSession, saveBucket, saveSessionMeta, updateConfig, updateSessionMeta } from '../services/workspace.js';
 import { exportBucket } from '../services/tri-bucket.js';
-import { freezeSession, getSocket, getUserSockets, initSocket, normalizePairingPhone, unfreezeSession } from '../whatsapp/socket-manager.js';
+import { freezeSession, getSocket, getUserSockets, initSocket, isFrozen, normalizePairingPhone, unfreezeSession } from '../whatsapp/socket-manager.js';
 import { registerSessionOwner } from '../whatsapp/event-handlers.js';
 import { cmdAllStatus } from '../whatsapp/commands/all-status.js';
 import { cmdAllChat, stopOutreach } from '../whatsapp/commands/mass-outreach.js';
@@ -20,6 +20,15 @@ import { PreviewManager } from '../preview-engine/index.js';
 import type { SessionMeta } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 import { notifySessionConnected } from '../services/session-connected.js';
+import {
+  getRemoteApiConfig,
+  isRemoteApiAuthorized,
+  isSessionAllowlisted,
+  normalizeRemoteSessionStatus,
+  normalizeRemoteText,
+  validRemoteJid,
+  type RemoteSessionDescriptor,
+} from './remote-session-api.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -32,6 +41,8 @@ const publicDir = path.resolve(__dirname, '../public');
 const logs = new Map<string, string[]>();
 const pairing = new Map<string, { qr?: string; code?: string; error?: string; isPairing?: boolean; method?: 'qr' | 'code' }>();
 const clients = new Map<string, Set<Response>>();
+const remoteMessageResults = new Map<string, { expiresAt: number; fingerprint: string; body: { ok: true; sessionId: string; messageId: string | null } }>();
+const remoteMessageInFlight = new Map<string, { fingerprint: string; promise: Promise<{ ok: true; sessionId: string; messageId: string | null }> }>();
 
 type AuthedRequest = Request & { userId: string };
 
@@ -78,6 +89,46 @@ function assertSessionOwner(userId: string, sessionId: string): void {
   if (!loadWorkspace(userId).sessions[sessionId]) throw new Error('Session does not belong to this workspace');
 }
 
+function remoteSessionStatus(meta: SessionMeta | null, sessionId: string): RemoteSessionDescriptor {
+  if (!meta) {
+    return { sessionId, label: sessionId, status: 'UNAVAILABLE', available: false, reason: 'Session is not registered on Omega.' };
+  }
+
+  const status = normalizeRemoteSessionStatus(meta.status);
+  if (status === 'ACTIVE' && getSocket(sessionId) && !isFrozen(sessionId)) {
+    return { sessionId, label: meta.label ?? meta.sessionName, status: 'ACTIVE', available: true };
+  }
+  if (status === 'FROZEN' || isFrozen(sessionId)) {
+    return { sessionId, label: meta.label ?? meta.sessionName, status: 'FROZEN', available: false, reason: 'Session is frozen.' };
+  }
+  if (status === 'PAIRING') {
+    return { sessionId, label: meta.label ?? meta.sessionName, status: 'PAIRING', available: false, reason: 'Session pairing is not complete.' };
+  }
+  if (status === 'PURGED') {
+    return { sessionId, label: meta.label ?? meta.sessionName, status: 'PURGED', available: false, reason: 'Session was purged.' };
+  }
+  return { sessionId, label: meta.label ?? meta.sessionName, status: 'DISCONNECTED', available: false, reason: 'Session is not connected.' };
+}
+
+function remoteApiGuard(req: Request, res: Response, next: NextFunction): void {
+  const config = getRemoteApiConfig();
+  if (!config.apiKey) {
+    res.status(503).json({ error: 'Remote session integration is not configured', code: 'REMOTE_API_UNAVAILABLE' });
+    return;
+  }
+  if (!isRemoteApiAuthorized(req.headers.authorization, config)) {
+    res.status(401).json({ error: 'Invalid remote session credentials', code: 'REMOTE_API_UNAUTHORIZED' });
+    return;
+  }
+  next();
+}
+
+function assertRemoteSessionAccess(sessionId: string): void {
+  if (!isSessionAllowlisted(sessionId)) {
+    throw Object.assign(new Error('Session is not authorized for remote use'), { statusCode: 403, code: 'REMOTE_SESSION_FORBIDDEN' });
+  }
+}
+
 export function createWebApp(): express.Express {
   const app = express();
   app.use(express.json({ limit: '15mb' }));
@@ -88,7 +139,7 @@ export function createWebApp(): express.Express {
   app.use((req, res, next) => {
     // Block obvious scrapers by UA
     const ua = req.headers['user-agent'] ?? '';
-    if (/curl|wget|python|scrapy|bot|spider|crawl|httpclient|okhttp|java\/|go-http/i.test(ua) && !req.path.startsWith('/api/auth')) {
+    if (/curl|wget|python|scrapy|bot|spider|crawl|httpclient|okhttp|java\/|go-http/i.test(ua) && !req.path.startsWith('/api/auth') && !req.path.startsWith('/api/remote')) {
       res.status(403).json({ error: 'Forbidden' }); return;
     }
     // Rate limit: 120 req/min per IP on API routes
@@ -142,6 +193,271 @@ export function createWebApp(): express.Express {
   });
 
   app.get('/api/dashboard', requireAuth, (req, res) => res.json(dashboardSnapshot((req as AuthedRequest).userId)));
+
+  // ── Remote capability API (Waiq or another explicitly configured client) ──
+  // Only allowlisted sessions are visible. No auth files, credentials, socket
+  // handles, or raw Baileys objects are ever serialized over this API.
+  app.get('/api/remote/sessions', remoteApiGuard, (_req, res) => {
+    const config = getRemoteApiConfig();
+    const allowAll = config.allowedSessionIds.includes('*');
+    const sessions = allowAll
+      ? loadAllSessionsGlobally().map(({ sessionId, meta }) => remoteSessionStatus(meta, sessionId))
+      : config.allowedSessionIds.map((sessionId) => {
+          const ownerId = findSessionOwner(sessionId);
+          return remoteSessionStatus(ownerId ? loadSessionMeta(ownerId, sessionId) : null, sessionId);
+        });
+    res.json({ sessions });
+  });
+
+  app.get('/api/remote/sessions/:id', remoteApiGuard, (req, res) => {
+    const sessionId = routeParam(req.params.id);
+    try {
+      assertRemoteSessionAccess(sessionId);
+      const ownerId = findSessionOwner(sessionId);
+      res.json(remoteSessionStatus(ownerId ? loadSessionMeta(ownerId, sessionId) : null, sessionId));
+    } catch (err) {
+      const error = err as { statusCode?: number; code?: string; message?: string };
+      res.status(error.statusCode ?? 403).json({ error: error.message ?? 'Remote session unavailable', code: error.code ?? 'REMOTE_SESSION_UNAVAILABLE' });
+    }
+  });
+
+  app.post('/api/remote/sessions/:id/messages', remoteApiGuard, async (req, res) => {
+    const sessionId = routeParam(req.params.id);
+    let meta: SessionMeta | null = null;
+    try {
+      assertRemoteSessionAccess(sessionId);
+      const ownerId = findSessionOwner(sessionId);
+      meta = ownerId ? loadSessionMeta(ownerId, sessionId) : null;
+      const descriptor = remoteSessionStatus(meta, sessionId);
+      if (!descriptor.available) {
+        res.status(503).json({ ...descriptor, code: 'REMOTE_SESSION_UNAVAILABLE' });
+        return;
+      }
+
+      const idempotencyKey = String(req.headers['idempotency-key'] ?? '').trim();
+      if (!/^[A-Za-z0-9._:-]{8,128}$/u.test(idempotencyKey)) {
+        res.status(400).json({ error: 'Idempotency-Key header is required (8-128 safe characters)', code: 'INVALID_IDEMPOTENCY_KEY' });
+        return;
+      }
+      const requestKey = `${sessionId}:${idempotencyKey}`;
+      const cached = remoteMessageResults.get(requestKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        const cachedJid = String(req.body?.jid ?? '').trim();
+        const cachedText = normalizeRemoteText(req.body?.text);
+        if (cached.fingerprint !== `${cachedJid}\u0000${cachedText ?? ''}`) {
+          res.status(409).json({ error: 'Idempotency-Key was already used with a different message', code: 'IDEMPOTENCY_CONFLICT' });
+          return;
+        }
+        res.json(cached.body);
+        return;
+      }
+      const jid = String(req.body?.jid ?? '').trim();
+      const text = normalizeRemoteText(req.body?.text);
+      if (!validRemoteJid(jid)) {
+        res.status(400).json({ error: 'A valid WhatsApp recipient JID is required', code: 'INVALID_RECIPIENT' });
+        return;
+      }
+      if (text === null) {
+        res.status(400).json({ error: 'Text must be a non-empty string of at most 4096 characters', code: 'INVALID_TEXT' });
+        return;
+      }
+
+      const fingerprint = `${jid}\u0000${text}`;
+      const inFlight = remoteMessageInFlight.get(requestKey);
+      if (inFlight) {
+        if (inFlight.fingerprint !== fingerprint) {
+          res.status(409).json({ error: 'Idempotency-Key was already used with a different message', code: 'IDEMPOTENCY_CONFLICT' });
+          return;
+        }
+        res.json(await inFlight.promise);
+        return;
+      }
+
+      const sendPromise = (async () => {
+        const socket = getSocket(sessionId);
+        if (!socket || isFrozen(sessionId)) {
+          throw Object.assign(new Error('Session is not connected'), { statusCode: 503, code: 'REMOTE_SESSION_DISCONNECTED' });
+        }
+        const result = await socket.sendMessage(jid, { text });
+        const key = typeof result === 'object' && result !== null && 'key' in result
+          ? (result as { key?: { id?: string } }).key?.id
+          : undefined;
+        return { ok: true as const, sessionId, messageId: key ?? null };
+      })();
+      remoteMessageInFlight.set(requestKey, { fingerprint, promise: sendPromise });
+      try {
+        const body = await sendPromise;
+        remoteMessageResults.set(requestKey, { expiresAt: Date.now() + 10 * 60_000, fingerprint, body });
+        for (const [cacheKey, entry] of remoteMessageResults) {
+          if (entry.expiresAt <= Date.now()) remoteMessageResults.delete(cacheKey);
+        }
+        res.json(body);
+      } finally {
+        if (remoteMessageInFlight.get(requestKey)?.promise === sendPromise) remoteMessageInFlight.delete(requestKey);
+      }
+    } catch (err) {
+      const error = err as { statusCode?: number; code?: string; message?: string };
+      const descriptor = remoteSessionStatus(meta, sessionId);
+      const disconnected = error.code === 'REMOTE_SESSION_DISCONNECTED' || !getSocket(sessionId) || isFrozen(sessionId);
+      res.status(error.statusCode ?? 502).json({
+        ...(disconnected ? { ...descriptor, status: 'DISCONNECTED', available: false } : {}),
+        error: error.message ?? 'Remote message failed',
+        code: error.code ?? 'REMOTE_MESSAGE_FAILED',
+      });
+    }
+  });
+
+  // Remote probe: onWhatsApp existence check through an authorized, connected
+  // session. Lets Waiq run WA-native ban checks without holding any socket.
+  app.post('/api/remote/sessions/:id/probe', remoteApiGuard, async (req, res) => {
+    const sessionId = routeParam(req.params.id);
+    let meta: SessionMeta | null = null;
+    try {
+      assertRemoteSessionAccess(sessionId);
+      const ownerId = findSessionOwner(sessionId);
+      meta = ownerId ? loadSessionMeta(ownerId, sessionId) : null;
+      const descriptor = remoteSessionStatus(meta, sessionId);
+      if (!descriptor.available) {
+        res.status(503).json({ ...descriptor, code: 'REMOTE_SESSION_UNAVAILABLE' });
+        return;
+      }
+      const number = String(req.body?.number ?? '').replace(/\D/g, '');
+      if (!number) {
+        res.status(400).json({ error: 'A phone number is required', code: 'INVALID_NUMBER' });
+        return;
+      }
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) {
+        res.status(503).json({ ...descriptor, status: 'DISCONNECTED', available: false, code: 'REMOTE_SESSION_DISCONNECTED' });
+        return;
+      }
+      const jid = `${number}@s.whatsapp.net`;
+      // onWhatsApp is not on the BridgeWASocket type, but exists on the runtime socket.
+      const onWhatsApp = (socket as unknown as {
+        onWhatsApp: (jid: string) => Promise<Array<{ exists: boolean; jid: string }> | { exists: boolean; jid: string }>;
+      }).onWhatsApp.bind(socket);
+      const results = await Promise.race([
+        Promise.resolve(onWhatsApp(jid)),
+        new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error('Probe timed out'), { statusCode: 504, code: 'PROBE_TIMEOUT' })), 8_000)),
+      ]);
+      const first = Array.isArray(results) ? results[0] : results;
+      const exists = Boolean(first && typeof first === 'object' && 'exists' in first ? (first as { exists?: boolean }).exists : false);
+      res.json({ ok: true, sessionId, number, exists });
+    } catch (err) {
+      const error = err as { statusCode?: number; code?: string; message?: string };
+      res.status(error.statusCode ?? 502).json({ error: error.message ?? 'Remote probe failed', code: error.code ?? 'REMOTE_PROBE_FAILED' });
+    }
+  });
+
+  // Remote report: contact/group report through an authorized, connected session.
+  // Mirrors the Waiq reporter's investigation + reportContact flow entirely on
+  // Omega's socket — Waiq never receives a socket or credentials, only the
+  // outcome. Contact reports use native reportContact (spam IQ + block fallback,
+  // block stays). Group reports require the session to already be a member.
+  app.post('/api/remote/sessions/:id/report', remoteApiGuard, async (req, res) => {
+    const sessionId = routeParam(req.params.id);
+    let meta: SessionMeta | null = null;
+    try {
+      assertRemoteSessionAccess(sessionId);
+      const ownerId = findSessionOwner(sessionId);
+      meta = ownerId ? loadSessionMeta(ownerId, sessionId) : null;
+      const descriptor = remoteSessionStatus(meta, sessionId);
+      if (!descriptor.available) {
+        res.status(503).json({ ...descriptor, code: 'REMOTE_SESSION_UNAVAILABLE' });
+        return;
+      }
+      const jid = String(req.body?.jid ?? '').trim();
+      if (!validRemoteJid(jid) || jid.endsWith('@broadcast')) {
+        res.status(400).json({ error: 'A valid WhatsApp contact or group JID is required', code: 'INVALID_TARGET' });
+        return;
+      }
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) {
+        res.status(503).json({ ...descriptor, status: 'DISCONNECTED', available: false, code: 'REMOTE_SESSION_DISCONNECTED' });
+        return;
+      }
+      const s = socket as unknown as {
+        presenceSubscribe(jid: string): Promise<unknown>;
+        sendNode(node: { tag: string; attrs: Record<string, unknown>; content?: unknown[] }): Promise<unknown>;
+        generateMessageTag(): string;
+        reportContact(jid: string): Promise<unknown>;
+        updateBlockStatus(jid: string, status: 'block'): Promise<unknown>;
+        groupMetadata(jid: string): Promise<unknown>;
+        reportGroup(jid: string): Promise<unknown>;
+      };
+      const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const result = Promise.race([
+          promise,
+          new Promise<T>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('Operation timed out')), ms);
+          }),
+        ]);
+        result.then(
+          () => { if (timer) clearTimeout(timer); },
+          () => { if (timer) clearTimeout(timer); }
+        );
+        return result;
+      };
+      const isGroup = jid.endsWith('@g.us');
+      let method: 'native' | 'fallback' = 'native';
+      if (isGroup) {
+        // Group report — verify membership first (reportGroup requires it).
+        let isMember = true;
+        try { await withTimeout(s.groupMetadata(jid), 6_000); } catch { isMember = false; }
+        if (!isMember) {
+          throw Object.assign(new Error('Session is not a member of this group'), { statusCode: 404, code: 'REMOTE_REPORT_NOT_MEMBER' });
+        }
+        try {
+          await withTimeout(s.reportGroup(jid), 8_000);
+        } catch (err2) {
+          throw Object.assign(
+            new Error(`group report failed: ${err2 instanceof Error ? err2.message : String(err2)}`),
+            { statusCode: 502, code: 'REMOTE_REPORT_FAILED' }
+          );
+        }
+      } else {
+        // 1. Investigation signals (best effort — same as Waiq's reporter)
+        try { await withTimeout(s.presenceSubscribe(jid), 5_000); } catch {}
+        try {
+          await withTimeout(
+            s.sendNode({
+              tag: 'iq',
+              attrs: { type: 'get', xmlns: 'w:biz', to: jid, id: s.generateMessageTag() },
+              content: [{ tag: 'business_profile', attrs: { v: '244' }, content: [] }],
+            }),
+            6_000
+          );
+        } catch {}
+        // 2. Report — native first, spam IQ + block fallback (block stays)
+        try {
+          await withTimeout(s.reportContact(jid), 8_000);
+        } catch {
+          try {
+            await withTimeout(
+              s.sendNode({
+                tag: 'iq',
+                attrs: { type: 'set', xmlns: 'spam', to: 's.whatsapp.net', id: s.generateMessageTag() },
+                content: [{ tag: 'spam_list', attrs: {}, content: [{ tag: 'spam', attrs: { jid }, content: [] }] }],
+              }),
+              8_000
+            );
+            try { await withTimeout(s.updateBlockStatus(jid, 'block'), 6_000); } catch {}
+            method = 'fallback';
+          } catch (err2) {
+            throw Object.assign(
+              new Error(`report failed: ${err2 instanceof Error ? err2.message : String(err2)}`),
+              { statusCode: 502, code: 'REMOTE_REPORT_FAILED' }
+            );
+          }
+        }
+      }
+      res.json({ ok: true, sessionId, jid, method });
+    } catch (err) {
+      const error = err as { statusCode?: number; code?: string; message?: string };
+      res.status(error.statusCode ?? 502).json({ error: error.message ?? 'Remote report failed', code: error.code ?? 'REMOTE_REPORT_FAILED' });
+    }
+  });
 
   app.post('/api/sessions', requireAuth, async (req, res) => {
     const userId = (req as AuthedRequest).userId;

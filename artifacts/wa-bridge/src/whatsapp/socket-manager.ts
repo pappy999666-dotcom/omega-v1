@@ -407,6 +407,13 @@ export async function initSocket(
 
     if (connection === 'close') {
       closed = true;
+      // Game timers belong to the socket/session lifecycle. A disconnect
+      // must not leave callbacks holding a stale socket or sending into a
+      // reconnecting session.
+      try {
+        const { disposeSessionGames } = await import('./event-handlers.js');
+        disposeSessionGames(sessionId);
+      } catch { /* game cleanup is best-effort and must not block recovery */ }
       if (pairingRequestTimer) clearTimeout(pairingRequestTimer);
       const err = errorStatusCode(lastDisconnect?.error);
       log.warn('Connection closed', { code: err, generation, registered: credentialsRegistered || socket.authState.creds.registered });
@@ -622,6 +629,10 @@ export async function reinitSocket(
  * Close and remove a session from the registry.
  */
 export async function closeSocket(sessionId: string): Promise<void> {
+  try {
+    const { disposeSessionGames } = await import('./event-handlers.js');
+    disposeSessionGames(sessionId);
+  } catch { /* game cleanup is best-effort */ }
   const h = registry.get(sessionId);
   
   // Cleanup timers first

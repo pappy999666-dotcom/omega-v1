@@ -141,7 +141,7 @@ export async function cmdSticker(
 /**
  * Throws if the buffer is not a well-formed WebP file.
  */
-function validateWebP(buffer: Buffer): void {
+export function validateWebP(buffer: Buffer): void {
   if (buffer.length < 12) {
     throw new Error(`WebP too small: ${buffer.length} bytes`);
   }
@@ -179,7 +179,7 @@ function validateWebP(buffer: Buffer): void {
  *   - If VP8X is absent:    create VP8X (has_exif flag + 512×512 canvas),
  *                           insert EXIF immediately after VP8X.
  */
-function addStickerMetadata(buffer: Buffer, packname: string, author: string): Buffer {
+export function addStickerMetadata(buffer: Buffer, packname: string, author: string): Buffer {
   // Verify WebP
   if (
     buffer.length < 12 ||

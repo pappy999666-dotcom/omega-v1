@@ -69,6 +69,7 @@ export function parseCommand(
     stopspam: 'stopspam',
     togstatusx: 'togstatusx',
     allstatusx: 'allstatusx',
+    tictactoe: 'ttt',
   };
   command = aliases[command] ?? command;
 
@@ -142,6 +143,8 @@ export const ALL_COMMANDS = [
   'join', 'joinall', 'left', 'leave', 'leaveall',
   // Tagging
   'tag', 'mtag',
+  // Games
+  'wcg', 'ttt', 'tictactoe',
   // Stop
   'stop', 'stopspam', 'spam',
   // Settings
@@ -153,7 +156,7 @@ export const ALL_COMMANDS = [
   // Bucket
   'addlink',
   // Sticker System
-  'sticker', 'setpackname', 'setauthor', 'listcmd',
+  'sticker', 'setpackname', 'setauthor', 'listcmd', 'qc', 'tg',
   // Group Moderation
   'kick', 'remove', 'ban', 'unban', 'banlist',
   'promote', 'demote', 'dnkick',

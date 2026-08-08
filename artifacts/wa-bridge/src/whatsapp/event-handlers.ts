@@ -137,6 +137,7 @@ import fs from 'fs';
 import path from 'path';
 import { sessionDir } from '../services/workspace.js';
 import { resolveMenuMedia } from '../services/menu-canvas.js';
+import { gameManager, type GameResponse } from './games/engine.js';
 
 // Map from sessionId → telegramId (populated at init)
 const sessionOwnerMap = new Map<string, string>();
@@ -166,8 +167,13 @@ export function registerSessionOwner(sessionId: string, telegramId: string): voi
   sessionOwnerMap.set(sessionId, telegramId);
 }
 
+export function disposeSessionGames(sessionId: string): void {
+  gameManager.disposeSession(sessionId);
+}
+
 export function unregisterSessionOwner(sessionId: string): void {
   sessionOwnerMap.delete(sessionId);
+  disposeSessionGames(sessionId);
 }
 
 export function normalizeWhatsAppNumber(value: string | null | undefined): string {
@@ -184,6 +190,41 @@ export function isAuthorizedCommandSender(
   if (fromMe) return true;
   const sender = normalizeWhatsAppNumber(senderJid);
   return Boolean(sender && sudoNumbers.some((number) => normalizeWhatsAppNumber(number) === sender));
+}
+
+async function resolveGamePlayer(socket: WASocket, msg: WebMessageInfo): Promise<string | null> {
+  const raw = msg.key.participant
+    ?? (msg.key.fromMe ? (socket as unknown as { user?: { id?: string } }).user?.id : msg.key.remoteJid)
+    ?? '';
+  if (!raw) return null;
+  const mention = await resolveMention(socket, { jid: raw }).catch(() => null);
+  return mention?.jid || (raw.endsWith('@s.whatsapp.net') ? raw : null);
+}
+
+async function sendGameResponse(
+  socket: WASocket,
+  telegramId: string,
+  response: GameResponse,
+): Promise<void> {
+  const options: Record<string, unknown> = {
+    sessionId: response.scope.sessionId,
+    telegramId,
+    forceMentions: true,
+    ...(response.mentions.length > 0 ? { extra: { mentions: response.mentions } } : {}),
+    ...(response.editKey ? { edit: response.editKey } : {}),
+  };
+  const result = await PreviewManager.send(socket as any, response.scope.chatJid, response.text, options) as any;
+  if (response.editKey && result?.success === false) {
+    const fallback = await PreviewManager.send(socket as any, response.scope.chatJid, response.text, {
+      sessionId: response.scope.sessionId,
+      telegramId,
+      forceMentions: true,
+      ...(response.mentions.length > 0 ? { extra: { mentions: response.mentions } } : {}),
+    }) as any;
+    if (fallback?.key) gameManager.attachMessageKey(response.scope, response.gameType, fallback.key);
+  } else if (!response.editKey && result?.key) {
+    gameManager.attachMessageKey(response.scope, response.gameType, result.key);
+  }
 }
 
 function extractMessageText(message: IMessage | null | undefined): string {
@@ -903,7 +944,25 @@ async function processMessageWithConfig(
       logger.info('[Sticker] Macro matched', { command: parsed.command, stickerHash: parsed.stickerHash });
     }
   }
-  if (!parsed) return;
+  if (!parsed) {
+    // Ordinary text is only consumed when this chat already has a WCG in
+    // progress. The engine rejects spectators and non-current players.
+    const gameScope = { sessionId, chatJid: groupJid };
+    if (gameManager.hasActive(gameScope)) {
+      const playerJid = await resolveGamePlayer(socket, msg);
+      if (playerJid) {
+        const gameResult = await gameManager.handle({
+          scope: gameScope,
+          playerJid,
+          kind: 'text',
+          text,
+          onEvent: async (event) => sendGameResponse(socket, telegramId, event),
+        });
+        if (gameResult) await sendGameResponse(socket, telegramId, gameResult);
+      }
+    }
+    return;
+  }
 
   const { command, args } = parsed;
 
@@ -1191,7 +1250,9 @@ async function processMessageWithConfig(
     // sender (owner / sudo / omni / authorized list).
     const publicOnlyCommands = new Set(['pair', 'help', 'menu', 'gmenu']);
     const pairAlways = command === 'pair';
-    const publicAllowed = config.publicMode && publicOnlyCommands.has(command);
+    const gameAction = gameManager.hasActive({ sessionId, chatJid: groupJid })
+      && (command === 'join' || command === 'ttt');
+    const publicAllowed = (config.publicMode && publicOnlyCommands.has(command)) || gameAction;
 
     if (!pairAlways && !publicAllowed) {
       // COMPLETELY SILENT for everything else
@@ -1815,6 +1876,28 @@ async function processMessageWithConfig(
       break;
     }
 
+    // ── QC — Quote/Custom Text Sticker ──
+    case 'qc': {
+      const qcText = commandText();
+      if (!qcText) {
+        await reply(warningCard('QC STICKER', `Usage: ${config.prefix}qc [text]`, [], 'QC STICKER'));
+        break;
+      }
+      const { cmdQcSticker } = await import('./commands/qc-sticker.js');
+      await cmdQcSticker(socket, telegramId, sessionId, groupJid, qcText, {
+        packname: config.stickerPackName,
+        author: config.stickerAuthor,
+      });
+      break;
+    }
+
+    // ── TG — Telegram Sticker Downloader ──
+    case 'tg': {
+      const { cmdTgSticker } = await import('./commands/tg-sticker.js');
+      await cmdTgSticker(socket, telegramId, sessionId, groupJid, commandText());
+      break;
+    }
+
     case 'sticker': {
       const media = await extractMedia();
       if (!media || (media.type !== 'image' && media.type !== 'video')) {
@@ -2388,8 +2471,60 @@ async function processMessageWithConfig(
       break;
     }
 
+    // ── Games ──
+    case 'wcg': {
+      if (!isGroup) {
+        await reply(warningCard('GROUP ONLY', 'Word Chain can only run inside a WhatsApp group.'));
+        break;
+      }
+      const playerJid = await resolveGamePlayer(socket, msg);
+      if (!playerJid) break;
+      const gameResult = await gameManager.handle({
+        scope: { sessionId, chatJid: groupJid },
+        playerJid,
+        kind: 'wcg',
+        canStart: true,
+        onEvent: async (event) => sendGameResponse(socket, telegramId, event),
+      });
+      if (gameResult) await sendGameResponse(socket, telegramId, gameResult);
+      break;
+    }
+
+    case 'ttt': {
+      const target = args[0]?.toLowerCase() === 'move' || ['accept', 'decline', 'yes', 'no', 'giveup', 'quit', 'resign'].includes(args[0]?.toLowerCase() ?? '')
+        ? undefined
+        : await resolveTarget(args, msg, socket, isGroup ? groupJid : undefined);
+      const playerJid = await resolveGamePlayer(socket, msg);
+      if (!playerJid) break;
+      const gameResult = await gameManager.handle({
+        scope: { sessionId, chatJid: groupJid },
+        playerJid,
+        kind: 'ttt',
+        args,
+        targetJid: target?.jid,
+        canStart: Boolean(isAuthorized),
+        onEvent: async (event) => sendGameResponse(socket, telegramId, event),
+      });
+      if (gameResult) await sendGameResponse(socket, telegramId, gameResult);
+      break;
+    }
+
     // ── join ──
     case 'join': {
+      const gameJoiner = await resolveGamePlayer(socket, msg);
+      const gameResult = gameJoiner
+        ? await gameManager.handle({
+          scope: { sessionId, chatJid: groupJid },
+          playerJid: gameJoiner,
+          kind: 'join',
+          onEvent: async (event) => sendGameResponse(socket, telegramId, event),
+        })
+        : undefined;
+      if (gameResult) {
+        await sendGameResponse(socket, telegramId, gameResult);
+        break;
+      }
+
       const link = args[0];
       if (!link) { await reply(warningCard('LINK REQUIRED', `Usage: ${config.prefix}join [group_link]`)); break; }
       const res = await cmdJoin(socket, link);
