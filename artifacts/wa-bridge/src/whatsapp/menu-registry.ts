@@ -374,7 +374,7 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
   // AntiEmoji
   antiemoji: { section: '🛡 ANTI SYSTEM', syntax: 'antiemoji <kick|warn N|delete|off>', desc: 'Block emoji messages', target: 'group' },
   emojipermit: { section: '🛡 ANTI SYSTEM', syntax: 'emojipermit @user', desc: 'Exempt from AntiEmoji', target: 'group' },
-  rmemojipermit:{ section: '◈ ANTI SYSTEM',      syntax: 'rmemojipermit @user',       desc: 'Remove AntiEmoji exemption',                 target: 'group' },
+  rmemojipermit:{ section: '🛡 ANTI SYSTEM',      syntax: 'rmemojipermit @user',       desc: 'Remove AntiEmoji exemption',                 target: 'group' },
   antiemojimsg: { section: '🛡 ANTI SYSTEM', syntax: 'antiemojimsg [text]', desc: 'Custom AntiEmoji message', target: 'group' },
 
   // AntiSticker
@@ -383,7 +383,7 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
   rmsticpermit: { section: '🛡 ANTI SYSTEM', syntax: 'rmsticpermit @user', desc: 'Remove AntiSticker exemption', target: 'group' },
 
   // AntiGroupCall
-  antigroupcall:{ section: '◈ ANTI SYSTEM',      syntax: 'antigroupcall <kick|warn N|delete|off>', desc: 'Block group calls',           target: 'group' },
+  antigroupcall:{ section: '🛡 ANTI SYSTEM',      syntax: 'antigroupcall <kick|warn N|delete|off>', desc: 'Block incoming group calls',           target: 'group' },
 
   // AntiNSFW
   antinsfw: { section: '🛡 ANTI SYSTEM', syntax: 'antinsfw <kick|warn N|delete|off>', desc: 'Block NSFW images & videos (needs API)', target: 'group' },
@@ -572,12 +572,19 @@ export interface NavCategory {
 }
 
 const GROUP_MODERATION_COMMANDS = [
-  'kick', 'remove', 'dnkick', 'ban', 'unban', 'banlist', 'warn', 'unwarn',
-  'resetwarn', 'warns', 'poll', 'blockall', 'autoblock', 'block', 'deleteall',
-  'mute', 'unmute', 'stopjoin', 'setwelcome', 'welcomemsg', 'welcome',
-  'setgoodbye', 'goodbyemsg', 'goodbye', 'kickmsg', 'warnmsg', 'banmsg',
-  'unbanmsg', 'eventstatus',
+  'gmenu', 'kick', 'remove', 'ban', 'unban', 'banlist', 'promote', 'demote', 'dnkick',
+  'warn', 'unwarn', 'resetwarn', 'warns', 'block', 'deleteall', 'poll',
+  'mute', 'unmute', 'blockall', 'autoblock', 'stopjoin', 'setwelcome',
+  'welcomemsg', 'welcome', 'setgoodbye', 'goodbyemsg', 'goodbye', 'kickmsg',
+  'warnmsg', 'banmsg', 'unbanmsg', 'eventstatus',
 ];
+
+/** Group actions that should carry the compact WhatsApp admin badge. */
+const GROUP_ADMIN_COMMANDS = new Set([
+  'kick', 'remove', 'ban', 'promote', 'demote', 'dnkick', 'warn', 'unwarn',
+  'resetwarn', 'block', 'deleteall', 'mute', 'unmute', 'blockall', 'autoblock',
+  'stopjoin',
+]);
 
 const ANTI_COMMANDS = [
   'antistatus', 'antilink', 'linkpermit', 'rmlinkpermit', 'antilinkmsg',
@@ -595,6 +602,9 @@ const ANTI_COMMANDS = [
   'antipromote', 'antidemote', 'antigstatus',
   'setantiwords', 'rmantiwords', 'clearantiwords',
 ];
+
+const GROUP_COMMAND_ORDER = new Map(GROUP_MODERATION_COMMANDS.map((name, index) => [name, index]));
+const ANTI_COMMAND_ORDER = new Map(ANTI_COMMANDS.map((name, index) => [name, index]));
 
 // The hub stays compact, while every category page is complete for its
 // domain. Status commands intentionally span the status poster, broadcast,
@@ -670,7 +680,9 @@ function dashboardCategoryForCommand(command: string, entry?: MenuEntry): NavCat
   // Broadcast commands historically lived in the status engine even when
   // their old section label was MODERATION.
   if (/^(?:tochat|tochatx|togstatus|togstatusx|allchat|allstatus|allgstatus|allstatusx|spam|stopspam|stop)$/u.test(command)) return 'status';
-  if (entry?.target === 'group' || entry?.section.includes('MODERATION')) return 'group';
+  // The Group dashboard is the complete Group & Anti surface. Keep all
+  // group-targeted anti modules together instead of hiding them in Extras.
+  if (entry?.target === 'group' || entry?.section.includes('MODERATION') || entry?.section.includes('ANTI') || command === 'gmenu') return 'group';
   return 'extras';
 }
 
@@ -696,7 +708,14 @@ export function navCommandLines(
 ): NavCommandLine[] {
   const lines: NavCommandLine[] = [];
   const commandNames = registeredCommandsForNav(nav, menuTarget, knownCommands);
-  for (const cmdName of commandNames) {
+  const orderedCommandNames = nav.id === 'group'
+    ? [...commandNames].sort((a, b) => {
+      const aOrder = GROUP_COMMAND_ORDER.has(a) ? GROUP_COMMAND_ORDER.get(a)! : 10_000 + (ANTI_COMMAND_ORDER.get(a) ?? 10_000);
+      const bOrder = GROUP_COMMAND_ORDER.has(b) ? GROUP_COMMAND_ORDER.get(b)! : 10_000 + (ANTI_COMMAND_ORDER.get(b) ?? 10_000);
+      return aOrder - bOrder;
+    })
+    : commandNames;
+  for (const cmdName of orderedCommandNames) {
     const entry = MENU_CATALOG[cmdName];
     if (entry?.hidden) continue;
     // The command parser is authoritative when supplied. This keeps category
@@ -875,9 +894,10 @@ export function renderNavCategoryPage(
     if (body.length) body.push('');
     body.push(heading, '');
     for (const line of group) {
-      const command = compactMenuCommand(line.cmd, prefix) + (line.premium ? ' 💎' : '');
+      const adminBadge = navId === 'group' && GROUP_ADMIN_COMMANDS.has(line.name) ? '  [👑 Admin]' : '';
+      const command = compactMenuCommand(line.cmd, prefix) + adminBadge + (line.premium ? ' 💎' : '');
       const description = COMPACT_CATEGORY_DESCRIPTIONS[line.name] ?? line.desc;
-      const permission = line.permissions ? `• Perm: ${line.permissions}` : '';
+      const permission = navId !== 'group' && line.permissions ? `• Perm: ${line.permissions}` : '';
       body.push(`✦ ${command}`, `  └─ ${description}`);
       if (permission) body.push(`  ${permission}`);
       body.push('');

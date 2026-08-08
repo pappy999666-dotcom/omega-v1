@@ -27,13 +27,12 @@ export async function handleStartFilterHttp(ctx: Context & { telegramId: string 
     { parse_mode: 'HTML' }
   );
   const msgId = msg.message_id;
-  let last = '';
-  const onProgress = async (html: string) => {
-    if (html === last) return;
-    last = html;
-    await ctx.telegram.editMessageText(chatId, msgId, undefined, html, { parse_mode: 'HTML' }).catch(() => {});
-  };
+  const progress = createProgressCoalescer(
+    (html) => ctx.telegram.editMessageText(chatId, msgId, undefined, html, { parse_mode: 'HTML' }).then(() => {}).catch(() => {})
+  );
+  const onProgress = progress.update;
   validateLinksHttp(ctx.telegramId, onProgress).then(async r => {
+    await progress.flush();
     await ctx.telegram.editMessageText(chatId, msgId, undefined,
       card('HTTP Validation Complete', '✅', [
         ['Active', String(r.activated)],
@@ -87,6 +86,7 @@ import {
 } from '../ui/keyboards.js';
 import { header, H, bucketCard, kv, card, noticeCard, escape } from '../../utils/formatter.js';
 import { logger } from '../../utils/logger.js';
+import { createProgressCoalescer } from '../../utils/progress.js';
 import { getSocket, getUserSockets } from '../../whatsapp/socket-manager.js';
 
 // ── Bucket Status ─────────────────────────────────────────
@@ -249,11 +249,10 @@ export async function handleStartFilter(ctx: Context & { telegramId: string }): 
   };
 
   // Progress updates go to the separate dashboard message only
-  const onProgress = async (html: string): Promise<void> => {
-    await ctx.telegram.editMessageText(chatId, dashMsgId, undefined, html, {
-      parse_mode: 'HTML',
-    }).catch(() => {});
-  };
+  const progress = createProgressCoalescer(
+    (html) => ctx.telegram.editMessageText(chatId, dashMsgId, undefined, html, { parse_mode: 'HTML' }).then(() => {}).catch(() => {})
+  );
+  const onProgress = progress.update;
 
   startAutoFilter(
     ctx.telegramId,
@@ -262,6 +261,7 @@ export async function handleStartFilter(ctx: Context & { telegramId: string }): 
     onProgress,
     getAlternativeSocket
   ).then(async () => {
+    await progress.flush();
     const active = loadBucket(ctx.telegramId, 'active');
     const dead = loadBucket(ctx.telegramId, 'dead');
     // Update dashboard message with final result

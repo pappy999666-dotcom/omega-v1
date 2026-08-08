@@ -24,6 +24,8 @@ import type { BridgeWASocket as WASocket } from '../whatsapp/baileys-types.js';
 const autoFilterRunning = new Set<string>();
 // Per-user stop signal for the inner validateAllLinks loop
 const stopSignals = new Set<string>();
+// Abort any in-flight sessionless HTTP request when Stop is pressed.
+const httpAbortControllers = new Map<string, AbortController>();
 
 // ── WhatsApp Invite Link Extraction ──────────────────────
 
@@ -354,6 +356,7 @@ export function isAutoFilterRunning(telegramId: string): boolean {
 
 export function stopAutoFilter(telegramId: string): void {
   stopSignals.add(telegramId);   // signal inner loop to break immediately
+  httpAbortControllers.get(telegramId)?.abort();
   autoFilterRunning.delete(telegramId);
 }
 
@@ -546,7 +549,7 @@ export function exportBucket(
  * Uses HTTP HEAD/GET to check if the invite page returns a valid group.
  * No socket needed — works purely via HTTP.
  */
-export async function validateLinkHttp(link: string): Promise<ValidationResult> {
+export async function validateLinkHttp(link: string, signal?: AbortSignal): Promise<ValidationResult> {
   const code = extractInviteCode(link);
   if (!code) return { link, isValid: false, reason: 'Invalid link format' };
 
@@ -557,7 +560,7 @@ export async function validateLinkHttp(link: string): Promise<ValidationResult> 
     let status = 0;
     try {
       const res = await fetch(`https://chat.whatsapp.com/${code}`, {
-        signal: controller.signal,
+        signal: signal ?? controller.signal,
         headers: {
           'user-agent': 'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
           'accept': 'text/html,application/xhtml+xml',
@@ -627,18 +630,49 @@ export async function validateLinksHttp(
 ): Promise<{ activated: number; killed: number; errors: number }> {
   const main = loadBucket(telegramId, 'main').filter(e => e.status === 'unvalidated');
   const result = { activated: 0, killed: 0, errors: 0 };
-  const toActivate: BucketEntry[] = [];
-  const toDead: BucketEntry[] = [];
+  const startedAt = Date.now();
+  const abortController = new AbortController();
+  httpAbortControllers.set(telegramId, abortController);
 
   stopSignals.delete(telegramId);
   autoFilterRunning.add(telegramId);
 
   try {
     for (let i = 0; i < main.length; i++) {
-      if (stopSignals.has(telegramId)) break;
+      if (stopSignals.has(telegramId)) {
+        abortController.abort();
+        break;
+      }
 
       const entry = main[i]!;
-      const elapsed = i > 0 ? ((i / Math.max((Date.now() - Date.now()) / 60000, 0.01)).toFixed(1)) : '0.0';
+      const vr = await validateLinkHttp(entry.link, abortController.signal);
+
+      // Persist each terminal result immediately. The live Hub can therefore
+      // expose a link as soon as its request completes, without waiting for a
+      // large batch flush.
+      if (vr.isValid) {
+        moveToActiveBucket(telegramId, [{
+          ...entry,
+          title: vr.title,
+          memberCount: vr.memberCount,
+          validatedAt: Date.now(),
+          status: 'active',
+        }]);
+        result.activated++;
+      } else if (!vr.transient) {
+        moveToDeadBucket(telegramId, [{
+          ...entry,
+          deadReason: vr.reason,
+          validatedAt: Date.now(),
+          status: 'dead',
+        }]);
+        result.killed++;
+      } else {
+        // Transient failures stay in Main for a later safe retry.
+        result.errors++;
+      }
+
+      const elapsedMinutes = Math.max((Date.now() - startedAt) / 60000, 0.01);
       await onProgress?.(
         [
           `<blockquote><b>◈ OMEGA HTTP VALIDATOR</b>`,
@@ -650,30 +684,24 @@ export async function validateLinksHttp(
           ``,
           `Status     ● RUNNING`,
           `Current    ${entry.link.slice(-35)}`,
+          `Speed      ${((i + 1) / elapsedMinutes).toFixed(1)} links/min`,
           `</blockquote>`,
         ].join('\n')
       );
 
-      const vr = await validateLinkHttp(entry.link);
-      if (vr.isValid) {
-        toActivate.push({ ...entry, title: vr.title, memberCount: vr.memberCount, validatedAt: Date.now(), status: 'active' });
-        result.activated++;
-      } else if (!vr.transient) {
-        toDead.push({ ...entry, deadReason: vr.reason, validatedAt: Date.now(), status: 'dead' });
-        result.killed++;
-      } else {
-        result.errors++;
-      }
-
-      // Flush every 50
-      if (toActivate.length >= 50) moveToActiveBucket(telegramId, toActivate.splice(0));
-      if (toDead.length >= 50) moveToDeadBucket(telegramId, toDead.splice(0));
-
-      await new Promise(r => setTimeout(r, 400 + Math.random() * 300));
+      // Keep the upstream request rate conservative while making the bucket
+      // state immediately available after each completed result.
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 400 + Math.random() * 300);
+        abortController.signal.addEventListener('abort', () => {
+          clearTimeout(timer);
+          resolve();
+        }, { once: true });
+      });
     }
   } finally {
-    if (toActivate.length > 0) moveToActiveBucket(telegramId, toActivate);
-    if (toDead.length > 0) moveToDeadBucket(telegramId, toDead);
+    abortController.abort();
+    httpAbortControllers.delete(telegramId);
     autoFilterRunning.delete(telegramId);
     stopSignals.delete(telegramId);
   }

@@ -51,6 +51,19 @@ test('status category lists every registered status command in one response', ()
   );
 });
 
+test('group route uses the requested moderation/anti layout and admin badges', () => {
+  const group = GROUP_NAV.find((nav) => nav.id === 'group');
+  assert.ok(group);
+  const rendered = renderNavCategoryPage('.', 'group', 1, 'main', ALL_COMMANDS);
+  assert.equal(rendered.totalPages, 1);
+  assert.match(rendered.text, /\[⚔️\] 𝗚𝗥𝗢𝗨𝗣 𝗠𝗢𝗗𝗘𝗥𝗔𝗧𝗜𝗢𝗡/);
+  assert.match(rendered.text, /\[🛡️\] 𝗔𝗡𝗧𝗜-𝗦𝗬𝗦𝗧𝗘𝗠/);
+  assert.match(rendered.text, /✦ 𝗸𝗶𝗰𝗸  \[👑 Admin\]/);
+  assert.match(rendered.text, /✦ 𝗽𝗿𝗼𝗺𝗼𝘁𝗲  \[👑 Admin\]/);
+  assert.match(rendered.text, /✦ 𝗮𝗻𝘁𝗶𝗹𝗶𝗻𝗸 <kick\|warn N\|delete\|off>/);
+  assert.doesNotMatch(rendered.text, /𝕻𝕬𝕻𝕻𝖄/);
+});
+
 test('group target shares the four routes and complete status discovery', () => {
   assert.deepStrictEqual(GROUP_NAV.map((nav) => nav.id), MAIN_NAV.map((nav) => nav.id));
   const status = GROUP_NAV.find((nav) => nav.id === 'status');

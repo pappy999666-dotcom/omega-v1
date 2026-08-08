@@ -704,7 +704,10 @@ export function moveToActiveBucket(
 ): void {
   const movedLinks = new Set(entries.map((entry) => entry.link));
   saveBucket(telegramId, 'main', loadBucket(telegramId, 'main').filter((entry) => !movedLinks.has(entry.link)));
-  saveBucket(telegramId, 'dead', loadBucket(telegramId, 'dead').filter((entry) => !movedLinks.has(entry.link)));
+  const dead = loadBucket(telegramId, 'dead');
+  const nextDead = dead.filter((entry) => !movedLinks.has(entry.link));
+  // Most validations move from Main; avoid rewriting an unchanged Dead file.
+  if (nextDead.length !== dead.length) saveBucket(telegramId, 'dead', nextDead);
   const active = loadBucket(telegramId, 'active');
   const existingJids = new Set(active.map((e) => e.jid ?? e.link));
   for (const e of entries) {
@@ -729,11 +732,11 @@ export function moveToDeadBucket(
   );
   saveBucket(telegramId, 'main', main);
 
-  // Remove from active bucket
-  const active = loadBucket(telegramId, 'active').filter(
-    (e) => !entries.some((d) => d.link === e.link)
-  );
-  saveBucket(telegramId, 'active', active);
+  // Remove from active bucket only when one of the moved links is there.
+  const movedLinks = new Set(entries.map((entry) => entry.link));
+  const activeBefore = loadBucket(telegramId, 'active');
+  const active = activeBefore.filter((e) => !movedLinks.has(e.link));
+  if (active.length !== activeBefore.length) saveBucket(telegramId, 'active', active);
 
   for (const e of entries) {
     if (!existingLinks.has(e.link)) {

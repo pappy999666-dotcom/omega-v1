@@ -10,6 +10,7 @@ import { QUEUE_NAMES, getRedis, registerWorker } from '../queue.js';
 import { getSocket, getUserSockets } from '../../whatsapp/socket-manager.js';
 import { validateAllLinks } from '../tri-bucket.js';
 import { logger } from '../../utils/logger.js';
+import { createProgressCoalescer } from '../../utils/progress.js';
 
 let tgBot: {
   telegram: {
@@ -42,7 +43,7 @@ async function processValidation(job: Job<JobPayload>): Promise<JobResult> {
   // Live dashboard: prefer editing an existing message, fall back to sending
   let progressMsgId = messageId;
 
-  const onProgress = async (html: string): Promise<void> => {
+  const deliverProgress = async (html: string): Promise<void> => {
     await job.updateProgress(html);
     if (!tgBot || !chatId) return;
 
@@ -60,13 +61,15 @@ async function processValidation(job: Job<JobPayload>): Promise<JobResult> {
         if (sent?.message_id) progressMsgId = sent.message_id;
       }
     } catch {
-      // Message may have been deleted or edit window expired — send fresh
+      // Message may have been deleted or edit window expired — send fresh.
       try {
         const sent = await tgBot.telegram.sendMessage(chatId, html, { parse_mode: 'HTML' }) as { message_id?: number };
         if (sent?.message_id) progressMsgId = sent.message_id;
       } catch { /* ignore */ }
     }
   };
+  const progress = createProgressCoalescer(deliverProgress);
+  const onProgress = progress.update;
 
   // Build session failover helper: returns next healthy session for this user
   const usedSessions = new Set<string>([sessionId]);
@@ -86,7 +89,11 @@ async function processValidation(job: Job<JobPayload>): Promise<JobResult> {
 
   const result = await validateAllLinks(telegramId, sessionId, socket, onProgress, getAlternativeSocket);
 
-  // Final summary message
+  // Flush the latest live state before the final summary message.
+  await progress.flush();
+
+  // Final summary message. Queue it through the same coalescer, then flush so
+  // the worker cannot finish with the final state stuck in memory.
   const summaryHtml = [
     `<blockquote>`,
     `<b>◈ OMEGA VALIDATOR — COMPLETE</b>`,
@@ -102,6 +109,7 @@ async function processValidation(job: Job<JobPayload>): Promise<JobResult> {
   ].filter(Boolean).join('\n');
 
   await onProgress(summaryHtml);
+  await progress.flush();
 
   return {
     success: result.activated,
