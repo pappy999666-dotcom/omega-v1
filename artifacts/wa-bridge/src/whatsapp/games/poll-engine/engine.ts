@@ -240,7 +240,17 @@ export class PollGameEngine {
     for (const game of this.games.values()) {
       if (game.scope.sessionId !== scope.sessionId || game.scope.chatJid !== scope.chatJid) continue;
       if (game.status !== 'active') continue;
-      const question = game.questions.find((q) => q.pollMsgId === pollMsgId);
+      const question = game.questions.find((q) => {
+        const binding = q.pollBinding;
+        if (binding && (
+          binding.sessionId !== scope.sessionId
+          || binding.chatJid !== scope.chatJid
+          || binding.gameId !== game.id
+          || binding.questionId !== q.id
+        )) return false;
+        const boundId = binding?.pollMessageKey?.id ?? q.pollMsgId;
+        return boundId === pollMsgId;
+      });
       if (question) {
         owner = { game, question };
         break;
@@ -266,8 +276,19 @@ export class PollGameEngine {
     // The normalized form is used only for player/score bookkeeping.
     const decrypted = input.decrypted ?? await decryptVoteToOption({ ...input, voterJid: input.voterJid }, question.options);
     if (decrypted.removed) {
+      // A removal only changes this question. Keep scores earned on prior
+      // closed quiz questions and let the plugin recompute participation/
+      // correctness from authoritative per-question votes.
       delete question.votes[voter];
-      delete game.players[voter];
+      this.recomputePlayers(game);
+      logger.info('[PollGame] vote removed', {
+        sessionId: scope.sessionId,
+        chatJid: scope.chatJid,
+        gameId: game.id,
+        questionId: question.id,
+        pollMsgId,
+        participant: voter,
+      });
       this.persistSnapshot(game);
       return;
     }
@@ -277,9 +298,20 @@ export class PollGameEngine {
       return;
     }
 
-    // Single-select poll: latest vote wins.
+    // Single-select poll: latest cryptographically verified vote wins.
+    const previous = question.votes[voter];
     question.votes[voter] = decrypted.optionIndex;
-    if (!game.players[voter]) game.players[voter] = { jid: voter, score: 0 };
+    this.recomputePlayers(game);
+    logger.info('[PollGame] vote confirmed', {
+      sessionId: scope.sessionId,
+      chatJid: scope.chatJid,
+      gameId: game.id,
+      questionId: question.id,
+      pollMsgId,
+      participant: voter,
+      selectedOption: decrypted.optionIndex,
+      changed: previous !== undefined && previous !== decrypted.optionIndex,
+    });
     this.persistSnapshot(game);
   }
 
@@ -307,9 +339,38 @@ export class PollGameEngine {
       const question = game.questions.find((q) => q.id === questionId);
       if (!question) return;
       question.pollMsgId = rawId;
+      const keyRecord = key && typeof key === 'object' ? key as Record<string, unknown> : {};
+      question.pollMessageKey = {
+        id: rawId,
+        ...(typeof keyRecord.remoteJid === 'string' ? { remoteJid: keyRecord.remoteJid } : {}),
+        ...(typeof keyRecord.fromMe === 'boolean' ? { fromMe: keyRecord.fromMe } : {}),
+        ...(typeof keyRecord.participant === 'string' ? { participant: keyRecord.participant } : {}),
+        ...(typeof keyRecord.participantAlt === 'string' ? { participantAlt: keyRecord.participantAlt } : {}),
+        ...(typeof keyRecord.remoteJidAlt === 'string' ? { remoteJidAlt: keyRecord.remoteJidAlt } : {}),
+      };
+      question.pollBinding = {
+        sessionId: game.scope.sessionId,
+        chatJid: game.scope.chatJid,
+        gameId: game.id,
+        questionId: question.id,
+        pollMessageKey: question.pollMessageKey,
+        pollCreationTimestamp: question.pollCreationTimestamp,
+        options: [...question.options],
+        ...(question.correctIndex !== undefined ? { correctOption: question.correctIndex } : {}),
+        expiresAt: question.expiresAt,
+      };
       if (question.messageSecret) {
         registerPollSecret(rawId, Buffer.from(question.messageSecret, 'base64'), game.scope);
       }
+      logger.info('[PollGame] poll created', {
+        sessionId: game.scope.sessionId,
+        chatJid: game.scope.chatJid,
+        gameId: game.id,
+        questionId: question.id,
+        pollMsgId: rawId,
+        pollCreationTimestamp: question.pollCreationTimestamp,
+        expiresAt: question.expiresAt,
+      });
       this.persistSnapshot(game);
       return;
     }
@@ -369,6 +430,24 @@ export class PollGameEngine {
         .map((q) => ({ pollMsgId: q.pollMsgId!, secretB64: q.messageSecret!, scope: snapshot.scope }))
     );
     const game = snapshot as PollGameState;
+    // Migrate snapshots created before explicit poll audit metadata existed.
+    // Restores must preserve the original expiry and never invent a binding.
+    for (const question of game.questions ?? []) {
+      question.pollCreationTimestamp ??= question.createdAt;
+      if (question.pollMsgId && !question.pollBinding) {
+        question.pollBinding = {
+          sessionId: game.scope.sessionId,
+          chatJid: game.scope.chatJid,
+          gameId: game.id,
+          questionId: question.id,
+          ...(question.pollMessageKey ? { pollMessageKey: question.pollMessageKey } : {}),
+          pollCreationTimestamp: question.pollCreationTimestamp,
+          options: [...question.options],
+          ...(question.correctIndex !== undefined ? { correctOption: question.correctIndex } : {}),
+          expiresAt: question.expiresAt,
+        };
+      }
+    }
     // Migrate snapshots created before the centralized schedule field existed.
     // Restores must never create a second scheduler or lose the original end.
     if (!game.schedule) {
@@ -493,6 +572,7 @@ export class PollGameEngine {
         game.endsAt,
       ),
       status: 'open',
+      pollCreationTimestamp: createdAt,
       votes: {},
     };
     if (extra.correctIndex !== undefined) question.correctIndex = extra.correctIndex;
@@ -605,6 +685,17 @@ private async emitFor(
   /** Cleanup-only: clears timers, unregisters secrets, removes state. Never emits. */
   private async finishGame(game: PollGameState): Promise<void> {
     this.cleanupGame(game);
+  }
+
+  /** Rebuild players from authoritative votes; never infer participation elsewhere. */
+  private recomputePlayers(game: PollGameState): void {
+    const previousScores = new Map(Object.entries(game.players).map(([jid, player]) => [jid, player.score]));
+    game.players = {};
+    for (const question of game.questions) {
+      for (const voter of Object.keys(question.votes)) {
+        game.players[voter] ??= { jid: voter, score: previousScores.get(voter) ?? 0 };
+      }
+    }
   }
 
   private cleanupGame(game: PollGameState): void {

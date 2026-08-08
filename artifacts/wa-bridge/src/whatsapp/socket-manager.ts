@@ -46,7 +46,7 @@ export type SocketEventCallback = (
   sessionId: string,
   event: keyof BaileysEventMap,
   data: unknown
-) => void;
+) => void | PromiseLike<void>;
 
 export interface SocketInitOptions {
   usePairingCode?: boolean;
@@ -559,8 +559,24 @@ export async function initSocket(
 
   for (const ev of FORWARDED_EVENTS) {
     socket.ev.on(ev as 'messages.upsert', (data: unknown) => {
-      if (!isFrozen(sessionId)) {
-        globalEventCallback?.(sessionId, ev, data);
+      if (isFrozen(sessionId)) return;
+      try {
+        const result = globalEventCallback?.(sessionId, ev, data);
+        if (result && typeof result.then === 'function') {
+          void Promise.resolve(result).catch((err: unknown) => {
+            logger.warn('[SocketManager] event handler failed', {
+              sessionId,
+              event: ev,
+              err: String(err),
+            });
+          });
+        }
+      } catch (err) {
+        logger.warn('[SocketManager] event dispatch failed', {
+          sessionId,
+          event: ev,
+          err: String(err),
+        });
       }
     });
   }

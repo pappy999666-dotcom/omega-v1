@@ -88,6 +88,23 @@ test('quotedMessageOf returns the quoted payload', () => {
   assert.equal(quotedMessageOf({ conversation: 'x' }), null);
 });
 
+test('quotedMessageOf finds quotes inside wrapped media messages', () => {
+  const quoted: IMessage = { extendedTextMessage: { text: 'quoted after restart' } };
+  const msg: IMessage = {
+    ephemeralMessage: {
+      message: {
+        imageMessage: {
+          caption: '.tag',
+          contextInfo: ci({ quotedMessage: quoted }),
+        },
+      },
+    },
+  };
+  const found = quotedMessageOf(msg);
+  assert.equal(found, quoted);
+  assert.equal(extractMessageTextAny(found), 'quoted after restart');
+});
+
 test('extractMessageTextAny handles every message type', () => {
   assert.equal(extractMessageTextAny({ conversation: 'hello' }), 'hello');
   assert.equal(extractMessageTextAny({ extendedTextMessage: { text: 'etext' } }), 'etext');
@@ -105,6 +122,10 @@ test('extractMessageTextAny handles every message type', () => {
   assert.equal(
     extractMessageTextAny({ viewOnceMessage: { message: { imageMessage: { caption: 'vo' } } } }),
     'vo'
+  );
+  assert.equal(
+    extractMessageTextAny({ viewOnceMessageV2Extension: { message: { extendedTextMessage: { text: '.tag' } } } }),
+    '.tag'
   );
   assert.equal(
     extractMessageTextAny({ groupStatusMessage: { message: { extendedTextMessage: { text: 'gst' } } } }),

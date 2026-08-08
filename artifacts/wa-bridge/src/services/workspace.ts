@@ -77,11 +77,20 @@ migrateLegacyWorkspaces();
 // ── Atomic JSON writes ─────────────────────────────────────
 // Write to a temp file then rename, so a crash / kill mid-write can
 // never leave a truncated config/meta/bucket file behind.
+function ensurePrivatePath(p: string): void {
+  try {
+    if (fs.existsSync(p)) fs.chmodSync(p, 0o600);
+  } catch { /* best effort on non-POSIX filesystems */ }
+}
+
 function atomicWriteJson(p: string, data: unknown): void {
-  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
+  try { fs.chmodSync(path.dirname(p), 0o700); } catch { /* best effort on non-POSIX filesystems */ }
   const tmp = `${p}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
+  try { fs.chmodSync(tmp, 0o600); } catch { /* best effort on non-POSIX filesystems */ }
   fs.renameSync(tmp, p);
+  try { fs.chmodSync(p, 0o600); } catch { /* best effort on non-POSIX filesystems */ }
 }
 
 // ── Path Helpers ──────────────────────────────────────────
@@ -224,6 +233,7 @@ export function loadWorkspace(telegramId: string): Workspace {
 export function loadConfig(telegramId: string): UserConfig {
   const p = configPath(telegramId);
   if (!fs.existsSync(p)) return defaultConfig(telegramId);
+  ensurePrivatePath(p);
   try {
     const stored = JSON.parse(fs.readFileSync(p, 'utf8')) as Partial<UserConfig>;
     return { ...defaultConfig(telegramId), ...stored, sudoNumbers: stored.sudoNumbers ?? [], forceJoinTargets: stored.forceJoinTargets ?? [], ownerWaNumbers: stored.ownerWaNumbers ?? [], trustedAdminNumbers: stored.trustedAdminNumbers ?? [] };
@@ -275,22 +285,32 @@ export function loadSessionConfig(telegramId: string, sessionId: string): UserCo
   const mergedSudo = [...new Set([...(base.sudoNumbers ?? []), ...(storedSudoNumbers(telegramId, sessionId, p)), ...globalSudo])];
 
   if (!fs.existsSync(p)) {
-    return { 
-      ...base, 
+    return {
+      ...base,
       ...isolatedDefaults,
-      stickerMacros: { ...base.stickerMacros }, 
-      sudoNumbers: [...new Set([...(base.sudoNumbers ?? []), ...globalSudo])], 
-      forceJoinTargets: [...(base.forceJoinTargets ?? [])], 
-      statusDesignStickyThemes: { ...(base.statusDesignStickyThemes ?? {}) } 
+      // Game credentials are never inherited from the user-level config.
+      // They belong exclusively to this session's config.json.
+      gameApiKey: undefined,
+      gameApiModel: undefined,
+      gameApiEndpoint: undefined,
+      stickerMacros: { ...base.stickerMacros },
+      sudoNumbers: [...new Set([...(base.sudoNumbers ?? []), ...globalSudo])],
+      forceJoinTargets: [...(base.forceJoinTargets ?? [])],
+      statusDesignStickyThemes: { ...(base.statusDesignStickyThemes ?? {}) }
     };
   }
-  
+
   try {
+    ensurePrivatePath(p);
     const stored = JSON.parse(fs.readFileSync(p, 'utf8')) as Partial<UserConfig>;
     return {
       ...base,
       ...isolatedDefaults, // Apply defaults first
       ...stored,           // Then session overrides
+      // Explicitly override inherited base values, including legacy keys.
+      gameApiKey: stored.gameApiKey,
+      gameApiModel: stored.gameApiModel,
+      gameApiEndpoint: stored.gameApiEndpoint,
       telegramId,
       stickerMacros: { ...(base.stickerMacros ?? {}), ...(stored.stickerMacros ?? {}) },
       sudoNumbers: mergedSudo,
@@ -300,7 +320,7 @@ export function loadSessionConfig(telegramId: string, sessionId: string): UserCo
       statusDesignStickyThemes: { ...(base.statusDesignStickyThemes ?? {}), ...(stored.statusDesignStickyThemes ?? {}) },
     };
   } catch {
-    return { ...base, ...isolatedDefaults };
+    return { ...base, ...isolatedDefaults, gameApiKey: undefined, gameApiModel: undefined, gameApiEndpoint: undefined };
   }
 }
 

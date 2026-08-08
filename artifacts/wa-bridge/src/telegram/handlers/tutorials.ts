@@ -13,12 +13,14 @@
 // ============================================================
 
 import type { Context } from 'telegraf';
+import fs from 'node:fs';
 import { header, H, kv, noticeCard, escape } from '../../utils/formatter.js';
 import { btn, backKeyboard, confirmKeyboard } from '../ui/keyboards.js';
 import {
   listTutorials,
   getTutorial,
   saveTutorialMedia,
+  readTutorialMediaAssets,
   removeTutorial,
   isValidTutorialCommand,
   validTutorialCommands,
@@ -53,6 +55,7 @@ export async function handleTutorialsMenu(ctx: Context): Promise<void> {
     btn(`${t.type === 'video' ? '🎞' : '🖼'} ${t.command}`, `admin:tutorials:del:${t.command}`, 'danger'),
   ]);
   rows.push([btn('➕ Add Tutorial', 'admin:tutorials:add', 'primary')]);
+  if (tutorials.some((tutorial) => tutorial.command === 'gameapi')) rows.push([btn('👁 Preview Game API', 'admin:tutorials:preview:gameapi', 'primary')]);
   rows.push([btn('🔙 Back', 'admin:panel', 'primary')]);
 
   const markup = { inline_keyboard: rows };
@@ -193,9 +196,31 @@ export async function saveTutorialUpload(
     return;
   }
 
-  const record = saveTutorialMedia(pending.command, pending.type, buffer, mimeType);
+  const mediaType = pending.type;
+  if (!mediaType) {
+    await ctx.reply(noticeCard('Upload Failed', 'Choose Image or Video before uploading media.', 'error'), {
+      parse_mode: 'HTML',
+      reply_markup: backKeyboard('admin:tutorials'),
+    });
+    return;
+  }
+  if (mimeType !== `${mediaType}/` && !mimeType.startsWith(`${mediaType}/`)) {
+    await ctx.reply(noticeCard('Upload Failed', `Expected a ${mediaType}, received ${mimeType || 'unknown media type'}.`, 'error'), {
+      parse_mode: 'HTML',
+      reply_markup: backKeyboard('admin:tutorials'),
+    });
+    return;
+  }
+  if (buffer.length > 25 * 1024 * 1024) {
+    await ctx.reply(noticeCard('Upload Failed', 'Media exceeds the 25 MB helper-media limit.', 'error'), {
+      parse_mode: 'HTML',
+      reply_markup: backKeyboard('admin:tutorials'),
+    });
+    return;
+  }
+  const record = saveTutorialMedia(pending.command, mediaType, buffer, mimeType);
   if (!record) {
-    await ctx.reply(noticeCard('Save Failed', 'The command is no longer valid in the registry.', 'error'), {
+    await ctx.reply(noticeCard('Save Failed', 'The tutorial command is no longer valid, or the media could not be persisted. Check the server log for the safe failure reason.', 'error'), {
       parse_mode: 'HTML',
       reply_markup: backKeyboard('admin:tutorials'),
     });
@@ -204,7 +229,7 @@ export async function saveTutorialUpload(
 
   logger.info('[Tutorials] media attached', { command: record.command, type: record.type });
   await ctx.reply(
-    cardSuccess(ctx, record.command, record.type),
+    cardSuccess(ctx, record.command, record.type!),
     {
       parse_mode: 'HTML',
       reply_markup: backKeyboard('admin:tutorials'),
@@ -225,6 +250,33 @@ function cardSuccess(ctx: Context, command: string, type: TutorialMediaType): st
     '',
     H.blockquote(`WhatsApp .help ${command} will now attach this ${type}.`),
   ].join('\n');
+}
+
+/** Send a stored tutorial asset back to the admin as a real Telegram preview. */
+export async function handleTutorialPreview(ctx: Context, command: string): Promise<void> {
+  const tutorial = getTutorial(command);
+  const media = readTutorialMediaAssets(command);
+  if (media.length === 0) {
+    await ctx.answerCbQuery('No helper media is stored for this tutorial', { show_alert: true }).catch(() => {});
+    return;
+  }
+  const caption = tutorial?.title ?? `Tutorial preview: ${command}`;
+  try {
+    for (const [index, asset] of media.entries()) {
+      if (asset.type === 'image') {
+        await ctx.replyWithPhoto({ source: asset.buffer }, { caption: index === 0 ? caption : undefined });
+      } else {
+        await ctx.replyWithVideo({ source: asset.buffer }, { caption: index === 0 ? caption : undefined });
+      }
+    }
+    await ctx.answerCbQuery('Preview sent').catch(() => {});
+  } catch (error) {
+    await ctx.answerCbQuery('Preview failed', { show_alert: true }).catch(() => {});
+    await ctx.reply(noticeCard('Tutorial Preview Failed', String(error), 'error'), {
+      parse_mode: 'HTML',
+      reply_markup: backKeyboard('admin:tutorials'),
+    });
+  }
 }
 
 /** Delete — show confirmation. */

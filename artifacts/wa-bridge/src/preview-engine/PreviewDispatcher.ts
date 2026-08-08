@@ -12,6 +12,9 @@ import { PreviewResolver } from './PreviewResolver.js';
 import { PayloadBuilder } from './PayloadBuilder.js';
 import { PreviewValidator } from './PreviewValidator.js';
 import { PreviewLogger } from './PreviewLogger.js';
+import crypto from 'crypto';
+import { logger } from '../utils/logger.js';
+import { rememberMessage } from '../whatsapp/message-store.js';
 import { previewCache } from './PreviewCache.js';
 import pLimit from 'p-limit';
 import { loadSessionConfig, getGlobalMenuButtons } from '../services/workspace.js';
@@ -341,6 +344,12 @@ export class PreviewDispatcher {
             ...(options.poll.messageSecret ? { messageSecret: options.poll.messageSecret } : {}),
           },
         };
+        if (options.poll.messageSecret) {
+          logger.info('[PollGame] poll send secret fingerprint', {
+            bytes: Buffer.from(options.poll.messageSecret).byteLength,
+            fingerprint: crypto.createHash('sha256').update(Buffer.from(options.poll.messageSecret)).digest('hex').slice(0, 16),
+          });
+        }
         if (options.extra) content = { ...content, ...options.extra };
         content = applyGlobalPipeline(content);
         const result = await socket.sendMessage(jid, content as AnyMessageContent, {
@@ -348,7 +357,41 @@ export class PreviewDispatcher {
           edit: options.edit,
           ...(options.statusOptions ?? {}),
         } as any);
-        return { success: true, key: (result as any)?.key };
+        const sent = result as any;
+        const sentKey = sent?.key;
+        const sentMessage = sent?.message;
+        const isPollCreation = Boolean(
+          sentMessage?.pollCreationMessage
+          || sentMessage?.pollCreationMessageV2
+          || sentMessage?.pollCreationMessageV3
+        );
+        const keyMatchesTarget = sentKey?.remoteJid === jid;
+        if (options.sessionId && sentKey?.id && sentMessage && isPollCreation && keyMatchesTarget) {
+          // Keep Baileys' generated poll message, including its authoritative
+          // messageContextInfo.messageSecret, available to getMessage().
+          rememberMessage(options.sessionId, { key: sentKey, message: sentMessage } as any);
+          const actualSecret = sentMessage?.messageContextInfo?.messageSecret;
+          logger.info('[PollGame] poll send returned key', {
+            pollId: sentKey.id,
+            remoteJid: sentKey.remoteJid,
+            hasKey: true,
+            isPollCreation: true,
+            messageSecretBytes: actualSecret?.byteLength ?? actualSecret?.length ?? 0,
+            messageSecretFingerprint: actualSecret
+              ? crypto.createHash('sha256').update(Buffer.from(actualSecret)).digest('hex').slice(0, 16)
+              : '',
+          });
+        } else {
+          logger.warn('[PollGame] poll send returned incomplete or mismatched message', {
+            pollId: sentKey?.id ?? '',
+            remoteJid: sentKey?.remoteJid ?? jid,
+            hasKey: Boolean(sentKey?.id),
+            hasMessage: Boolean(sentMessage),
+            isPollCreation,
+            keyMatchesTarget,
+          });
+        }
+        return { success: true, key: sentKey };
       } catch (err) {
         PreviewLogger.sendFailed(jid, 'poll', String(err));
         return { success: false };

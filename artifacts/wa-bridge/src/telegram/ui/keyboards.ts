@@ -145,6 +145,7 @@ export function sessionMenuKeyboard(sessionId: string, status?: string): InlineK
       [btn('🚪 Leave GC', `session:${sessionId}:leavegc`, 'danger'), btn('📋 My Groups', `session:${sessionId}:mygroups`, 'primary')],
       [btn('🛡 Sudo List', `session:${sessionId}:sudo`, 'primary'), btn('🌉 Bridge', `session:${sessionId}:bridge`, 'primary')],
       [btn('📅 Auto-Promote', `session:${sessionId}:autopromo`, 'primary')],
+      [btn('🎮 Game API • Tutorial', `session:${sessionId}:gameapi`, 'primary')],
       [btn('🔙 Back', 'sessions:list', 'primary')],
     ],
   };
@@ -263,7 +264,7 @@ export function adminPanelKeyboard(paused = false, maintenance = false): InlineK
       // Global Sudo is per-Telegram-user and lives in each user's Settings hub.
       [btn('🛡 Omni Owner (Bot-wide)', 'admin:omniowner', 'primary')],
       [btn('💡 Idea Inbox', 'admin:ideas:0', 'primary'), btn('📋 Logs', 'admin:logs', 'primary')],
-      [btn('🎮 Game API Setup', 'admin:gameapi:guide', 'primary'), btn('🎬 Tutorials', 'admin:tutorials', 'primary')],
+      [btn('🎬 Tutorial Content', 'admin:tutorials', 'primary')],
       [btn('🔙 Back', 'menu:main', 'primary')],
     ],
   };

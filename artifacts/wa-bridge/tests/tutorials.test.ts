@@ -66,20 +66,26 @@ test('save → get → list → remove lifecycle with media files', () => {
   assert.equal(removeTutorial('wyr'), false, 'second remove is a no-op');
 });
 
-test('replacing a tutorial atomically swaps media and type', () => {
-  saveTutorialMedia('quiz', 'image', Buffer.from('first-image'), 'image/png');
-  const first = getTutorial('quiz')!;
+test('tutorials retain independent image and video assets', async () => {
+  const first = saveTutorialMedia('quiz', 'image', Buffer.from('first-image'), 'image/png')!;
   assert.ok(fs.existsSync(first.filePath));
 
-  const second = saveTutorialMedia('quiz', 'video', Buffer.from('second-video'), 'video/mp4');
-  assert.ok(second);
+  const second = saveTutorialMedia('quiz', 'video', Buffer.from('second-video'), 'video/mp4')!;
   assert.equal(second.type, 'video');
   assert.equal(getTutorial('quiz')!.type, 'video');
   assert.equal(listTutorials().length, 1, 'no duplicate index entries');
-  assert.ok(!fs.existsSync(first.filePath), 'old media file cleaned up');
+  assert.ok(fs.existsSync(first.filePath), 'helper image remains when video is added');
+  assert.ok(fs.existsSync(second.filePath), 'helper video persisted');
   assert.equal(fs.readFileSync(second.filePath).toString(), 'second-video');
 
+  const replacement = saveTutorialMedia('quiz', 'image', Buffer.from('replacement-image'), 'image/webp')!;
+  assert.ok(!fs.existsSync(first.filePath), 'replaced image file cleaned up');
+  assert.ok(fs.existsSync(second.filePath), 'video remains when image is replaced');
+  assert.equal(fs.readFileSync(replacement.filePath).toString(), 'replacement-image');
+
   removeTutorial('quiz');
+  assert.ok(!fs.existsSync(second.filePath), 'video removed with tutorial');
+  assert.ok(!fs.existsSync(replacement.filePath), 'image removed with tutorial');
 });
 
 test('unknown commands never create tutorials', () => {

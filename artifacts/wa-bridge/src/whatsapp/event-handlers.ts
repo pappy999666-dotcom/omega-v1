@@ -9,7 +9,7 @@ import type { BridgeWASocket as WASocket, BaileysEventMap, IMessage, WebMessageI
 import { resolvePreviewRoute } from './preview-router.js';
 import { parseCommand, parseStickerCommand, hashSticker } from './command-parser.js';
 import { resolveTarget, resolveTargetNumbers } from './utils/resolve-target.js';
-import { normalizeParticipantUpdateJids, getContextInfoAny, resolveIdentity, profilePicBuffer } from './utils/identity.js';
+import { normalizeParticipantUpdateJids, getContextInfoAny, quotedMessageOf, extractMessageTextAny, resolveIdentity, profilePicBuffer } from './utils/identity.js';
 import { resolveMention, sanitizeMentionJids } from './utils/mention-engine.js';
 import {
   loadSessionConfig,
@@ -82,6 +82,7 @@ import {
 import {
   markSeen,
   rememberMessage,
+  loadMessage,
   upsertContacts,
   setPresence,
   setGroupMetaSnapshot,
@@ -135,23 +136,42 @@ import { updateSessionProfilePicture } from './utils/profile-controls.js';
 import { parseUrlButtons } from './utils/url-buttons.js';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { sessionDir } from '../services/workspace.js';
 import { resolveMenuMedia } from '../services/menu-canvas.js';
 import { gameManager, type GameResponse } from './games/engine.js';
 // ── Poll Game Engine (AI-powered WYR / Quiz) ───────────────
 import { createPollGameEngine, GameAI, type PollEvent, type PollGameSnapshot } from './games/poll-engine/index.js';
-import { optionHashHex } from './games/poll-engine/poll-votes.js';
+import { decryptVoteToOption, optionHashHex, registerPollSecret } from './games/poll-engine/poll-votes.js';
 import { savePollGameSnapshot, loadPollGameSnapshots, clearPollGameSnapshots } from './games/poll-engine/persistence.js';
 
 // Map from sessionId → telegramId (populated at init)
 const sessionOwnerMap = new Map<string, string>();
 
+// A single real vote may be surfaced by both the fork's raw
+// pollUpdateMessage upsert and its optional decrypted messages.update path.
+// Keep a short-lived identity cache so both paths are idempotent without
+// treating a changed answer as a duplicate.
+const handledPollEvents = new Map<string, number>();
+const POLL_EVENT_DEDUPE_MS = 10 * 60_000;
+function pollEventIdentity(sessionId: string, chatJid: string, pollMsgId: string, voterJid: string, selectedHex: string[], removed: boolean): string {
+  const eventPart = removed ? 'removed' : selectedHex.slice().sort().join(',');
+  return `${sessionId}:${chatJid}:${pollMsgId}:${voterJid.toLowerCase()}:${eventPart}`;
+}
+function claimPollEvent(identity: string): boolean {
+  const now = Date.now();
+  for (const [key, timestamp] of handledPollEvents) {
+    if (now - timestamp > POLL_EVENT_DEDUPE_MS) handledPollEvents.delete(key);
+  }
+  if (handledPollEvents.has(identity)) return false;
+  handledPollEvents.set(identity, now);
+  return true;
+}
+
 // ── Poll Game Engine singleton ───────────────────────────────
-// Per-session Game API config: the per-session key (from the session's own
-// UserConfig) wins; otherwise the platform-wide GAME_AI_API_KEY env var is
-// used as the default. The key is NEVER logged / exposed in any response or
-// report. Endpoint/model resolve: per-session → env (GAME_AI_ENDPOINT /
-// GAME_AI_MODEL) → Groq defaults inside GameAI.
+// Per-session Game API config: only the current session's own UserConfig is
+// consulted. There is no platform-wide or environment-key fallback. The key
+// is NEVER logged / exposed in any response or report.
 const gameAi = new GameAI({
   getConfig: (sessionId: string) => {
     const telegramId = sessionOwnerMap.get(sessionId);
@@ -394,18 +414,10 @@ function gameApiGuideCard(prefix: string): string {
 }
 
 function extractMessageText(message: IMessage | null | undefined): string {
-  if (!message) return '';
-  const wrapped = message.ephemeralMessage?.message
-    ?? message.viewOnceMessage?.message
-    ?? message.viewOnceMessageV2?.message
-    ?? message.documentWithCaptionMessage?.message;
-  if (wrapped) return extractMessageText(wrapped);
-  return message.conversation
-    ?? message.extendedTextMessage?.text
-    ?? message.imageMessage?.caption
-    ?? message.videoMessage?.caption
-    ?? message.documentMessage?.caption
-    ?? '';
+  // Keep command parsing aligned with quoted-payload parsing. Baileys may wrap
+  // the incoming command in ephemeral/view-once/document/interactive
+  // containers after reconnect or history replay.
+  return extractMessageTextAny(message);
 }
 
 
@@ -534,15 +546,25 @@ export async function handleWAEvent(
               if (typeof value === 'string') return /^[0-9a-f]{64}$/i.test(value) ? value.toLowerCase() : Buffer.from(value, 'latin1').toString('hex');
               return Buffer.from(value).toString('hex');
             });
-            const hashes = pollGameEngine.getGame({ sessionId, chatJid: u.key.remoteJid }, 'wyr')?.questions
-              .concat(pollGameEngine.getGame({ sessionId, chatJid: u.key.remoteJid }, 'quiz')?.questions ?? [])
-              .flatMap((q) => q.options.map((option) => optionHashHex(option))) ?? [];
-            const ownerQuestions = [
-              ...(pollGameEngine.getGame({ sessionId, chatJid: u.key.remoteJid }, 'wyr')?.questions ?? []),
-              ...(pollGameEngine.getGame({ sessionId, chatJid: u.key.remoteJid }, 'quiz')?.questions ?? []),
-            ];
-            const ownerQuestion = ownerQuestions.find((q) => q.pollMsgId === u.key!.id);
-            if (!ownerQuestion) continue;
+            const owner = (['wyr', 'quiz'] as const)
+              .map((gameType) => {
+                const game = pollGameEngine.getGame({ sessionId, chatJid: u.key!.remoteJid! }, gameType);
+                if (!game) return null;
+                const question = game.questions.find((candidate) => {
+                  const binding = candidate.pollBinding;
+                  if (binding && (
+                    binding.sessionId !== sessionId
+                    || binding.chatJid !== u.key!.remoteJid
+                    || binding.gameId !== game.id
+                    || binding.questionId !== candidate.id
+                  )) return false;
+                  return (binding?.pollMessageKey?.id ?? candidate.pollMsgId) === u.key!.id;
+                });
+                return question ? { game, question } : null;
+              })
+              .find((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate));
+            if (!owner) continue;
+            const ownerQuestion = owner.question;
             // Single-select polls must resolve to exactly one option of the
             // associated question; never match against another active poll.
             const matchedIndexes = selected.flatMap((digest) => ownerQuestion.options
@@ -551,12 +573,14 @@ export async function handleWAEvent(
             const uniqueIndexes = [...new Set(matchedIndexes)];
             const questionOption = uniqueIndexes.length === 1 ? uniqueIndexes[0]! : -1;
             if (questionOption >= 0 || selected.length === 0) {
+              const removed = selected.length === 0;
+              if (!claimPollEvent(pollEventIdentity(sessionId, u.key.remoteJid, u.key.id, voterJid, selected, removed))) continue;
               await pollGameEngine.handleVote({
                 scope: { sessionId, chatJid: u.key.remoteJid },
                 pollMsgId: u.key.id,
                 voterJid,
                 vote: {},
-                decrypted: { optionIndex: questionOption, selectedHex: selected, removed: selected.length === 0 },
+                decrypted: { optionIndex: questionOption, selectedHex: selected, removed },
                 meId: ownId,
                 meLid: (socket as unknown as { user?: { lid?: string } }).user?.lid,
               });
@@ -1069,10 +1093,21 @@ async function resolveGetKeyAuthor(): Promise<typeof getKeyAuthorFn> {
         const normalizedMeId = baileys.jidNormalizedUser?.(meId) ?? meId.replace(/:\d+(?=@)/, '');
         const pollCreatorJid = authorFn?.(pollUpdate.pollCreationMessageKey as never, normalizedMeId) ?? '';
         const voterJid = authorFn?.(msg.key as never, normalizedMeId) ?? msg.key.participant ?? msg.key.remoteJid ?? '';
+        const trackedQuestions = [
+          ...(pollGameEngine.getGame({ sessionId, chatJid: pollChatJid }, 'wyr')?.questions ?? []),
+          ...(pollGameEngine.getGame({ sessionId, chatJid: pollChatJid }, 'quiz')?.questions ?? []),
+        ];
+        const trackedOwner = trackedQuestions.find((question) => (
+          question.pollBinding?.pollMessageKey?.id ?? question.pollMsgId
+        ) === pollUpdate.pollCreationMessageKey!.id);
+        const bindingSecretFingerprint = trackedOwner?.messageSecret
+          ? crypto.createHash('sha256').update(Buffer.from(trackedOwner.messageSecret, 'base64')).digest('hex').slice(0, 16)
+          : '';
         logger.info('[PollGame] poll crypto context', {
           sessionId,
           pollMsgId: pollUpdate.pollCreationMessageKey.id,
           creatorJid: pollCreatorJid,
+          bindingSecretFingerprint,
           creatorKey: {
             fromMe: pollUpdate.pollCreationMessageKey.fromMe ?? false,
             remoteJid: pollUpdate.pollCreationMessageKey.remoteJid ?? '',
@@ -1085,23 +1120,68 @@ async function resolveGetKeyAuthor(): Promise<typeof getKeyAuthorFn> {
             ivBytes: pollUpdate.vote.encIv?.byteLength ?? 0,
           },
         });
-        const trackedQuestions = [
-          ...(pollGameEngine.getGame({ sessionId, chatJid: pollChatJid }, 'wyr')?.questions ?? []),
-          ...(pollGameEngine.getGame({ sessionId, chatJid: pollChatJid }, 'quiz')?.questions ?? []),
-        ];
-        if (!trackedQuestions.some((question) => question.pollMsgId === pollUpdate.pollCreationMessageKey!.id)) {
+        if (!trackedOwner) {
           logger.warn('[PollGame] raw poll update has no tracked poll binding', {
             sessionId,
             chatJid: pollChatJid,
             pollMsgId: pollUpdate.pollCreationMessageKey.id,
           });
         }
+        if (!trackedOwner) continue;
+        // Prefer the exact secret embedded in Baileys' generated poll message.
+        // The engine secret is passed into sendMessage, but the returned full
+        // WAMessage is authoritative if the fork regenerated/normalized it.
+        const storedPoll = loadMessage(sessionId, pollChatJid, pollUpdate.pollCreationMessageKey.id);
+        const storedMessage = storedPoll?.message as any;
+        const storedIsPollCreation = Boolean(
+          storedMessage?.pollCreationMessage
+          || storedMessage?.pollCreationMessageV2
+          || storedMessage?.pollCreationMessageV3
+        );
+        const actualSecret = storedMessage?.messageContextInfo?.messageSecret;
+        if (
+          storedPoll?.key?.id === pollUpdate.pollCreationMessageKey.id
+          && storedPoll.key.remoteJid === pollChatJid
+          && storedIsPollCreation
+          && actualSecret
+          && Buffer.from(actualSecret).byteLength === 32
+        ) {
+          registerPollSecret(
+            pollUpdate.pollCreationMessageKey.id,
+            Buffer.from(actualSecret),
+            { sessionId, chatJid: pollChatJid },
+          );
+          logger.info('[PollGame] authoritative poll secret loaded', {
+            sessionId,
+            pollMsgId: pollUpdate.pollCreationMessageKey.id,
+            fingerprint: crypto.createHash('sha256').update(Buffer.from(actualSecret)).digest('hex').slice(0, 16),
+          });
+        }
+        const decrypted = await decryptVoteToOption({
+          scope: { sessionId, chatJid: pollChatJid },
+          pollMsgId: pollUpdate.pollCreationMessageKey.id,
+          pollCreatorJid,
+          voterJid,
+          vote: { encPayload: pollUpdate.vote.encPayload ?? undefined, encIv: pollUpdate.vote.encIv ?? undefined },
+          meId,
+          meLid,
+        }, trackedOwner.options);
+        if (decrypted.optionIndex < 0 && !decrypted.removed) continue;
+        if (!claimPollEvent(pollEventIdentity(
+          sessionId,
+          pollChatJid,
+          pollUpdate.pollCreationMessageKey.id,
+          voterJid,
+          decrypted.selectedHex,
+          Boolean(decrypted.removed),
+        ))) continue;
         await pollGameEngine.handleVote({
           scope: { sessionId, chatJid: pollChatJid },
           pollMsgId: pollUpdate.pollCreationMessageKey.id,
           pollCreatorJid,
           voterJid,
           vote: { encPayload: pollUpdate.vote.encPayload ?? undefined, encIv: pollUpdate.vote.encIv ?? undefined },
+          decrypted,
           meId,
           meLid,
         });
@@ -1189,17 +1269,12 @@ async function processMessageWithConfig(
 
   // Extract text from various message types
   const text = extractMessageText(msg.message);
-  const quotedMessage = (
-    msg.message?.extendedTextMessage?.contextInfo
-    ?? msg.message?.imageMessage?.contextInfo
-    ?? msg.message?.videoMessage?.contextInfo
-    // Baileys proto typedefs omit contextInfo on sticker/audio/document but the
-    // runtime wire-format includes it — cast through `any` to access it safely.
-    ?? (msg.message?.stickerMessage as any)?.contextInfo
-    ?? (msg.message as any)?.audioMessage?.contextInfo
-    ?? (msg.message?.documentMessage as any)?.contextInfo
-  )?.quotedMessage;
-  const quotedText = extractMessageText(quotedMessage);
+  // Use the shared wrapper-aware extractor. After the rebuild/restart path,
+  // quoted messages may arrive inside ephemeral/view-once/document-caption
+  // containers (and may be attached to media or interactive messages), so a
+  // top-level extendedText/image/video lookup silently misses valid quotes.
+  const quotedMessage = quotedMessageOf(msg.message);
+  const quotedText = extractMessageTextAny(quotedMessage);
   // Stage 1: Extract existing preview from quoted message via PreviewManager
   const quotedPreview = PreviewManager.extractIncomingPreview(quotedMessage);
 
@@ -1461,10 +1536,13 @@ async function processMessageWithConfig(
     navButtons?: { name: string; buttonParamsJson: string }[],
     enableButtons = true,
     textOnly = false,
-    tutorialMedia?: { buffer: Buffer; type: 'image' | 'video'; mimetype: string }
+    tutorialMedia?: { buffer: Buffer; type: 'image' | 'video'; mimetype: string } | Array<{ buffer: Buffer; type: 'image' | 'video'; mimetype: string }>
   ): Promise<void> => {
     const meta = loadSessionMeta(telegramId, sessionId);
-    
+    const tutorialAssets = tutorialMedia
+      ? (Array.isArray(tutorialMedia) ? tutorialMedia : [tutorialMedia])
+      : [];
+
     const options: any = {
       quoted: msg,
       sessionId,
@@ -1474,14 +1552,22 @@ async function processMessageWithConfig(
 
     if (navButtons?.length) options.extra = { buttons: navButtons };
 
-    if (tutorialMedia) {
-      // Tutorial attachment: the configured media for this command wins.
-      options.media = {
-        buffer: tutorialMedia.buffer,
-        type: tutorialMedia.type,
-        mimetype: tutorialMedia.mimetype,
-        caption: body,
-      };
+    if (tutorialAssets.length > 0) {
+      // A tutorial may have both helper image and helper video. Send each
+      // persisted asset exactly once; the instructional body is captioned on
+      // the first asset only to avoid duplicate bubbles.
+      for (const [index, asset] of tutorialAssets.entries()) {
+        await PreviewManager.send(socket as any, groupJid, index === 0 ? body : '', {
+          ...options,
+          media: {
+            buffer: asset.buffer,
+            type: asset.type,
+            mimetype: asset.mimetype,
+            caption: index === 0 ? body : '',
+          },
+        });
+      }
+      return;
     } else if (!textOnly) {
       const media = await resolveMenuMedia({
         prefix: config.prefix,
@@ -1747,15 +1833,15 @@ async function processMessageWithConfig(
           // tutorial image/video to this command, attach it to the help card.
           const { getTutorial } = await import('../services/tutorials.js');
           const tutorial = getTutorial(args[0].toLowerCase());
-          let tutorialMedia: { buffer: Buffer; type: 'image' | 'video'; mimetype: string } | undefined;
-          if (tutorial && tutorial.filePath) {
+          let tutorialMedia: Array<{ buffer: Buffer; type: 'image' | 'video'; mimetype: string }> = [];
+          if (tutorial) {
             try {
-              const buf = fs.readFileSync(tutorial.filePath);
-              if (buf && buf.length > 0) tutorialMedia = {
-                buffer: buf,
-                type: tutorial.type,
-                mimetype: tutorial.mimeType,
-              };
+              const { readTutorialMediaAssets } = await import('../services/tutorials.js');
+              tutorialMedia = readTutorialMediaAssets(args[0].toLowerCase()).map((media) => ({
+                buffer: media.buffer,
+                type: media.type,
+                mimetype: media.mimeType,
+              }));
             } catch (err) {
               logger.warn('[Help] tutorial media read failed', { command: args[0], err: String(err) });
             }
@@ -2957,12 +3043,26 @@ async function processMessageWithConfig(
           openai: 'https://api.openai.com/v1/chat/completions',
         };
         const resolved = known[endpoint.toLowerCase()] ?? endpoint;
-        if (!/^https?:\/\//.test(resolved) || resolved.length > 300) {
+        if (!/^https:\/\//.test(resolved) || resolved.length > 300) {
           await reply(warningCard('GAME API', 'Invalid endpoint. Use an https URL (e.g. https://api.groq.com/openai/v1/chat/completions) or a shortcut: groq, xai, openai.'));
           break;
         }
         updateSessionConfig(telegramId, sessionId, { gameApiEndpoint: resolved });
         await reply(successCard('GAME API ENDPOINT', 'Endpoint override saved for this session.', [['Endpoint', resolved], ['Session', sessionId]]));
+        break;
+      }
+      if (sub === 'test') {
+        if (!gameAi.isConfigured(sessionId)) {
+          await reply(warningCard('GAME API', `No key is configured for this session. Use ${config.prefix}gameapi guide, then ${config.prefix}gameapi <key>.`));
+          break;
+        }
+        try {
+          await gameAi.testConnection(sessionId);
+          await reply(successCard('GAME API TEST', 'API configured successfully. A real provider request completed for this session.'));
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          await reply(warningCard('GAME API TEST', `The real provider request failed safely: ${reason.slice(0, 300)}`));
+        }
         break;
       }
       if (sub === 'clear') {
@@ -2973,7 +3073,17 @@ async function processMessageWithConfig(
       // Per-session setup tutorial — the full guide is available right here
       // on WhatsApp (.gameapi guide / .gameapi help), no Telegram needed.
       if (sub === 'guide' || sub === 'help') {
-        await reply(gameApiGuideCard(config.prefix));
+        const { readTutorialMediaAssets } = await import('../services/tutorials.js');
+        const media = readTutorialMediaAssets('gameapi');
+        if (media.length > 0) {
+          await sendMenuResponse('GAME API • SETUP', gameApiGuideCard(config.prefix), undefined, false, true, media.map((asset) => ({
+            buffer: asset.buffer,
+            type: asset.type,
+            mimetype: asset.mimeType,
+          })));
+        } else {
+          await reply(gameApiGuideCard(config.prefix));
+        }
         break;
       }
       const key = (args[0] ?? '').trim();
@@ -2993,9 +3103,21 @@ async function processMessageWithConfig(
       const cfg = loadSessionConfig(telegramId, sessionId);
       const activeEndpoint = cfg.gameApiEndpoint ?? 'Groq (default)';
       const keySource = cfg.gameApiKey ? 'per-session' : 'none';
-      await reply(hasKey
-        ? successCard('GAME API', 'Configured for this session.', [['Provider', activeEndpoint], ['Model', activeModel], ['Key', '•••••••• (hidden)'], ['Key source', keySource], ['Tutorial', `${config.prefix}gameapi guide`]])
-        : gameApiGuideCard(config.prefix));
+      if (hasKey) {
+        await reply(successCard('GAME API', 'Configured for this session.', [['Provider', activeEndpoint], ['Model', activeModel], ['Key', '•••••••• (hidden)'], ['Key source', keySource], ['Tutorial', `${config.prefix}gameapi guide`], ['Test', `${config.prefix}gameapi test`]]));
+      } else {
+        const { readTutorialMediaAssets } = await import('../services/tutorials.js');
+        const media = readTutorialMediaAssets('gameapi');
+        if (media.length > 0) {
+          await sendMenuResponse('GAME API • SETUP', gameApiGuideCard(config.prefix), undefined, false, true, media.map((asset) => ({
+            buffer: asset.buffer,
+            type: asset.type,
+            mimetype: asset.mimeType,
+          })));
+        } else {
+          await reply(gameApiGuideCard(config.prefix));
+        }
+      }
       break;
     }
 

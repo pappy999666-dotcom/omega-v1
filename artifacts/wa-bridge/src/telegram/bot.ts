@@ -74,7 +74,6 @@ import {
   handleReleaseToggle,
   handleSetReleaseUsername,
   processReleaseUsername,
-  handleGameApiGuide,
   handleAdminMenuUrlManager,
   handleAdminMenuUrlEdit,
   handleAdminMenuUrlToggle,
@@ -100,6 +99,7 @@ import {
   handleTutorialAdd,
   processTutorialCommand,
   handleTutorialType,
+  handleTutorialPreview,
   saveTutorialUpload,
   handleTutorialDelete,
   handleTutorialDeleteConfirm,
@@ -537,11 +537,6 @@ export function createBot(): Telegraf<BotContext> {
     await handleReleaseToggle(ctx, false);
   });
 
-  // ── Game API Setup Guide (Admin) ─────────────────────
-  bot.action('admin:gameapi:guide', ownerOnly() as never, async (ctx) => {
-    await handleGameApiGuide(ctx);
-  });
-
   // ── Tutorial Manager (Admin) ─────────────────────────
   bot.action('admin:tutorials', ownerOnly() as never, async (ctx) => {
     await handleTutorialsMenu(ctx);
@@ -553,6 +548,10 @@ export function createBot(): Telegraf<BotContext> {
 
   bot.action(/^admin:tutorials:type:(image|video)$/, ownerOnly() as never, async (ctx) => {
     await handleTutorialType(ctx as BotContext, ctx.match[1] as 'image' | 'video');
+  });
+
+  bot.action(/^admin:tutorials:preview:([a-z0-9_-]+)$/, ownerOnly() as never, async (ctx) => {
+    await handleTutorialPreview(ctx, ctx.match[1]);
   });
 
   bot.action(/^admin:tutorials:del:([a-z0-9_-]+)$/, ownerOnly() as never, async (ctx) => {
@@ -1986,6 +1985,30 @@ async function routeCallback(
         sessionCard({ sessionId, label: meta.label, phone: meta.phone, status: meta.status, paired: meta.status === 'ACTIVE' }),
         { parse_mode: 'HTML', reply_markup: sessionMenuKeyboard(sessionId, meta.status) }
       ).catch(() => {});
+      return;
+    }
+    if (sub === 'gameapi') {
+      const ownerId = sessionOwner(ctx, sessionId);
+      const meta = loadSessionMeta(ownerId, sessionId);
+      if (!meta) { await ctx.answerCbQuery('Session not found', { show_alert: true }).catch(() => {}); return; }
+      const cfg = loadSessionConfig(ownerId, sessionId);
+      await ctx.answerCbQuery().catch(() => {});
+      await ctx.editMessageText([
+        header('Game API • Session Tutorial', '🎮'),
+        '',
+        'Quiz and Would You Rather use the Game API configured only for this WhatsApp session.',
+        '',
+        '1. Create an API key with your chosen OpenAI-compatible provider.',
+        '2. Open the paired WhatsApp session and send .gameapi guide.',
+        '3. Send .gameapi <key> to save it privately for this session.',
+        '4. Optionally set .gameapi model <model> and .gameapi endpoint <groq|xai|openai|url>.',
+        '5. Send .gameapi test to make a real provider request.',
+        '6. Start .wyr or .quiz in a group.',
+        '',
+        cfg.gameApiKey ? 'Status: configured (key hidden)' : 'Status: not configured',
+        '',
+        H.blockquote('The administrator panel manages instructional media only. It never configures this session\'s key.'),
+      ].join('\\n'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }).catch(() => {});
       return;
     }
     if (sub === 'info') {

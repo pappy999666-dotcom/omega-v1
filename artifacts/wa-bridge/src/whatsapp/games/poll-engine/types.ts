@@ -35,6 +35,28 @@ export interface QuizQuestionContent {
 
 // ── In-game question (one per poll) ────────────────────────
 
+export interface PollMessageKey {
+  id: string;
+  remoteJid?: string;
+  fromMe?: boolean;
+  participant?: string;
+  participantAlt?: string;
+  remoteJidAlt?: string;
+}
+
+/** Complete persisted association between a native WhatsApp poll and one game question. */
+export interface PollBinding {
+  sessionId: string;
+  chatJid: string;
+  gameId: string;
+  questionId: string;
+  pollMessageKey?: PollMessageKey;
+  pollCreationTimestamp: number;
+  options: string[];
+  correctOption?: number;
+  expiresAt: number;
+}
+
 export interface PollQuestion {
   /** Stable question id inside the game ("q0", "q1", ...). */
   id: string;
@@ -50,6 +72,12 @@ export interface PollQuestion {
   difficulty?: string;
   /** WhatsApp poll creation message id (bound after send). */
   pollMsgId?: string;
+  /** Full creation-message key returned by Baileys, retained for diagnostics and exact association. */
+  pollMessageKey?: PollMessageKey;
+  /** Explicit poll creation timestamp (same instant as createdAt, persisted for audits). */
+  pollCreationTimestamp: number;
+  /** Explicit persisted mapping used by diagnostics and migration tooling. */
+  pollBinding?: PollBinding;
   /** Base64 of the poll's messageSecret (vote decryption key). */
   messageSecret?: string;
   /** Epoch ms the poll was created. */

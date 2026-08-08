@@ -47,6 +47,18 @@ export class GameAI {
     this.cache.delete(gameId);
   }
 
+  /**
+   * Perform a real, minimal provider request for the current session.
+   * The response is intentionally discarded; this is only a connectivity and
+   * credential check and never returns or logs the configured key.
+   */
+  public async testConnection(sessionId: string): Promise<void> {
+    const result = await this.completeJSON(sessionId, [
+      'Return exactly this JSON object and nothing else: {"ok":true}',
+    ].join('\\n'), { temperature: 0, maxTokens: 32 });
+    if (result.ok !== true) throw new Error('Provider returned an unexpected test response.');
+  }
+
   /** Generate one fresh, family-safe WYR prompt. */
   public async generateWyr(sessionId: string): Promise<WyrContent> {
     const content = await this.completeJSON(sessionId, [
@@ -121,6 +133,9 @@ export class GameAI {
       throw new Error('No Game API configured for this WhatsApp session. Use .gameapi guide, then .gameapi <key>.');
     }
     const endpoint = cfg.endpoint ?? DEFAULT_ENDPOINT;
+    if (!/^https:\/\//.test(endpoint)) {
+      throw new Error('Game API endpoint must use HTTPS.');
+    }
     const model = cfg.model ?? DEFAULT_MODEL;
     let lastError = 'request failed';
 

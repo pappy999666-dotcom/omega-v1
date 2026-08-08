@@ -207,6 +207,7 @@ export function extractMessageTextAny(message: IMessage | null | undefined): str
     m.ephemeralMessage?.message ??
     m.viewOnceMessage?.message ??
     m.viewOnceMessageV2?.message ??
+    m.viewOnceMessageV2Extension?.message ??
     m.documentWithCaptionMessage?.message;
   if (wrapped) return extractMessageTextAny(wrapped);
   const text =

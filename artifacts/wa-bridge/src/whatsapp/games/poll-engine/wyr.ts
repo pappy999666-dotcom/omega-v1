@@ -37,8 +37,8 @@ export const wyrPlugin: PollGamePlugin = {
 
   async onQuestionExpired(engine: PollGameEngineApi, game: PollGameState, question: PollQuestion, now: number): Promise<PollEvent[]> {
     const result = renderWyrResult(game, question);
-    // Recompute aggregate participation from all closed/open questions so a
-    // vote changed or removed on an earlier poll is represented exactly once.
+    // Recompute aggregate participation from all authoritative question votes
+    // so a changed or removed vote is represented exactly once.
     game.players = {};
     for (const item of game.questions) {
       for (const voter of Object.keys(item.votes)) {
