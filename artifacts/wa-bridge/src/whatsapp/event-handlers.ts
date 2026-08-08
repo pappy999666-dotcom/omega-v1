@@ -1894,7 +1894,10 @@ async function processMessageWithConfig(
     // ── TG — Telegram Sticker Downloader ──
     case 'tg': {
       const { cmdTgSticker } = await import('./commands/tg-sticker.js');
-      await cmdTgSticker(socket, telegramId, sessionId, groupJid, commandText());
+      await cmdTgSticker(socket, telegramId, sessionId, groupJid, commandText(), {
+        packname: config.stickerPackName,
+        author: config.stickerAuthor,
+      });
       break;
     }
 

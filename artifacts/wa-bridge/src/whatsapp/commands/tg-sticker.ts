@@ -18,7 +18,6 @@ import { PreviewManager } from '../../preview-engine/index.js';
 import { asciiBox, errorCard, warningCard } from '../../utils/ascii-art.js';
 import { logger } from '../../utils/logger.js';
 import { addStickerMetadata, validateWebP } from './sticker.js';
-import { singleSelectButton, type NativeListRow, type NativeListSection } from '../utils/native-rich.js';
 import sharp from 'sharp';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -29,9 +28,6 @@ import path from 'path';
 const execPromise = promisify(exec);
 const API_BASE = 'https://api.telegram.org';
 const DOWNLOAD_TIMEOUT_MS = 20_000;
-const MAX_PACK_PREVIEW = 15;
-const PICKER_ROWS = 10; // WhatsApp single_select sheet: 10 rows/section, 10 sections
-const PICKER_SECTIONS = 3; // → up to 30 quick picks per sheet
 
 // ── Link parsing ────────────────────────────────────────────
 
@@ -318,20 +314,22 @@ async function videoToSticker(buffer: Buffer): Promise<Buffer> {
   }
 }
 
-// ── Shared download + send (command path AND picker router) ─
+// ── Pack download (single sticker) ──────────────────────────
 
 export interface TgSendOptions {
-  /** WhatsApp sticker pack name shown in the sticker metadata (default: pack title). */
+  /** WhatsApp sticker pack name in the metadata (default: 'PAPPY'). */
   packname?: string;
-  /** WhatsApp sticker author shown in the sticker metadata (default: 'Telegram'). */
+  /** WhatsApp sticker author in the metadata (default: 'OMEGA'). */
   author?: string;
 }
 
 /**
- * Download and send a single pack sticker (1-based index) as a WhatsApp sticker.
- * Returns true on success. Shared by `.tg <pack> <n>` and the picker router.
+ * Download and send a single pack sticker (1-based index) as a WhatsApp
+ * sticker. Uses the session's configured pack name/author (setpackname /
+ * setauthor) or the engine defaults — never the Telegram pack title.
+ * Returns true on success.
  */
-export async function downloadPackSticker(
+async function downloadPackSticker(
   socket: WASocket,
   telegramId: string,
   sessionId: string,
@@ -378,7 +376,7 @@ export async function downloadPackSticker(
   }
 
   validateWebP(stickerBuffer);
-  stickerBuffer = addStickerMetadata(stickerBuffer, options.packname ?? pack.title ?? packName, options.author ?? 'Telegram');
+  stickerBuffer = addStickerMetadata(stickerBuffer, options.packname || 'PAPPY', options.author || 'OMEGA');
   validateWebP(stickerBuffer);
 
   await PreviewManager.send(socket as any, groupJid, '', {
@@ -408,7 +406,8 @@ export async function cmdTgSticker(
   telegramId: string,
   sessionId: string,
   groupJid: string,
-  rawInput: string
+  rawInput: string,
+  config: TgSendOptions = {}
 ): Promise<void> {
   const send = (body: string, options: Record<string, unknown> = {}): Promise<unknown> =>
     PreviewManager.send(socket as any, groupJid, body, { sessionId, telegramId, ...options });
@@ -439,7 +438,7 @@ export async function cmdTgSticker(
       }
       const rawBuffer = await downloadDirect(media.url);
       const stickerBuffer = media.kind === 'video' ? await videoToSticker(rawBuffer) : await staticToSticker(rawBuffer);
-      const finalBuffer = addStickerMetadata(stickerBuffer, `@${ref.username}`, 'Telegram');
+      const finalBuffer = addStickerMetadata(stickerBuffer, config.packname || 'PAPPY', config.author || 'OMEGA');
       validateWebP(finalBuffer);
 
       await PreviewManager.send(socket as any, groupJid, '', {
@@ -461,56 +460,10 @@ export async function cmdTgSticker(
     }
 
     // ── Pack link / bare name ──
-    const pack = await botApi<TgApiSet>('getStickerSet', { name: ref.packName });
-    const stickers = pack.stickers ?? [];
-
-    if (!ref.selection) {
-      if (stickers.length === 0) {
-        await send(errorCard('TG STICKER', 'This sticker pack is empty.', undefined, 'TG STICKER'));
-        return;
-      }
-
-      // Visual picker: native single_select sheet with quick picks, plus a
-      // text fallback list for larger packs.
-      const rows: NativeListRow[] = stickers.slice(0, PICKER_ROWS * PICKER_SECTIONS).map((s, i) => ({
-        title: `${i + 1}. ${s.emoji ?? '🎯'}`,
-        description: `${s.width ?? '?'}×${s.height ?? '?'}`,
-        rowId: `tg:pick:${ref.packName}:${i + 1}`,
-      }));
-      const sections: NativeListSection[] = [];
-      for (let s = 0; s < PICKER_SECTIONS && rows.length > 0; s++) {
-        sections.push({
-          title: `Stickers ${s * PICKER_ROWS + 1}–${Math.min((s + 1) * PICKER_ROWS, rows.length)}`,
-          rows: rows.splice(0, PICKER_ROWS),
-        });
-      }
-
-      const textRows: [string, string][] = stickers
-        .slice(0, MAX_PACK_PREVIEW)
-        .map((s, i) => [`#${i + 1}`, `${s.emoji ?? '🎯'} (${s.width ?? '?'}×${s.height ?? '?'})`]);
-      if (stickers.length > MAX_PACK_PREVIEW) {
-        textRows.push(['…', `+${stickers.length - MAX_PACK_PREVIEW} more`]);
-      }
-
-      const card = asciiBox({
-        title: 'TG STICKER PACK',
-        emoji: '📦',
-        moduleIdentity: 'TG STICKER',
-        rows: [
-          ['Pack', pack.title ?? ref.packName],
-          ['Stickers', `${stickers.length} (${pack.is_animated ? 'animated' : pack.is_video ? 'video' : 'static'})`],
-          ...textRows,
-        ],
-        footer: 'Tap a sticker below to download it, or reply .tg <pack> <number>.',
-      });
-      await send(card, {
-        extra: { buttons: [singleSelectButton(`📦 ${pack.title ?? ref.packName}`, sections)] },
-      });
-      return;
-    }
-
-    // Direct selection by index.
-    await downloadPackSticker(socket, telegramId, sessionId, groupJid, ref.packName, ref.selection);
+    // No selection → send the pack's first sticker directly (noob-friendly).
+    // Explicit `.tg <pack> <n>` still downloads sticker #n.
+    const selection = ref.selection ?? 1;
+    await downloadPackSticker(socket, telegramId, sessionId, groupJid, ref.packName, selection, config);
   } catch (err) {
     const error = err as { code?: string; message?: string };
     logger.error('[TG] Sticker download failed', { err: error.message ?? String(err) });

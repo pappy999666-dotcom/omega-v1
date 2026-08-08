@@ -185,7 +185,7 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
     examples: ['qc TAG', 'qc OMEGA --bg ocean', 'qc HELLO --bg #ff5500', 'qc FIRE --bg #ff0000,#ff8800'],
     output: 'Canvas-generated 512×512 WebP sticker sent to the chat.' },
   tg: { section: '🎨 STICKER ENGINE', syntax: 'tg [link] [number]', desc: 'Download a Telegram sticker to WhatsApp', target: 'both',
-    usage: 'Resolve a Telegram sticker pack link or public sticker post (t.me/<channel>/<id>). Packs open an interactive picker; reply with .tg <pack> <number> to download a specific one.',
+    usage: 'Send a Telegram sticker pack link or public sticker post (t.me/<channel>/<id>). The pack\'s first sticker is sent instantly; append a number to pick another. Stickers carry your setpackname/setauthor (or the default).',
     permissions: 'Owner / Sudo',
     inputs: ['Telegram Link', 'Sticker Number'],
     examples: ['tg https://t.me/addstickers/StickerPackName', 'tg StickerPackName 3', 'tg https://t.me/stickerpack/7'],

@@ -390,45 +390,6 @@ export async function routeInteraction(ctx: InteractionContext): Promise<boolean
     return runCommand(ctx, id);
   }
 
-  if (id.startsWith('tg:pick:')) {
-    return pickTgSticker(ctx, id);
-  }
-
   logger.debug('[Interaction] unknown id', { kind: interaction.kind, id });
   return false;
-}
-
-/**
- * TG sticker pack sheet selection: tg:pick:<packName>:<index>.
- * Download the picked sticker through the shared TG engine and send it.
- */
-async function pickTgSticker(ctx: InteractionContext, id: string): Promise<boolean> {
-  const parts = id.split(':');
-  const packName = parts.slice(2, -1).join(':');
-  const index = Number(parts[parts.length - 1]);
-  if (!packName || !Number.isInteger(index) || index < 1) return false;
-
-  const { socket, sessionId, telegramId, msg } = ctx;
-  const groupJid = msg.key.remoteJid ?? '';
-  try {
-    const { downloadPackSticker } = await import('./commands/tg-sticker.js');
-    await downloadPackSticker(socket, telegramId, sessionId, groupJid, packName, index);
-    return true;
-  } catch (err) {
-    logger.warn('[Interaction] tg:pick failed', { err: String(err) });
-    // Surface the failure instead of swallowing it silently.
-    try {
-      const { errorCard } = await import('../utils/ascii-art.js');
-      const { PreviewManager } = await import('../preview-engine/index.js');
-      const message = err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200);
-      await PreviewManager.send(socket as never, groupJid, errorCard('TG STICKER', 'Could not download the selected sticker.', message, 'TG STICKER'), {
-        quoted: msg,
-        sessionId,
-        telegramId,
-      });
-    } catch {
-      /* error reporting must never throw */
-    }
-    return true;
-  }
 }
