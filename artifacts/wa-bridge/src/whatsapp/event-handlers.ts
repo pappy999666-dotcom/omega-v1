@@ -870,19 +870,40 @@ async function handleMessages(
   upsert: { messages: WebMessageInfo[]; type: string },
   socket: WASocket
 ): Promise<void> {
-  if (upsert.type !== 'notify') return;
+  // The installed Baileys fork can deliver raw pollUpdateMessage entries as
+  // either `notify` or `append` (offline/replayed updates). Do not discard an
+  // append before inspecting whether it is a poll vote; ordinary append
+  // history messages remain ignored below.
+  const hasRawPollUpdate = upsert.messages.some((candidate) => Boolean(
+    (candidate.message as { pollUpdateMessage?: unknown } | null | undefined)?.pollUpdateMessage
+  ));
+  if (upsert.type !== 'notify' && !hasRawPollUpdate) return;
 
   const telegramId = sessionOwnerMap.get(sessionId);
   if (!telegramId) return;
 
   for (const msg of upsert.messages) {
     if (!msg.message) continue;
+    const rawPollUpdate = (msg.message as { pollUpdateMessage?: {
+      pollCreationMessageKey?: { id?: string | null; remoteJid?: string | null } | null;
+      vote?: { encPayload?: Uint8Array | null; encIv?: Uint8Array | null } | null;
+      senderTimestampMs?: number | null;
+    } | null }).pollUpdateMessage;
+    const isRawPollUpdate = Boolean(rawPollUpdate);
+    // `append` is admitted only for raw poll updates; do not re-enable normal
+    // history-message command processing.
+    if (upsert.type !== 'notify' && !isRawPollUpdate) continue;
 
     // ── Dedupe + store ─────────────────────────────────────────
-    // Baileys can re-deliver the same upsert after a reconnect; dedupe by
-    // message id. Remember every message in the per-session store so Baileys'
-    // getMessage (quoted replies / LID resolution) has the full payload.
-    if (!markSeen(sessionId, msg.key?.id)) continue;
+    // Baileys can re-deliver the same upsert after a reconnect. Raw poll
+    // envelopes normally have their own key id, but use a stable poll/voter/
+    // timestamp fallback when that envelope id is absent.
+    const rawPollKey = rawPollUpdate?.pollCreationMessageKey;
+    const rawPollChat = rawPollKey?.remoteJid ?? msg.key?.remoteJid ?? '';
+    const rawPollDedupeId = isRawPollUpdate && rawPollKey?.id && rawPollUpdate
+      ? `poll-vote:${sessionId}:${rawPollChat}:${rawPollKey.id}:${msg.key?.participant ?? msg.key?.remoteJid ?? ''}:${rawPollUpdate.senderTimestampMs ?? ''}`
+      : undefined;
+    if (!markSeen(sessionId, msg.key?.id ?? rawPollDedupeId)) continue;
     rememberMessage(sessionId, msg);
 
     // AntiDelete cache — keep every message so a later revoke can be recovered
@@ -1018,24 +1039,40 @@ async function resolveGetKeyAuthor(): Promise<typeof getKeyAuthorFn> {
   return getKeyAuthorFn;
 }
 
-    const pollUpdate = (msg.message as { pollUpdateMessage?: {
-      pollCreationMessageKey?: { id?: string | null; remoteJid?: string | null } | null;
-      vote?: { encPayload?: Uint8Array | null; encIv?: Uint8Array | null } | null;
-    } | null } | null)?.pollUpdateMessage;
+    const pollUpdate = rawPollUpdate;
 
     if (pollUpdate?.pollCreationMessageKey?.id && pollUpdate.vote) {
       try {
         const sockUser = (socket as unknown as { user?: { id?: string; lid?: string } }).user;
         const meId = sockUser?.id ?? '';
         const meLid = sockUser?.lid;
+        const pollChatJid = pollUpdate.pollCreationMessageKey.remoteJid ?? msg.key.remoteJid ?? '';
+        logger.info('[PollGame] raw poll update received', {
+          sessionId,
+          upsertType: upsert.type,
+          voteMessageId: msg.key.id,
+          pollMsgId: pollUpdate.pollCreationMessageKey.id,
+          chatJid: pollChatJid,
+        });
         // Voter JID extraction mirrors the fork's reference decrypt block
         // (getKeyAuthor ordering: participantAlt → remoteJidAlt →
         // participant → remoteJid) so the HMAC sign + GCM AAD receive the
         // exact key-author bytes the voters used.
         const authorFn = await resolveGetKeyAuthor();
-        const voterJid = authorFn?.(msg.key as never, '') ?? msg.key.participant ?? msg.key.remoteJid ?? '';
+        const voterJid = authorFn?.(msg.key as never, meId) ?? msg.key.participant ?? msg.key.remoteJid ?? '';
+        const trackedQuestions = [
+          ...(pollGameEngine.getGame({ sessionId, chatJid: pollChatJid }, 'wyr')?.questions ?? []),
+          ...(pollGameEngine.getGame({ sessionId, chatJid: pollChatJid }, 'quiz')?.questions ?? []),
+        ];
+        if (!trackedQuestions.some((question) => question.pollMsgId === pollUpdate.pollCreationMessageKey!.id)) {
+          logger.warn('[PollGame] raw poll update has no tracked poll binding', {
+            sessionId,
+            chatJid: pollChatJid,
+            pollMsgId: pollUpdate.pollCreationMessageKey.id,
+          });
+        }
         await pollGameEngine.handleVote({
-          scope: { sessionId, chatJid: msg.key.remoteJid ?? '' },
+          scope: { sessionId, chatJid: pollChatJid },
           pollMsgId: pollUpdate.pollCreationMessageKey.id,
           voterJid,
           vote: { encPayload: pollUpdate.vote.encPayload ?? undefined, encIv: pollUpdate.vote.encIv ?? undefined },
