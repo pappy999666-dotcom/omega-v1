@@ -159,10 +159,13 @@ export function ownerOnly(): MiddlewareFn<Context> {
   return async (ctx, next) => {
     const isOwner = (ctx as Context & { isOwner?: boolean }).isOwner;
     if (!isOwner) {
+      await ctx.answerCbQuery('Owner only', { show_alert: true }).catch(() => {});
       await ctx.reply(
         '🔒 <b>Owner Only</b>\n<code>──────────────────────────────</code>\n\n<blockquote>This control is restricted to the bot owner.</blockquote>',
         { parse_mode: 'HTML' }
-      ).catch(() => {});
+      ).catch((error) => {
+        logger.warn('[Auth] owner-only response failed', { err: String(error) });
+      });
       return;
     }
     return next();

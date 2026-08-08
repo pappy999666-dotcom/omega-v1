@@ -127,6 +127,17 @@ export function sessionsListKeyboard(
   return { inline_keyboard: rows };
 }
 
+export function gameApiKeyboard(sessionId: string, configured: boolean): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [btn(configured ? '✅ Current Status' : '📊 Current Status', `session:${sessionId}:gameapi`, 'primary')],
+      [btn(configured ? '🔄 Change API Key' : '🔑 Setup API Key', `session:${sessionId}:gameapi:setup`, 'success')],
+      [btn('🧪 Test API', `session:${sessionId}:gameapi:test`, 'primary'), btn('📚 Tutorial', `session:${sessionId}:gameapi:tutorial`, 'primary')],
+      [btn('🔙 Back', `session:${sessionId}:menu`, 'primary')],
+    ],
+  };
+}
+
 export function sessionMenuKeyboard(sessionId: string, status?: string): InlineKeyboardMarkup {
   const isFrozen = status === 'FROZEN';
   const isActive = status === 'ACTIVE';
@@ -145,7 +156,7 @@ export function sessionMenuKeyboard(sessionId: string, status?: string): InlineK
       [btn('🚪 Leave GC', `session:${sessionId}:leavegc`, 'danger'), btn('📋 My Groups', `session:${sessionId}:mygroups`, 'primary')],
       [btn('🛡 Sudo List', `session:${sessionId}:sudo`, 'primary'), btn('🌉 Bridge', `session:${sessionId}:bridge`, 'primary')],
       [btn('📅 Auto-Promote', `session:${sessionId}:autopromo`, 'primary')],
-      [btn('🎮 Game API • Tutorial', `session:${sessionId}:gameapi`, 'primary')],
+      [btn('🎮 Game API', `session:${sessionId}:gameapi`, 'primary')],
       [btn('🔙 Back', 'sessions:list', 'primary')],
     ],
   };

@@ -18,7 +18,7 @@
 // Routing ids:
 //   menu:home:<m|g>                 → navigation hub (native list)
 //   menu:cat:<m|g>:<navId>[:page]   → category page (native list)
-//   menu:help:<m|g>:<page>          → paginated help (buttons)
+//   menu:help:<m|g>:<page>          → legacy help callback (compatibility)
 //   cmd:<m|g>:<navId>:<command>     → single-command help card
 //   run:ping                        → native ping table
 //
@@ -33,15 +33,15 @@ import { PreviewManager } from '../preview-engine/index.js';
 import { ALL_COMMANDS } from './command-parser.js';
 import {
   MENU_CATALOG,
-  categorySheetButton,
   renderNavHub,
   navHubButtons,
   renderNavCategoryPage,
-  helpPageText,
+  categoryPageButtons,
   navFor,
 } from './menu-registry.js';
 import { pingTableData } from './utils/native-rich.js';
 import { pingCard } from '../utils/ascii-art.js';
+import { generateWhatsAppHelp } from '../services/help.js';
 import { logger } from '../utils/logger.js';
 
 // ── Parsing ────────────────────────────────────────────────
@@ -233,9 +233,19 @@ async function sendMenuResponse(
 
 /** Navigation hub: compact text + one native quick_reply per category. */
 async function renderHub(ctx: InteractionContext, menuTarget: 'main' | 'group'): Promise<void> {
-  const { sessionId, telegramId } = ctx;
+  const { sessionId, telegramId, msg } = ctx;
   const config = loadSessionConfig(telegramId, sessionId);
-  await sendMenuResponse(ctx, renderNavHub(config.prefix, menuTarget, ALL_COMMANDS), navHubButtons(menuTarget));
+  const meta = loadSessionMeta(telegramId, sessionId);
+  await sendMenuResponse(
+    ctx,
+    renderNavHub(config.prefix, menuTarget, ALL_COMMANDS, {
+      timezone: config.timezone,
+      status: ctx.frozen ? 'FROZEN' : 'ONLINE',
+      userName: msg.pushName || undefined,
+      pairedAt: meta?.pairedAt ?? config.joinedAt,
+    }),
+    navHubButtons(menuTarget),
+  );
 }
 
 /**
@@ -250,22 +260,27 @@ async function renderCategory(
 ): Promise<void> {
   const { sessionId, telegramId } = ctx;
   const config = loadSessionConfig(telegramId, sessionId);
-  const sheet = categorySheetButton(config.prefix, menuTarget, navId, page, ALL_COMMANDS);
-  if (sheet.totalPages === 0) {
+  const text = renderNavCategoryPage(config.prefix, navId, page, menuTarget, ALL_COMMANDS);
+  if (!text.totalPages) {
     // Unknown or empty category — back to the hub.
     await renderHub(ctx, menuTarget);
     return;
   }
-  const text = renderNavCategoryPage(config.prefix, navId, page, menuTarget, ALL_COMMANDS);
-  await sendMenuResponse(ctx, text.text, sheet.buttons);
+  // One useful WhatsApp response per click: the full category list plus one
+  // Home action. No intermediate sheet or page navigation is sent.
+  await sendMenuResponse(
+    ctx,
+    text.text,
+    categoryPageButtons(menuTarget, navId, 1, 1),
+  );
 }
 
 /** Plain-text help page; page navigation is sent inside the text body. */
-async function renderHelp(ctx: InteractionContext, page: number, _menuTarget: 'main' | 'group'): Promise<void> {
+async function renderHelp(ctx: InteractionContext, _page: number, _menuTarget: 'main' | 'group'): Promise<void> {
   const { sessionId, telegramId } = ctx;
   const config = loadSessionConfig(telegramId, sessionId);
-  const res = helpPageText(config.prefix, page, 'all', ALL_COMMANDS);
-  await sendMenuResponse(ctx, res.text, undefined, false, true);
+  const text = generateWhatsAppHelp(config.prefix, false, undefined, ALL_COMMANDS);
+  await sendMenuResponse(ctx, text, undefined, false, true);
 }
 
 /** Single-command detail card with a Back button to its category. */
@@ -276,8 +291,7 @@ async function renderCommandHelp(ctx: InteractionContext, parts: string[]): Prom
   if (!cmdName || !MENU_CATALOG[cmdName]) return false;
   const { sessionId, telegramId } = ctx;
   const config = loadSessionConfig(telegramId, sessionId);
-  const { generateWhatsAppHelp } = await import('../services/help.js');
-  const detail = generateWhatsAppHelp(config.prefix, menuTarget === 'group', cmdName);
+  const detail = generateWhatsAppHelp(config.prefix, menuTarget === 'group', cmdName, ALL_COMMANDS);
   const back = navId
     ? [quickReply('⬅️ Back', `menu:cat:${targetTag(menuTarget)}:${navId}`)]
     : undefined;
@@ -344,7 +358,7 @@ function matchDisplayText(displayText: string): string | null {
     const nav = navFor(target).find((n) => n.label.toLowerCase() === cleaned);
     if (nav) return `menu:cat:${targetTag(target)}:${nav.id}`;
   }
-  if (cleaned === 'help') return 'menu:help:m:1';
+  if (cleaned === 'help') return 'menu:home:m';
   if (cleaned === 'menu' || cleaned === 'home') return 'menu:home:m';
   return null;
 }
@@ -375,7 +389,7 @@ export async function routeInteraction(ctx: InteractionContext): Promise<boolean
     } else if (parts[1] === 'cat') {
       await renderCategory(ctx, parts[3] ?? '', Number(parts[4]) || 1, menuTarget);
     } else if (parts[1] === 'help') {
-      await renderHelp(ctx, Number(parts[3]) || 1, menuTarget);
+      await renderHub(ctx, menuTarget);
     } else {
       return false;
     }

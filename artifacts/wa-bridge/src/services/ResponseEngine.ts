@@ -1,13 +1,13 @@
 // ============================================================
-// WA-Bridge — Centralized Response Theme Engine v2
-// Formal entry point for all structured response rendering.
+// WA-Bridge — Centralized Compact Response Renderer
 // ============================================================
 
-import { pappyBox, PappyBoxOptions, Theme, THEMES, getRandomTheme } from '../utils/pappy-engine.js';
-import { successCard, warningCard, errorCard, asciiBox } from '../utils/ascii-art.js';
+import { pappyBox as legacyPappyBox, THEMES, getRandomTheme, type Theme, type PappyBoxOptions } from '../utils/pappy-engine.js';
+
+export type ResponseType = 'success' | 'warning' | 'error' | 'info' | 'result' | 'custom';
 
 export interface RenderableResponse {
-  type: 'success' | 'warning' | 'error' | 'info' | 'result' | 'custom';
+  type: ResponseType;
   title: string;
   message?: string;
   rows?: [string, string][];
@@ -18,31 +18,76 @@ export interface RenderableResponse {
   theme?: string;
 }
 
-/**
- * The Central Renderer.
- * Converts structured response data into a formatted WhatsApp string.
- */
-export function renderResponse(res: RenderableResponse): string {
-  const theme = res.theme ? THEMES.find(t => t.name.toLowerCase() === res.theme?.toLowerCase()) : undefined;
-  
-  const emojiMap = {
-    success: '✅',
-    warning: '⚠️',
-    error: '❌',
-    info: 'ℹ️',
-    result: '📊',
-    custom: res.emoji || '◈'
-  };
-
-  return pappyBox({
-    title: res.title,
-    emoji: emojiMap[res.type] || res.emoji,
-    rows: res.rows || [],
-    footer: res.message || res.footer || res.details,
-    moduleIdentity: res.module,
-    theme
-  });
+export interface CompactResponseOptions {
+  title: string;
+  detail?: string;
+  rows?: [string, string][];
+  emoji?: string;
 }
 
-export type { Theme, PappyBoxOptions };
-export { THEMES, getRandomTheme, pappyBox };
+function normalizeTitle(value: string): string {
+  return value.replace(/^[\s✅❌⚠️ℹ️⚡️📊⚙️]+/u, '').trim();
+}
+
+function renderRows(rows: [string, string][] = []): string[] {
+  return rows.map(([label, value]) => `└ ${label}: ${value}`);
+}
+
+/** The smallest useful response for a successful action. */
+export function mini(title: string, detail?: string, emoji = '✅'): string {
+  return [
+    `${emoji} ${normalizeTitle(title)}`,
+    detail ? `└ ${detail}` : '',
+  ].filter(Boolean).join('\n');
+}
+
+export function success(title: string, detail?: string, rows: [string, string][] = []): string {
+  return [mini(title, detail, '✅'), ...renderRows(rows)].filter(Boolean).join('\n');
+}
+
+export function error(title: string, detail?: string, rows: [string, string][] = []): string {
+  return [mini(title, detail, '❌'), ...renderRows(rows)].filter(Boolean).join('\n');
+}
+
+export function warning(title: string, detail?: string, rows: [string, string][] = []): string {
+  return [mini(title, detail, '⚠️'), ...renderRows(rows)].filter(Boolean).join('\n');
+}
+
+export function info(title: string, detail?: string, rows: [string, string][] = []): string {
+  return [mini(title, detail, 'ℹ️'), ...renderRows(rows)].filter(Boolean).join('\n');
+}
+
+export function config(title: string, rows: [string, string][], detail?: string): string {
+  return [mini(title, detail, '⚙️'), ...renderRows(rows)].filter(Boolean).join('\n');
+}
+
+/** Explicit help responses may use the larger branded layout. */
+export function help(body: string): string {
+  return body;
+}
+
+export function menu(body: string): string {
+  return body;
+}
+
+export function category(body: string): string {
+  return body;
+}
+
+export function renderResponse(res: RenderableResponse): string {
+  const detail = res.message ?? res.footer ?? res.details;
+  switch (res.type) {
+    case 'success': return success(res.title, detail, res.rows);
+    case 'warning': return warning(res.title, detail, res.rows);
+    case 'error': return error(res.title, detail, res.rows);
+    case 'info': return info(res.title, detail, res.rows);
+    case 'result': return mini(res.title, detail, res.emoji ?? '📊');
+    case 'custom': return mini(res.title, detail, res.emoji ?? '◈');
+  }
+}
+
+// Compatibility exports: theme-aware callers retain the original renderer.
+export { Theme, PappyBoxOptions, THEMES, getRandomTheme };
+export function pappyBox(options: PappyBoxOptions): string {
+  return legacyPappyBox(options);
+}

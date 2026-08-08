@@ -262,7 +262,7 @@ function buildSvg(data: CanvasData): string {
   <rect x="54" y="1750" width="972" height="86" rx="18" fill="#0b2530" stroke="#14dfff" stroke-opacity=".75" stroke-width="2"/>
   ${text(84, 1803, '◆ PREMIUM // BUCKET CAPACITY  •  LIVE SYSTEM  •  ', 17, '#5bffcf', 700)}
   ${text(996, 1803, data.version, 17, '#d9fbff', 700, 'end')}
-  ${text(540, 1878, '𝕻𝕬𝕻𝕻𝖄 ×͜×', 22, '#62edff', 700, 'middle')}
+  ${text(540, 1878, '𝗢𝗠𝗘𝗚𝗔 • 𝗩𝟭', 22, '#62edff', 700, 'middle')}
 </svg>`;
 }
 

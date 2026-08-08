@@ -5,6 +5,7 @@
 // ============================================================
 
 import { pappyBox } from './pappy-engine.js';
+import { error as compactError, info as compactInfo, mini, success as compactSuccess, warning as compactWarning, config as compactConfig } from '../services/ResponseEngine.js';
 
 export interface AsciiBoxOptions {
   title: string;
@@ -22,13 +23,14 @@ export const quote = (value: string): string => value.split('\n').map((line) => 
 
 /** Compact, native WhatsApp card. */
 export function asciiBox(opts: AsciiBoxOptions): string {
-  return pappyBox({
-    title: opts.title,
-    rows: opts.rows,
-    footer: opts.footer,
-    emoji: opts.emoji,
-    moduleIdentity: opts.moduleIdentity,
-  });
+  const emoji = opts.emoji ?? '';
+  const detail = opts.footer;
+  if (emoji.startsWith('✅')) return compactSuccess(opts.title, detail, opts.rows);
+  if (emoji.startsWith('❌')) return compactError(opts.title, detail, opts.rows);
+  if (emoji.startsWith('⚠️')) return compactWarning(opts.title, detail, opts.rows);
+  if (emoji.startsWith('ℹ️')) return compactInfo(opts.title, detail, opts.rows);
+  if (emoji.startsWith('⚙️')) return compactConfig(opts.title, opts.rows, detail);
+  return [mini(opts.title, detail, emoji || '◈'), ...opts.rows.map(([label, value]) => `└ ${label}: ${value}`)].filter(Boolean).join('\\n');
 }
 
 /** Lightweight spacing divider */

@@ -44,6 +44,10 @@ export interface MenuEntry {
   args?: string;
   /** Expected output description */
   output?: string;
+  /** Alternate command names shown by the help engine. */
+  aliases?: string[];
+  /** Important caveats or supported options shown by the help engine. */
+  notes?: string[];
   /** Which menu this entry appears in: 'main' | 'group' | 'both' */
   target?: 'main' | 'group' | 'both';
   /** Optional navigation domain used to build complete category pages. */
@@ -134,7 +138,7 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
     permissions: 'Owner / Sudo',
     examples: ['wcg', 'join'],
     output: 'Scoped Word Chain session with mentions, timers and cleanup.' },
-  ttt: { section: '🎮 GAMES', syntax: 'ttt @user', desc: 'Challenge a user to Tic-Tac-Toe', target: 'both',
+  ttt: { section: '🎮 GAMES', syntax: 'ttt @user', desc: 'Challenge a user to Tic-Tac-Toe', target: 'both', aliases: ['tictactoe'],
     usage: 'Challenge a mentioned user. The challenge must be accepted before moves begin. Use A1 through C3 for moves.',
     permissions: 'Owner / Sudo',
     inputs: ['@Mention'],
@@ -540,6 +544,8 @@ export function buildGroupMenuSections(
 // Prev / Next / Home buttons.
 // ═══════════════════════════════════════════════════════════
 
+// Kept as an internal compatibility constant for older imports. WhatsApp
+// category rendering no longer uses pagination.
 export const MENU_PAGE_SIZE = 6;
 
 /** Commands that require the premium tier — flagged 💎 in help pages. */
@@ -611,33 +617,22 @@ const CONFIGURATION_NAV_COMMANDS = [
   'collect', 'autopromo', 'menu', 'help', 'gmenu',
 ];
 
-// The command registry remains the source of truth for each live count and
-// category page; these arrays only define the domain boundaries.
+// Four WhatsApp-native dashboard domains. The command arrays are intentionally
+// empty: command membership is resolved from MENU_CATALOG + the live parser
+// registry below, so counts cannot drift when commands are added or removed.
 export const MAIN_NAV: NavCategory[] = [
-  { id: 'pair', label: 'Pair', emoji: '🔗', desc: 'Use any prefix then pair your number', commands: ['pair'] },
-  { id: 'help', label: 'Help', emoji: '📖', desc: 'List every command in plain text — send .help 2 for the next page', commands: ['help'] },
-  { id: 'status', label: 'Status', emoji: '📲', desc: 'Every status, broadcast, recovery & automation command', commands: [], showAll: true },
-  { id: 'messaging', label: 'Messaging', emoji: '💬', desc: 'Send to one, many, or every group', commands: MESSAGING_NAV_COMMANDS },
-  { id: 'group', label: 'Group', emoji: '⚔️', desc: 'Kick, ban, warn, polls & events', commands: GROUP_MODERATION_COMMANDS, showAll: true },
-  { id: 'promo', label: 'Promotion', emoji: '⬆️', desc: 'Admin promotion, demotion & guards', commands: ['promote', 'demote', 'antipromote', 'antidemote'], showAll: true },
-  { id: 'anti', label: 'Anti-System', emoji: '🛡️', desc: 'Link, spam, media & words', commands: ANTI_COMMANDS, showAll: true },
-  { id: 'info', label: 'Info', emoji: 'ℹ️', desc: 'Ping, status, groups & users', commands: ['ping', 'info', 'groups', 'jid', 'userinfo', 'getinfo', 'idea'], showAll: true },
-  { id: 'utils', label: 'Utilities', emoji: '🧰', desc: 'Tag, lifecycle, stickers & join tools', commands: UTILITY_NAV_COMMANDS, fallback: true },
-  { id: 'sessions', label: 'Sessions', emoji: '🖥️', desc: 'List, switch, restart & manage sessions', commands: SESSION_NAV_COMMANDS },
-  { id: 'config', label: 'Configuration', emoji: '⚙️', desc: 'Prefix, access, response & menu settings', commands: CONFIGURATION_NAV_COMMANDS },
+  { id: 'group', label: 'Group', emoji: '⚔️', desc: 'Moderation, polls & events', commands: [], showAll: true },
+  { id: 'status', label: 'Status', emoji: '📲', desc: 'Auto-view, broadcast & sync', commands: [], showAll: true },
+  { id: 'game', label: 'Game', emoji: '🎮', desc: 'Multiplayer chains & trivia', commands: [], showAll: true },
+  { id: 'extras', label: 'Extras', emoji: '🧰', desc: 'Anti-system, tools & info', commands: [], showAll: true },
 ];
 
-export const GROUP_NAV: NavCategory[] = [
-  { id: 'group', label: 'Group', emoji: '⚔️', desc: 'Kick, ban, warn, polls & events', commands: GROUP_MODERATION_COMMANDS },
-  { id: 'promo', label: 'Promotion', emoji: '⬆️', desc: 'Admin promotion, demotion & guards', commands: ['promote', 'demote', 'antipromote', 'antidemote'] },
-  { id: 'anti', label: 'Anti', emoji: '🛡️', desc: 'Full Anti System — link, spam, media, words', commands: ANTI_COMMANDS },
-  { id: 'status', label: 'Status', emoji: '📲', desc: 'Every status, broadcast, recovery & automation command', commands: [], showAll: true },
-  { id: 'info', label: 'Info', emoji: 'ℹ️', desc: 'Ping, status, groups & users', commands: ['ping', 'info', 'groups', 'jid', 'userinfo', 'getinfo', 'idea'], showAll: true },
-  { id: 'utils', label: 'Utilities', emoji: '🧰', desc: 'Tag, lifecycle, stickers & join tools', commands: UTILITY_NAV_COMMANDS, fallback: true },
-];
+// Keep a separate target alias for callers that intentionally render a group
+// command context. The dashboard itself remains the same four routes.
+export const GROUP_NAV: NavCategory[] = MAIN_NAV;
 
-export function navFor(menuTarget: 'main' | 'group'): NavCategory[] {
-  return menuTarget === 'group' ? GROUP_NAV : MAIN_NAV;
+export function navFor(_menuTarget: 'main' | 'group'): NavCategory[] {
+  return MAIN_NAV;
 }
 
 export function navCategoryById(menuTarget: 'main' | 'group', id: string): NavCategory | undefined {
@@ -650,6 +645,7 @@ export interface NavCommandLine {
   /** Prefixed display form (e.g. ".kick"). */
   cmd: string;
   desc: string;
+  section?: string;
   usage?: string;
   permissions?: string;
   premium?: boolean;
@@ -668,31 +664,28 @@ const PROMOTION_COMMANDS = new Set(['promote', 'demote', 'antipromote', 'antidem
  * adding a registered command to the appropriate target/section updates the
  * count and category page automatically.
  */
+function dashboardCategoryForCommand(command: string, entry?: MenuEntry): NavCategory['id'] {
+  if (entry?.section.includes('GAMES')) return 'game';
+  if (entry?.navCategory === 'status') return 'status';
+  // Broadcast commands historically lived in the status engine even when
+  // their old section label was MODERATION.
+  if (/^(?:tochat|tochatx|togstatus|togstatusx|allchat|allstatus|allgstatus|allstatusx|spam|stopspam|stop)$/u.test(command)) return 'status';
+  if (entry?.target === 'group' || entry?.section.includes('MODERATION')) return 'group';
+  return 'extras';
+}
+
+/** Resolve every live, visible command into one of the four dashboard routes. */
 function registeredCommandsForNav(
   nav: NavCategory,
-  menuTarget: 'main' | 'group'
+  _menuTarget: 'main' | 'group',
+  knownCommands: readonly string[] = []
 ): string[] {
-  // These categories have explicit domain boundaries. Resolve their command
-  // lines from the registry below, rather than from a second partial list or
-  // from section names (status commands intentionally use several sections).
-  if (nav.id === 'status') {
-    return Object.entries(MENU_CATALOG)
-      .filter(([, entry]) => !entry.hidden && entry.navCategory === 'status')
-      .map(([name]) => name);
-  }
-  if (nav.id === 'group' || nav.id === 'info' || nav.id === 'utils'
-    || nav.id === 'messaging' || nav.id === 'sessions' || nav.id === 'config') {
-    return nav.commands;
-  }
-  if (nav.id === 'pair') return ['pair'];
-  if (nav.id === 'help') return ['help'];
-  if (nav.id === 'promo') return [...PROMOTION_COMMANDS];
-  if (nav.id === 'anti') {
-    return Object.entries(MENU_CATALOG)
-      .filter(([, entry]) => !entry.hidden && entry.section.includes('ANTI SYSTEM'))
-      .map(([name]) => name);
-  }
-  return nav.commands;
+  const registered = knownCommands.length > 0 ? knownCommands : Object.keys(MENU_CATALOG);
+  return registered.filter((name) => {
+    const entry = MENU_CATALOG[name];
+    if (entry?.hidden) return false;
+    return dashboardCategoryForCommand(name, entry) === nav.id;
+  });
 }
 
 export function navCommandLines(
@@ -702,19 +695,24 @@ export function navCommandLines(
   knownCommands: readonly string[]
 ): NavCommandLine[] {
   const lines: NavCommandLine[] = [];
-  const commandNames = registeredCommandsForNav(nav, menuTarget);
+  const commandNames = registeredCommandsForNav(nav, menuTarget, knownCommands);
   for (const cmdName of commandNames) {
     const entry = MENU_CATALOG[cmdName];
     if (entry?.hidden) continue;
     // The command parser is authoritative when supplied. This keeps category
     // counts and pages synchronized as commands are added or removed.
     if (knownCommands.length > 0 && !knownCommands.includes(cmdName)) continue;
+    // Dashboard categories are deliberately complete: Group remains useful
+    // from a DM and Status/Game commands remain discoverable in group chats.
+    // The registry target still guards genuinely scoped category entries when
+    // a future category opts out of showAll.
     if (entry && !nav.showAll && !entryMatchesTarget(entry, menuTarget)) continue;
     if (!entry && knownCommands.length === 0) continue;
     lines.push({
       name: cmdName,
       cmd: prefix + (entry?.syntax ?? cmdName),
       desc: entry?.desc ?? '—',
+      section: entry?.section,
       usage: entry?.usage,
       permissions: entry?.permissions,
       premium: PREMIUM_COMMANDS.has(cmdName),
@@ -737,6 +735,8 @@ export interface NavHubOptions {
   status?: string;
   /** The command sender's pushName / display name. */
   userName?: string;
+  /** Pairing timestamp used for the dashboard sync age. */
+  pairedAt?: number;
 }
 
 /** Format a timestamp in the session timezone (falls back to server time). */
@@ -779,30 +779,33 @@ export function renderNavHub(
   opts: NavHubOptions = {}
 ): string {
   const safePrefix = prefix && prefix.trim() ? prefix.trim() : 'None';
-  const status = (opts.status ?? 'ONLINE') === 'ONLINE' ? 'Online' : (opts.status ?? 'ONLINE');
+  const now = formatInTimezone(opts.timezone);
+  const user = opts.userName?.trim() || 'Operator';
+  const pairedDays = opts.pairedAt && Number.isFinite(opts.pairedAt)
+    ? Math.max(0, Math.floor((Date.now() - opts.pairedAt) / 86_400_000))
+    : 0;
   const lines: string[] = [
-    '𝗢 𝗠 𝗘 𝗚 𝗔  𝄜  𝗡 𝗔 𝗩 𝗜 𝗚 𝗔 𝗧 𝗜 𝑶 𝑵',
+    '╭─── ⟡ 𝗢𝗠𝗘𝗚𝗔-𝗩𝟭 𝗠𝗘𝗡𝗨 ⟡ ───╮',
     '',
-    `Status: ${status}  •  Prefix: ${safePrefix}`,
+    '[⚡] 𝗤𝗨𝗜𝗖𝗞 𝗔𝗖𝗧𝗜𝗢𝗡𝗦:',
+    '▸ Use `help <cmd>` to inspect it',
+    `▸ Use \`${safePrefix}pair <number>\` to link`,
+    `  └ Ex: ${safePrefix}pair 2348000000000`,
     '',
+    '[⚙️] 𝗦𝗬𝗦𝗧𝗘𝗠 𝗗𝗔𝗧𝗔:',
+    `▸ User: @${user.replace(/^@/u, '')}`,
+    `▸ Time: ${now.time} • ${now.date}`,
+    `▸ Sync: ${pairedDays} Days Paired`,
+    `▸ Core: 𝗢𝗻𝗹𝗶𝗻𝗲 🟢 | Pfx: ${safePrefix === 'None' ? '𝗡𝗼𝗻𝗲' : safePrefix}`,
+    '',
+    '[📑] 𝗠𝗘𝗡𝗨 𝗥𝗢𝗨𝗧𝗘𝗦:',
   ];
   for (const nav of navFor(menuTarget)) {
-    if (nav.id === 'pair') {
-      lines.push('✦ 🔗 Pair');
-      lines.push('Use any prefix then pair your number.');
-      lines.push('Example:');
-      lines.push('23470288288288');
-    } else {
-      const count = navCommandLines(prefix, nav, menuTarget, knownCommands).length;
-      lines.push(`✦ ${nav.emoji} ${nav.label} ── [${count}]`);
-      lines.push(nav.desc);
-    }
-    lines.push('');
+    const count = navCommandLines(prefix, nav, menuTarget, knownCommands).length;
+    lines.push(`✦ ${nav.emoji} ${nav.label} ── [${count}]`);
+    lines.push(`  └ ${nav.desc}`);
   }
-  lines.push('· · ────────────────────── · ·');
-  lines.push('💎 Premium:');
-  lines.push('Unlimited Bucket Capacity.');
-  lines.push('· · ——— 𝗢𝗠𝗘𝗚𝗔 • 𝗩𝟭 ——— · ·');
+  lines.push('', '╰── 💎 𝗣𝗿𝗲𝗺𝗶𝘂𝗺 𝗘𝗻𝗮𝗯𝗹𝗲𝗱 ──╯');
   return lines.join('\n');
 }
 
@@ -834,15 +837,9 @@ function compactMenuCommand(command: string, prefix: string): string {
   return `${boldMenuText(match[1]!)}${match[2] ?? ''}`;
 }
 
-const COMPACT_CATEGORY_DESCRIPTIONS: Record<string, string> = {
-  vv: 'Recover View Once media (reply)',
-  vvdm: 'Recover View Once to Saved Messages',
-  autovv: 'Auto-recover every view-once in chat',
-  antidelete: 'Recover messages deleted by participants',
-  sstatus: 'Save a replied contact status',
-};
+const COMPACT_CATEGORY_DESCRIPTIONS: Record<string, string> = {};
 
-/** One compact category page with bold commands and short permission lines. */
+/** Render one complete category response. WhatsApp navigation is not paginated. */
 export function renderNavCategoryPage(
   prefix: string,
   navId: string,
@@ -854,22 +851,46 @@ export function renderNavCategoryPage(
   if (!nav) return { text: '', totalPages: 0 };
   const lines = navCommandLines(prefix, nav, menuTarget, knownCommands);
   if (lines.length === 0) return { text: '', totalPages: 0 };
-  const totalPages = Math.max(1, Math.ceil(lines.length / MENU_PAGE_SIZE));
-  const p = clampPage(page, totalPages);
-  const slice = lines.slice((p - 1) * MENU_PAGE_SIZE, p * MENU_PAGE_SIZE);
-  const body = slice.flatMap((line) => {
-    const command = compactMenuCommand(line.cmd, prefix) + (line.premium ? ' 💎' : '');
-    const description = COMPACT_CATEGORY_DESCRIPTIONS[line.name] ?? line.desc;
-    const permission = line.permissions ? `• Perm: ${line.permissions}` : '';
-    return [`✦ ${command}`, `  └─ ${description}`, permission ? `  ${permission}` : '', ''].filter((line) => line !== undefined);
-  });
+  // Category navigation intentionally sends one complete response. Keep the
+  // page argument for source compatibility with older callback ids.
+  const totalPages = 1;
+  const p = 1;
+  const categoryHeading = (line: NavCommandLine): string => {
+    if (navId === 'status') return line.name.startsWith('vv') || line.name === 'autovv' || line.name === 'antidelete' || line.name === 'sstatus'
+      ? '[🛡️] 𝗥𝗘𝗖𝗢𝗩𝗘𝗥𝗬 & 𝗔𝗨𝗧𝗢𝗠𝗔𝗧𝗜𝗢𝗡'
+      : '[📲] 𝗦𝗧𝗔𝗧𝗨𝗦 & 𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧';
+    if (navId === 'group') return line.section?.includes('ANTI') ? '[🛡️] 𝗔𝗡𝗧𝗜-𝗦𝗬𝗦𝗧𝗘𝗠' : '[⚔️] 𝗚𝗥𝗢𝗨𝗣 𝗠𝗢𝗗𝗘𝗥𝗔𝗧𝗜𝗢𝗡';
+    if (navId === 'game') return '[🎮] 𝗠𝗨𝗟𝗧𝗜𝗣𝗟𝗔𝗬𝗘𝗥 & 𝗧𝗥𝗜𝗩𝗜𝗔';
+    return line.section?.includes('ANTI') ? '[🛡️] 𝗔𝗡𝗧𝗜-𝗦𝗬𝗦𝗧𝗘𝗠' : '[🧰] 𝗧𝗢𝗢𝗟𝗦 & 𝗜𝗡𝗙𝗢';
+  };
+  const groups = new Map<string, NavCommandLine[]>();
+  for (const line of lines) {
+    const heading = categoryHeading(line);
+    const group = groups.get(heading) ?? [];
+    group.push(line);
+    groups.set(heading, group);
+  }
+  const body: string[] = [];
+  for (const [heading, group] of groups) {
+    if (body.length) body.push('');
+    body.push(heading, '');
+    for (const line of group) {
+      const command = compactMenuCommand(line.cmd, prefix) + (line.premium ? ' 💎' : '');
+      const description = COMPACT_CATEGORY_DESCRIPTIONS[line.name] ?? line.desc;
+      const permission = line.permissions ? `• Perm: ${line.permissions}` : '';
+      body.push(`✦ ${command}`, `  └─ ${description}`);
+      if (permission) body.push(`  ${permission}`);
+      body.push('');
+    }
+  }
   const text = [
-    `${nav.emoji} ${[...nav.label.toUpperCase()].map((char) => boldMenuText(char)).join(' ')}  𝄜  ${boldMenuText(String(p))} / ${boldMenuText(String(totalPages))}`,
+    `╭─── ⟡ 𝗢𝗠𝗘𝗚𝗔 𝗖𝗢𝗠𝗠𝗔𝗡𝗗𝗦 ⟡ ───╮`,
+    '',
+    `${nav.emoji} ${boldMenuText(nav.label.toUpperCase())}:`,
     '',
     ...body,
-    '· · ────────────────────── · ·',
-    'Use the buttons to navigate.',
-    '· · ——— 𝕻𝕬𝕻𝕻𝖞 ×͜× ——— · ·',
+    '╰── ────────────────── ──╯',
+    '· · ——— 𝗢𝗠𝗘𝗚𝗔 • 𝗩𝟭 ——— · ·',
   ].join('\n');
   return { text, totalPages };
 }
@@ -889,6 +910,7 @@ export function allHelpLines(
       name: cmdName,
       cmd: prefix + entry.syntax,
       desc: entry.desc,
+      section: entry.section,
       usage: entry.usage,
       permissions: entry.permissions,
       premium: PREMIUM_COMMANDS.has(cmdName),
@@ -1042,8 +1064,7 @@ export function categoryPageButtons(
 ): { name: string; buttonParamsJson: string }[] {
   const t = targetTag(menuTarget);
   const buttons: { name: string; buttonParamsJson: string }[] = [];
-  if (page > 1) buttons.push(quickReply('⬅️ Prev', `menu:cat:${t}:${navId}:${page - 1}`));
-  if (page < totalPages) buttons.push(quickReply('Next ➡️', `menu:cat:${t}:${navId}:${page + 1}`));
+  // Category pages are complete responses; only offer a single return route.
   buttons.push(quickReply('🏠 Menu', `menu:home:${t}`));
   return buttons;
 }
@@ -1088,12 +1109,14 @@ export function categorySheet(
   const lines = navCommandLines(prefix, nav, menuTarget, knownCommands);
   if (lines.length === 0) return { title: 'Menu', sections: [], totalPages: 0 };
 
-  const totalPages = Math.max(1, Math.ceil(lines.length / MENU_PAGE_SIZE));
-  const p = clampPage(page, totalPages);
+  // Category navigation is one response, not a page sequence. The list sheet
+  // remains available as a convenience on clients that support it, but it
+  // contains the complete registered category and only a Home row.
+  const totalPages = 1;
+  const p = 1;
   const t = targetTag(menuTarget);
-  const slice = lines.slice((p - 1) * MENU_PAGE_SIZE, p * MENU_PAGE_SIZE);
 
-  const rows: NativeListRow[] = slice.map((l) => {
+  const rows: NativeListRow[] = lines.map((l) => {
     const meta: string[] = [];
     if (l.usage) meta.push(l.usage);
     if (l.permissions) meta.push(`Perm: ${l.permissions}`);
@@ -1105,9 +1128,7 @@ export function categorySheet(
   });
 
   const navRows: NativeListRow[] = [];
-  if (p > 1) navRows.push({ title: '⬅️ Prev', rowId: `menu:cat:${t}:${navId}:${p - 1}` });
   navRows.push({ title: '🏠 Menu', rowId: `menu:home:${t}` });
-  if (p < totalPages) navRows.push({ title: 'Next ➡️', rowId: `menu:cat:${t}:${navId}:${p + 1}` });
 
   return {
     title: `${nav.emoji} ${nav.label} — ${p}/${totalPages}`,
@@ -1137,8 +1158,6 @@ export function categorySheetButton(
   if (sheet.totalPages === 0) return { buttons: [], totalPages: 0 };
   const t = targetTag(menuTarget);
   const buttons = [singleSelectButton(`📂 ${sheet.title}`, sheet.sections)];
-  if (page > 1) buttons.push(quickReply('⬅️ Prev', `menu:cat:${t}:${navId}:${page - 1}`));
-  if (page < sheet.totalPages) buttons.push(quickReply('Next ➡️', `menu:cat:${t}:${navId}:${page + 1}`));
   buttons.push(quickReply('🏠 Menu', `menu:home:${t}`));
   return { buttons, totalPages: sheet.totalPages };
 }

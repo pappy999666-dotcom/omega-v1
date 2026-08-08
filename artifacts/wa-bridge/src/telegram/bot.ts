@@ -122,6 +122,7 @@ import {
   groupBridgeActiveKeyboard,
   adminMenuUrlManagerKeyboard,
   adminMenuUrlEditKeyboard,
+  gameApiKeyboard,
 } from './ui/keyboards.js';
 import { mainMenu, header, H, escape, card, noticeCard, safe } from '../utils/formatter.js';
 import { getSocket, getUserSockets, isFrozen } from '../whatsapp/socket-manager.js';
@@ -202,6 +203,7 @@ interface BotContext extends Context {
     // ── Tutorial Manager (admin) ──
     awaitingTutorialCommand?: boolean;
     tutorialPending?: { command: string; type?: 'image' | 'video' };
+    awaitingGameApiSessionId?: string;
     awaitingApproveCountrySessionId?: string;
     awaitingApproveCountryGcJid?: string;
     awaitingPromoteSessionId?: string;
@@ -232,6 +234,17 @@ function resetOnboarding(ctx: BotContext): void {
 
 function sessionOwner(ctx: BotContext, sessionId: string): string {
   return ctx.isOwner ? findSessionOwner(sessionId) ?? ctx.telegramId : ctx.telegramId;
+}
+
+/** Resolve a callback session only when it belongs to this user, or the bot owner. */
+function sessionAccess(ctx: BotContext, sessionId: string): { ownerId: string; meta: ReturnType<typeof loadSessionMeta> } | null {
+  const ownMeta = loadSessionMeta(ctx.telegramId, sessionId);
+  if (ownMeta) return { ownerId: ctx.telegramId, meta: ownMeta };
+  if (!ctx.isOwner) return null;
+  const ownerId = findSessionOwner(sessionId);
+  if (!ownerId) return null;
+  const meta = loadSessionMeta(ownerId, sessionId);
+  return meta ? { ownerId, meta } : null;
 }
 
 function makeDraftSessionId(telegramId: string, phone: string): string {
@@ -572,6 +585,31 @@ export function createBot(): Telegraf<BotContext> {
   bot.on('text', async (ctx) => {
     const text = ctx.message.text;
     if (text.startsWith('/')) return;
+
+    if (ctx.session?.awaitingGameApiSessionId) {
+      const sessionId = ctx.session.awaitingGameApiSessionId;
+      delete ctx.session.awaitingGameApiSessionId;
+      const ownerId = sessionOwner(ctx as BotContext, sessionId);
+      const meta = loadSessionMeta(ownerId, sessionId);
+      if (!meta) {
+        await ctx.reply(noticeCard('Game API Failed', 'That WhatsApp session no longer exists.', 'error'), { parse_mode: 'HTML' });
+        return;
+      }
+      const key = text.trim();
+      if (!key || key.length > 512 || /\s/u.test(key)) {
+        await ctx.reply(noticeCard('Invalid API Key', 'Send a single API key value, then try Setup again.', 'warning'), {
+          parse_mode: 'HTML',
+          reply_markup: gameApiKeyboard(sessionId, Boolean(loadSessionConfig(ownerId, sessionId).gameApiKey)),
+        });
+        return;
+      }
+      updateSessionConfig(ownerId, sessionId, { gameApiKey: key });
+      await ctx.reply(noticeCard('Game API Saved', `The key is stored privately for ${meta.label ?? meta.sessionName ?? sessionId}.`, 'success'), {
+        parse_mode: 'HTML',
+        reply_markup: gameApiKeyboard(sessionId, true),
+      });
+      return;
+    }
 
     await processReleaseUsername(ctx as BotContext);
     await processAdminIdeaReply(ctx as BotContext);
@@ -1670,7 +1708,7 @@ export function createBot(): Telegraf<BotContext> {
 
     try {
       // gcset handles its own answerCbQuery with show_alert for feedback
-      if (action !== 'gcset') await ctx.answerCbQuery().catch(() => {});
+      if (action !== 'gcset')      await ctx.answerCbQuery().catch(() => {});
       await routeCallback(bc, action!, params);
     } catch (err) {
       const errStr = String(err);
@@ -1681,9 +1719,12 @@ export function createBot(): Telegraf<BotContext> {
         return;
       }
       logger.error('[Bot] Callback error', { data, err: errStr });
+      await ctx.answerCbQuery('Action failed', { show_alert: true }).catch(() => {});
       await ctx.reply(noticeCard('Action Failed', 'The selected action could not be completed.', 'error', errStr), {
         parse_mode: 'HTML',
-      }).catch(() => {});
+      }).catch((replyError) => {
+        logger.error('[Bot] Callback failure response failed', { data, err: String(replyError) });
+      });
     }
   });
 
@@ -1726,6 +1767,7 @@ function clearAllAwaitingStates(ctx: BotContext): void {
   delete ctx.session.awaitingGlobalMenuUrl;
   delete ctx.session.awaitingTutorialCommand;
   delete ctx.session.tutorialPending;
+  delete ctx.session.awaitingGameApiSessionId;
   delete ctx.session.awaitingProfilePhotoSessionId;
   delete ctx.session.awaitingGcPfpSessionId;
   delete ctx.session.awaitingGcPfpJid;
@@ -1987,44 +2029,103 @@ async function routeCallback(
       ).catch(() => {});
       return;
     }
-    if (sub === 'gameapi') {
-      const ownerId = sessionOwner(ctx, sessionId);
-      const meta = loadSessionMeta(ownerId, sessionId);
-      if (!meta) { await ctx.answerCbQuery('Session not found', { show_alert: true }).catch(() => {}); return; }
+    if (sub === 'gameapi' && !params[2]) {
+      const access = sessionAccess(ctx, sessionId);
+      const ownerId = access?.ownerId;
+      const meta = access?.meta;
+      if (!access || !ownerId || !meta) { await ctx.answerCbQuery('Session unavailable', { show_alert: true }).catch(() => {}); return; }
       const cfg = loadSessionConfig(ownerId, sessionId);
-      await ctx.editMessageText([
-        header('Game API • Session Tutorial', '🎮'),
+      const statusText = cfg.gameApiKey ? 'Configured (key hidden)' : 'Not configured';
+      const statusBody = [
+        header('Game API • Session Setup', '🎮'),
         '',
-        'Quiz and Would You Rather use the Game API configured only for this WhatsApp session.',
+        'This interface controls only the selected WhatsApp session.',
         '',
-        '1. Create an API key with your chosen OpenAI-compatible provider.',
-        `2. Open the paired WhatsApp session and send ${H.code('.gameapi guide')}.`,
-        `3. Send ${H.code('.gameapi <key>')} to save it privately for this session.`,
-        `4. Optionally set ${H.code('.gameapi model <model>')} and ${H.code('.gameapi endpoint <groq|xai|openai|url>')}.`,
-        `5. Send ${H.code('.gameapi test')} to make a real provider request.`,
-        `6. Start ${H.code('.wyr')} or ${H.code('.quiz')} in a group.`,
+        H.bold('Current status:') + ` ${statusText}`,
+        H.bold('Provider:') + ` ${safe(cfg.gameApiEndpoint ?? 'Groq (default)')}`,
+        H.bold('Model:') + ` ${safe(cfg.gameApiModel ?? 'llama-3.3-70b-versatile')}`,
         '',
-        cfg.gameApiKey ? 'Status: configured (key hidden)' : 'Status: not configured',
+        'Use Setup / Change API Key to save credentials privately, Test API to verify the current key, or Tutorial for provider instructions.',
+      ].join('\\n');
+      await ctx.editMessageText(statusBody, { parse_mode: 'HTML', reply_markup: gameApiKeyboard(sessionId, Boolean(cfg.gameApiKey)) }).catch(async (error) => {
+        logger.warn('[Bot] Game API interface edit failed, replying fresh', { sessionId, err: String(error) });
+        await ctx.reply(statusBody, { parse_mode: 'HTML', reply_markup: gameApiKeyboard(sessionId, Boolean(cfg.gameApiKey)) }).catch((replyError) => {
+          logger.error('[Bot] Game API interface response failed', { sessionId, err: String(replyError) });
+        });
+      });
+      return;
+    }
+
+    if (sub === 'gameapi' && params[2] === 'setup') {
+      const access = sessionAccess(ctx, sessionId);
+      const ownerId = access?.ownerId;
+      const meta = access?.meta;
+      if (!access || !ownerId || !meta) { await ctx.answerCbQuery('Session unavailable', { show_alert: true }).catch(() => {}); return; }
+      ctx.session.awaitingGameApiSessionId = sessionId;
+      const prompt = [
+        header('Game API • Setup', '🔑'),
         '',
-        H.blockquote('The administrator panel manages instructional media only. It never configures this session\'s key.'),
-      ].join('\\n'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }).catch(async (error) => {
+        'Send one API key now. It will be stored only for this WhatsApp session and never displayed again.',
+        '',
+        H.blockquote('Tip: use a provider key such as Groq (gsk_…) or xAI (xai-…).'),
+      ].join('\\n');
+      await ctx.editMessageText(prompt, { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:gameapi`) }).catch(async (error) => {
+        logger.warn('[Bot] Game API setup prompt edit failed', { sessionId, err: String(error) });
+        await ctx.reply(prompt, { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:gameapi`) }).catch((replyError) => {
+          logger.error('[Bot] Game API setup prompt failed', { sessionId, err: String(replyError) });
+        });
+      });
+      return;
+    }
+
+    if (sub === 'gameapi' && params[2] === 'test') {
+      const access = sessionAccess(ctx, sessionId);
+      const ownerId = access?.ownerId;
+      const meta = access?.meta;
+      if (!access || !ownerId || !meta) { await ctx.answerCbQuery('Session unavailable', { show_alert: true }).catch(() => {}); return; }
+      const socket = getSocket(sessionId);
+      if (!socket || isFrozen(sessionId)) {
+        await ctx.answerCbQuery('Session not connected', { show_alert: true }).catch(() => {});
+        return;
+      }
+      const replies: string[] = [];
+      try {
+        await executeBridgeCommand(sessionId, ownerId, '.gameapi test', socket, async (response) => { if (response) replies.push(response); }, { forcePrefix: '.' });
+        const result = replies[0] ?? noticeCard('Game API Test', 'The provider test completed without a text response.', 'info');
+        const safeResult = replies[0] ? H.pre(result.slice(0, 3500), 'text') : result;
+        await ctx.editMessageText(safeResult, { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:gameapi`) }).catch(async (error) => {
+          logger.warn('[Bot] Game API test edit failed', { sessionId, err: String(error) });
+          await ctx.reply(safeResult, { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:gameapi`) }).catch((replyError) => logger.error('[Bot] Game API test response failed', { sessionId, err: String(replyError) }));
+        });
+      } catch (error) {
+        logger.error('[Bot] Game API test failed', { sessionId, err: String(error) });
+        const result = noticeCard('Game API Test Failed', 'The provider request could not be completed.', 'error');
+        await ctx.editMessageText(result, { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:gameapi`) }).catch(async (editError) => {
+          logger.warn('[Bot] Game API test error edit failed', { sessionId, err: String(editError) });
+          await ctx.reply(result, { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:gameapi`) }).catch((replyError) => logger.error('[Bot] Game API test error response failed', { sessionId, err: String(replyError) }));
+        });
+      }
+      return;
+    }
+
+    if (sub === 'gameapi' && params[2] === 'tutorial') {
+      const access = sessionAccess(ctx, sessionId);
+      const ownerId = access?.ownerId;
+      const meta = access?.meta;
+      if (!access || !ownerId || !meta) { await ctx.answerCbQuery('Session unavailable', { show_alert: true }).catch(() => {}); return; }
+      const body = [
+        header('Game API • Tutorial', '📚'),
+        '',
+        '1. Create a provider API key (Groq is the default).',
+        '2. Tap Setup / Change API Key and send it privately for this session.',
+        '3. Tap Test API to verify the current session key.',
+        `4. Use ${H.code('.gameapi model <model>')} or ${H.code('.gameapi endpoint <groq|xai|openai|url>')} in WhatsApp for advanced options.`,
+        '',
+        H.blockquote('Keys are isolated per WhatsApp session and are never shown in this panel.'),
+      ].join('\\n');
+      await ctx.editMessageText(body, { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:gameapi`) }).catch(async (error) => {
         logger.warn('[Bot] Game API tutorial edit failed, replying fresh', { sessionId, err: String(error) });
-        await ctx.reply([
-          header('Game API • Session Tutorial', '🎮'),
-          '',
-          'Quiz and Would You Rather use the Game API configured only for this WhatsApp session.',
-          '',
-          '1. Create an API key with your chosen OpenAI-compatible provider.',
-          `2. Open the paired WhatsApp session and send ${H.code('.gameapi guide')}.`,
-          `3. Send ${H.code('.gameapi <key>')} to save it privately for this session.`,
-          `4. Optionally set ${H.code('.gameapi model <model>')} and ${H.code('.gameapi endpoint <groq|xai|openai|url>')}.`,
-          `5. Send ${H.code('.gameapi test')} to make a real provider request.`,
-          `6. Start ${H.code('.wyr')} or ${H.code('.quiz')} in a group.`,
-          '',
-          cfg.gameApiKey ? 'Status: configured (key hidden)' : 'Status: not configured',
-          '',
-          H.blockquote("The administrator panel manages instructional media only. It never configures this session's key."),
-        ].join('\\n'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }).catch(() => {});
+        await ctx.reply(body, { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:gameapi`) }).catch((replyError) => logger.error('[Bot] Game API tutorial response failed', { sessionId, err: String(replyError) }));
       });
       return;
     }

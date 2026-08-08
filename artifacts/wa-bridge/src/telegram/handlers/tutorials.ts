@@ -37,7 +37,9 @@ type TelegramRenderContext = Context & {
 };
 
 async function acknowledgeCallback(ctx: Context, text?: string): Promise<void> {
-  if (ctx.callbackQuery) await ctx.answerCbQuery(text).catch(() => {});
+  if (ctx.callbackQuery) await ctx.answerCbQuery(text).catch((error) => {
+    logger.warn('[Tutorials] callback acknowledgement failed', { err: String(error) });
+  });
 }
 
 async function editOrReply(
@@ -53,13 +55,25 @@ async function editOrReply(
     await ctx.editMessageText(text, extra);
   } catch (error) {
     logger.warn('[Tutorials] callback message edit failed, replying fresh', { err: String(error) });
-    await ctx.reply(text, extra as never).catch(() => {});
+    await ctx.reply(text, extra as never).catch((replyError) => {
+      logger.error('[Tutorials] callback fallback reply failed', { err: String(replyError) });
+    });
   }
 }
 
 /** Render the tutorial list + actions. */
 export async function handleTutorialsMenu(ctx: Context, acknowledge = true): Promise<void> {
-  const tutorials = listTutorials();
+  if (acknowledge) await acknowledgeCallback(ctx);
+  let tutorials;
+  try {
+    tutorials = listTutorials();
+  } catch (error) {
+    logger.error('[Tutorials] list failed', { err: String(error) });
+    await ctx.reply(noticeCard('Tutorial Manager Failed', 'Tutorial data could not be loaded. Try again shortly.', 'error'), { parse_mode: 'HTML' }).catch((replyError) => {
+      logger.error('[Tutorials] failure response failed', { err: String(replyError) });
+    });
+    return;
+  }
   const lines = [
     header('Tutorial Manager', '🎬'),
     '',
@@ -76,7 +90,7 @@ export async function handleTutorialsMenu(ctx: Context, acknowledge = true): Pro
     }
   }
 
-  lines.push('', H.blockquote('Tutorial media is attached to .help <command> on WhatsApp for every session.'));
+  lines.push('', H.blockquote(`Tutorial media is attached to ${H.code('.help <command>')} on WhatsApp for every session.`));
 
   const rows = tutorials.map((t) => [
     btn(`${t.type === 'video' ? '🎞' : '🖼'} ${t.command}`, `admin:tutorials:del:${t.command}`, 'danger'),
@@ -87,7 +101,6 @@ export async function handleTutorialsMenu(ctx: Context, acknowledge = true): Pro
 
   const markup = { inline_keyboard: rows };
   const text = lines.join('\n');
-  if (acknowledge) await acknowledgeCallback(ctx);
   await editOrReply(ctx as TelegramRenderContext, text, { parse_mode: 'HTML', reply_markup: markup });
 }
 

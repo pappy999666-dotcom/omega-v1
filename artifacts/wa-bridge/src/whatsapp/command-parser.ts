@@ -73,6 +73,18 @@ export function parseCommand(
   };
   command = aliases[command] ?? command;
 
+  // Help is intentionally allowed to reach the Help Engine with an unknown
+  // target so `.help randomcommand` can return a useful inspection error.
+  if (command === 'help') {
+    return {
+      prefix,
+      command,
+      args,
+      rawRemainder,
+      raw: text,
+    };
+  }
+
   // Typo-tolerance: try to match against known commands
   if (!KNOWN_COMMANDS.includes(command)) {
     // Always-listen mode must be exact so ordinary conversation cannot wake the bot.

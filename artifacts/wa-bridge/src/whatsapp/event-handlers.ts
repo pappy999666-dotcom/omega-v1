@@ -55,6 +55,7 @@ import {
   navHubButtons,
   helpPageText,
 } from './menu-registry.js';
+import { generateWhatsAppHelp } from '../services/help.js';
 import { parseInteraction, routeInteraction } from './interaction-router.js';
 import { rememberStatusContact } from './utils/status-jids.js';
 import { pingTableData, nativeTableContent, tableFromCard } from './utils/native-rich.js';
@@ -1800,61 +1801,30 @@ async function processMessageWithConfig(
     }
 
     // ── Menu / Help ──
-    // .menu / .gmenu → navigation hub dashboard (status, prefix, response
-    //                  mode, timezone, date, time, session) with ONE native
-    //                  quick_reply button per category.
-    // .help <command> → detailed single-command card (Description, Usage,
-    //                  Parameters, Examples, Aliases, Required permissions).
-    // .help          → opens the navigation hub (menu only navigates).
+    // Menu is navigation only. Help is command inspection only.
     case 'menu':
     case 'help':
     case 'gmenu': {
       const menuTarget: 'main' | 'group' = isGroup || command === 'gmenu' ? 'group' : 'main';
       const known = ALL_COMMANDS;
-      const hubOpts = {
-        responseMode: config.responseMode,
-        timezone: config.timezone,
-        status: isFrozen(sessionId) ? 'FROZEN' : 'ONLINE',
-        userName: msg.pushName || undefined,
-      };
 
       if (command === 'help') {
-        const requestedPage = args[0] && /^\d+$/u.test(args[0]) ? Number(args[0]) : 1;
-        if (!args[0] || /^\d+$/u.test(args[0])) {
-          const help = helpPageText(config.prefix, requestedPage, 'all', known);
-          await sendMenuResponse(`HELP ${requestedPage}`, help.text, undefined, false, true);
-          break;
-        }
-        if (MENU_CATALOG[args[0].toLowerCase()]) {
-          // .help <command> → detailed single-command card
-          const { generateWhatsAppHelp } = await import('../services/help.js');
-          const detail = generateWhatsAppHelp(config.prefix, menuTarget === 'group', args[0].toLowerCase());
-          // Tutorial attachment (platform-wide): if the admin attached a
-          // tutorial image/video to this command, attach it to the help card.
-          const { getTutorial } = await import('../services/tutorials.js');
-          const tutorial = getTutorial(args[0].toLowerCase());
-          let tutorialMedia: Array<{ buffer: Buffer; type: 'image' | 'video'; mimetype: string }> = [];
-          if (tutorial) {
-            try {
-              const { readTutorialMediaAssets } = await import('../services/tutorials.js');
-              tutorialMedia = readTutorialMediaAssets(args[0].toLowerCase()).map((media) => ({
-                buffer: media.buffer,
-                type: media.type,
-                mimetype: media.mimeType,
-              }));
-            } catch (err) {
-              logger.warn('[Help] tutorial media read failed', { command: args[0], err: String(err) });
-            }
-          }
-          await sendMenuResponse(`HELP: ${args[0].toUpperCase()}`, detail, undefined, false, true, tutorialMedia);
-          break;
-        }
+        const requested = args.join(' ').trim();
+        const detail = generateWhatsAppHelp(config.prefix, menuTarget === 'group', requested || undefined, known);
+        await sendMenuResponse('HELP', detail, undefined, false, true);
+        break;
       }
 
-      // .menu / .gmenu → navigation hub dashboard with category buttons.
+      const sessionMeta = loadSessionMeta(telegramId, sessionId);
       await sendMenuResponse(
-        'NAVIGATION',
-        renderNavHub(config.prefix, menuTarget, known, hubOpts),
+        'MENU',
+        renderNavHub(config.prefix, menuTarget, known, {
+          responseMode: config.responseMode,
+          timezone: config.timezone,
+          status: isFrozen(sessionId) ? 'FROZEN' : 'ONLINE',
+          userName: msg.pushName || undefined,
+          pairedAt: sessionMeta?.pairedAt ?? config.joinedAt,
+        }),
         navHubButtons(menuTarget)
       );
       break;

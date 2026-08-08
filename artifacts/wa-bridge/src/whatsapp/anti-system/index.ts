@@ -443,7 +443,7 @@ export const DEFAULT_WELCOME_TEMPLATE =
   `&desc\n` +
   `&pp\n\n` +
   `⋆｡ Welcome to the family ⋆｡\n\n` +
-  `╰─ 𝕻𝕬𝕻𝕻𝖄 ×͜× ─╯`;
+  `╰─ 𝗢𝗠𝗘𝗚𝗔 • 𝗩𝟭 ─╯`;
 
 export const DEFAULT_GOODBYE_TEMPLATE =
   `╭─〔 ☾ Farewell ☽ 〕─╮\n\n` +
@@ -455,7 +455,7 @@ export const DEFAULT_GOODBYE_TEMPLATE =
   `&desc\n` +
   `&pp\n\n` +
   `⋆｡ Thanks for being part of us ⋆｡\n\n` +
-  `╰─ 𝕻𝕬𝕻𝕻𝖄 ×͜× ─╯`;
+  `╰─ 𝗢𝗠𝗘𝗚𝗔 • 𝗩𝟭 ─╯`;
 
 // ── Group Participant Event Handler ───────────────────────
 

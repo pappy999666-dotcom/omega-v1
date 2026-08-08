@@ -1,34 +1,25 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ALL_COMMANDS } from '../src/whatsapp/command-parser.js';
-import { MAIN_NAV, helpPageText, renderNavHub } from '../src/whatsapp/menu-registry.js';
+import { MAIN_NAV, renderNavHub } from '../src/whatsapp/menu-registry.js';
+import { generateWhatsAppHelp } from '../src/services/help.js';
 import { cmdPStatus } from '../src/whatsapp/personal-engine.js';
 
-test('help is a plain-text numbered command list with next-page instructions', () => {
-  const result = helpPageText('.', 1, 'all', ALL_COMMANDS);
-  assert.ok(result.totalPages > 1);
-  assert.match(result.text, /📖 𝗛 𝗘 𝗟 𝗣  𝄜  𝟭 \/ 𝟰/);
-  assert.doesNotMatch(result.text, /╭─〔|│ ✦|╰─────────────/);
-  assert.match(result.text, /✦ 𝗴𝗼𝗱𝗰𝗮𝘀𝘁\n  └─ Post designed status for current group\n\n✦/);
-  assert.match(result.text, /Next: \.help 2/);
-  assert.match(result.text, /Send \.help 2 to continue\./);
-  assert.match(result.text, /✦ 𝘁𝗼𝗰𝗵𝗮𝘁 \[jid\] \[msg\]/);
-  assert.match(result.text, /✦ 𝘃𝘃\n  └─ Recover a View Once image\/video \(reply\)/);
-  assert.match(result.text, /✦ 𝗮𝘂𝘁𝗼𝘀𝗲𝗻𝗱 <on\|off>/);
-  assert.doesNotMatch(result.text, /use the buttons/i);
-  assert.match(result.text, /· · ——— 𝕻𝕬𝕻𝕻𝖄 ×͜× ——— · ·/);
-
-  const page2 = helpPageText('.', 2, 'all', ALL_COMMANDS);
-  assert.match(page2.text, /📖 𝗛 𝗘 𝗟 𝗣  𝄜  𝟮 \/ 𝟰/);
-  assert.notEqual(page2.text, result.text);
+test('help is command inspection, not a paginated menu', () => {
+  const intro = generateWhatsAppHelp('.', false);
+  assert.match(intro, /𝗛𝗘𝗟𝗣 𝗘𝗡𝗚𝗜𝗡𝗘/);
+  assert.match(intro, /\.help <command>/);
+  assert.match(intro, /\.help pair/);
+  assert.doesNotMatch(intro, /Next:|𝗢𝗠𝗘𝗚𝗔-𝗩𝟭 𝗠𝗘𝗡𝗨/);
 });
 
-test('main navigation includes Pair and plain-text Help descriptions', () => {
-  assert.deepEqual(MAIN_NAV.slice(0, 2).map((nav) => nav.id), ['pair', 'help']);
+test('main navigation is the four-route dashboard', () => {
+  assert.deepEqual(MAIN_NAV.map((nav) => nav.id), ['group', 'status', 'game', 'extras']);
   const text = renderNavHub('.', 'main', ALL_COMMANDS);
-  assert.match(text, /✦ 🔗 Pair/);
-  assert.match(text, /✦ 📖 Help/);
-  assert.match(text, /plain text/);
+  assert.match(text, /✦ ⚔️ Group/);
+  assert.match(text, /✦ 📲 Status/);
+  assert.match(text, /✦ 🎮 Game/);
+  assert.match(text, /✦ 🧰 Extras/);
 });
 
 test('pstatus does not claim success when WhatsApp returns no message key', async () => {
@@ -41,6 +32,6 @@ test('pstatus does not claim success when WhatsApp returns no message key', asyn
     message: { conversation: '.pstatus test' },
   };
   const out = await cmdPStatus(socket, 'tg-status', 'sess-status', msg, 'test', '.');
-  assert.match(out, /𝗣 𝗘 𝗥 𝗦 𝗢 𝗡 𝗔 𝗟  𝗦 𝗧 𝗔 𝗧 𝗨 𝗦/);
+  assert.match(out, /❌ PERSONAL STATUS/);
   assert.match(out, /Post failed/);
 });

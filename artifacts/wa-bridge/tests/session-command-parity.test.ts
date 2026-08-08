@@ -19,9 +19,9 @@ test('Telegram per-session controls are registered on WhatsApp without Join Mana
     assert.equal(MENU_CATALOG[command]?.hidden, true, `${command} should be command-only in WhatsApp menus`);
   }
 
-  const config = MAIN_NAV.find((nav) => nav.id === 'config');
-  assert.ok(config);
-  const names = new Set(navCommandLines('.', config!, 'main', ALL_COMMANDS).map((line) => line.name));
+  const extras = MAIN_NAV.find((nav) => nav.id === 'extras');
+  assert.ok(extras);
+  const names = new Set(navCommandLines('.', extras!, 'main', ALL_COMMANDS).map((line) => line.name));
   assert.ok(names.has('setpfp'));
   assert.ok(names.has('autopromo'));
   assert.ok(!names.has('joinmgr'));
