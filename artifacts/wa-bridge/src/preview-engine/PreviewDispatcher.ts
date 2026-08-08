@@ -90,6 +90,10 @@ export interface DispatchOptions {
     name: string;
     values: string[];
     selectableCount?: number;
+    /** Native timed-poll expiry (fork maps this to pollCreationMessage.endTime). */
+    endDate?: Date;
+    /** Vote decryption key — MUST be the same buffer stored by the poll game engine. */
+    messageSecret?: Buffer;
   };
   /** Status-specific options */
   statusOptions?: {
@@ -323,6 +327,9 @@ export class PreviewDispatcher {
     };
 
     // ── Pipeline Stage: Poll Send ───────────────────────────
+    // Native timed polls: the fork maps `poll.endDate` → pollCreationMessage.endTime
+    // and `poll.messageSecret` → messageContextInfo.messageSecret (the vote
+    // decryption key). Both are passed through verbatim when provided.
     if (options.poll) {
       try {
         let content: any = {
@@ -330,6 +337,8 @@ export class PreviewDispatcher {
             name: options.poll.name,
             values: options.poll.values,
             selectableCount: options.poll.selectableCount ?? 1,
+            ...(options.poll.endDate ? { endDate: options.poll.endDate } : {}),
+            ...(options.poll.messageSecret ? { messageSecret: options.poll.messageSecret } : {}),
           },
         };
         if (options.extra) content = { ...content, ...options.extra };

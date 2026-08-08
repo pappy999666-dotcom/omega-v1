@@ -138,9 +138,46 @@ import path from 'path';
 import { sessionDir } from '../services/workspace.js';
 import { resolveMenuMedia } from '../services/menu-canvas.js';
 import { gameManager, type GameResponse } from './games/engine.js';
+// ── Poll Game Engine (AI-powered WYR / Quiz) ───────────────
+import { createPollGameEngine, GameAI, type PollEvent, type PollGameSnapshot } from './games/poll-engine/index.js';
+import { optionHashHex } from './games/poll-engine/poll-votes.js';
+import { savePollGameSnapshot, loadPollGameSnapshots, clearPollGameSnapshots } from './games/poll-engine/persistence.js';
 
 // Map from sessionId → telegramId (populated at init)
 const sessionOwnerMap = new Map<string, string>();
+
+// ── Poll Game Engine singleton ───────────────────────────────
+// Per-session Game API config: the per-session key (from the session's own
+// UserConfig) wins; otherwise the platform-wide GAME_AI_API_KEY env var is
+// used as the default. The key is NEVER logged / exposed in any response or
+// report. Endpoint/model resolve: per-session → env (GAME_AI_ENDPOINT /
+// GAME_AI_MODEL) → Groq defaults inside GameAI.
+const gameAi = new GameAI({
+  getConfig: (sessionId: string) => {
+    const telegramId = sessionOwnerMap.get(sessionId);
+    if (!telegramId) return null;
+    const cfg = loadSessionConfig(telegramId, sessionId);
+    // Game credentials are strictly session-owned. Do not fall back to a
+    // platform-wide key: that would make Session B accidentally use Session A's
+    // provider and violate the isolation contract.
+    const apiKey = cfg.gameApiKey;
+    if (!apiKey) return null;
+    return {
+      apiKey,
+      model: cfg.gameApiModel,
+      endpoint: cfg.gameApiEndpoint,
+    };
+  },
+});
+
+export const pollGameEngine = createPollGameEngine({
+  ai: gameAi,
+  persist: (snapshot: PollGameSnapshot) => {
+    const telegramId = sessionOwnerMap.get(snapshot.scope.sessionId);
+    if (!telegramId) return;
+    savePollGameSnapshot(telegramId, snapshot.scope.sessionId, snapshot);
+  },
+});
 
 // Persistent cache for menu URL externalAdReply — fetched once, reused for 24h
 const menuAdReplyCache = new Map<string, { title: string; body: string; thumbnailUrl?: string; expires: number }>();
@@ -165,15 +202,35 @@ function setMenuAdReply(key: string, data: { title: string; body: string; thumbn
 
 export function registerSessionOwner(sessionId: string, telegramId: string): void {
   sessionOwnerMap.set(sessionId, telegramId);
+  // Recover poll games that were active before a restart (timers are re-armed).
+  // The restored games keep emitting through the same send path as live games.
+  try {
+    const snapshots = loadPollGameSnapshots(telegramId, sessionId);
+    if (snapshots.length > 0) {
+      logger.info('[PollGame] restoring snapshots', { sessionId, count: snapshots.length });
+    }
+    for (const snap of snapshots) {
+      pollGameEngine.restore(snap, async (event) => {
+        const socket = getSocket(sessionId);
+        if (!socket) return;
+        return sendPollGameEvent(socket as WASocket, telegramId, event);
+      });
+    }
+  } catch (err) {
+    logger.warn('[PollGame] session restore failed', { sessionId, err: String(err) });
+  }
 }
 
 export function disposeSessionGames(sessionId: string): void {
   gameManager.disposeSession(sessionId);
+  pollGameEngine.disposeSession(sessionId);
 }
 
 export function unregisterSessionOwner(sessionId: string): void {
+  const telegramId = sessionOwnerMap.get(sessionId);
   sessionOwnerMap.delete(sessionId);
   disposeSessionGames(sessionId);
+  if (telegramId) clearPollGameSnapshots(telegramId, sessionId);
 }
 
 export function normalizeWhatsAppNumber(value: string | null | undefined): string {
@@ -227,6 +284,115 @@ async function sendGameResponse(
   }
 }
 
+const POLL_SEND_TIMEOUT_MS = 20_000;
+
+/**
+ * Guard a game send with a timeout. A send that never settles (e.g. a
+ * boot-time socket still connecting) must not wedge the game engine —
+ * the send times out, is logged, and the game continues/finishes.
+ */
+async function sendGamePayload<T>(promise: Promise<T>): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), POLL_SEND_TIMEOUT_MS); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Send a Poll Game Engine event. Handles poll sends (native timed polls +
+ * decryption secret), native-table sends (rankings) and plain text. Returns
+ * the sent message key so the engine can bind the poll for vote matching.
+ */
+async function sendPollGameEvent(
+  socket: WASocket,
+  telegramId: string,
+  event: PollEvent,
+): Promise<{ key?: unknown; sent?: boolean } | void> {
+  const base = {
+    sessionId: event.scope.sessionId,
+    telegramId,
+    forceMentions: true,
+    ...(event.mentions && event.mentions.length > 0 ? { extra: { mentions: event.mentions } } : {}),
+  };
+  const kind = event.poll ? 'poll' : event.nativeTable ? 'table' : 'text';
+
+  if (event.poll) {
+    const result = await sendGamePayload(PreviewManager.send(socket as any, event.scope.chatJid, event.text ?? '', {
+      ...base,
+      poll: {
+        name: event.poll.name,
+        values: event.poll.values,
+        selectableCount: event.poll.selectableCount,
+        ...(event.poll.endDate ? { endDate: event.poll.endDate } : {}),
+        ...(event.poll.messageSecret ? { messageSecret: event.poll.messageSecret } : {}),
+      },
+    })) as any;
+    if (!result || result.success === false || !result.key) {
+      logger.warn('[PollGame] poll send failed or returned no key', { chatJid: event.scope.chatJid, kind });
+      return { sent: false };
+    }
+    return { key: result.key, sent: true };
+  }
+
+  if (event.nativeTable) {
+    const result = await sendGamePayload(PreviewManager.send(socket as any, event.scope.chatJid, event.tableFallbackText ?? event.text ?? '', {
+      ...base,
+      nativeTable: event.nativeTable,
+      tableFallbackText: event.tableFallbackText,
+    })) as any;
+    if (!result || result.success === false) {
+      logger.warn('[PollGame] table send failed', { chatJid: event.scope.chatJid, kind });
+      return { sent: false };
+    }
+    return { key: result.key, sent: true };
+  }
+
+  const result = await sendGamePayload(PreviewManager.send(socket as any, event.scope.chatJid, event.text ?? '', base)) as any;
+  if (!result || result.success === false) {
+    logger.warn('[PollGame] text send failed', { chatJid: event.scope.chatJid, kind });
+    return { sent: false };
+  }
+  return { key: result.key, sent: true };
+}
+
+/**
+ * Per-session Game API setup tutorial (WhatsApp). Mirrors the Telegram
+ * admin guide card — Groq is the default provider, Grok is the alt.
+ * Keys/models/endpoints are always stored PER SESSION and never shown
+ * again after being set.
+ */
+function gameApiGuideCard(prefix: string): string {
+  return successCard(
+    'GAME API • SETUP',
+    [
+      'AI games (.wyr / .quiz) generate content through a per-session provider.',
+      '',
+      '🅐 *Groq* (default) — free tier',
+      '  Key:      gsk_…  (console.groq.com)',
+      '  Model:    llama-3.3-70b-versatile',
+      '  Endpoint: groq',
+      '',
+      '🅑 *Grok (xAI)* — alternative',
+      '  Key:      xai-…',
+      '  Model:    grok-2-latest',
+      '  Endpoint: xai',
+      '',
+      `1) \`${prefix}gameapi <key>\` — set THIS session key`,
+      `2) \`${prefix}gameapi model <model>\` — override model`,
+      `3) \`${prefix}gameapi endpoint <groq|xai|openai|url>\` — pick provider`,
+      `4) \`${prefix}gameapi\` — status (key always hidden)`,
+      `5) \`${prefix}wyr\` / \`${prefix}quiz\` in a group to play`,
+      '',
+      'Each WhatsApp session must set its own key. Credentials never fall back across sessions and are never shown again.',
+    ].join('\n')
+  );
+}
+
 function extractMessageText(message: IMessage | null | undefined): string {
   if (!message) return '';
   const wrapped = message.ephemeralMessage?.message
@@ -244,6 +410,18 @@ function extractMessageText(message: IMessage | null | undefined): string {
 
 
 // ── Main Event Router ─────────────────────────────────────
+
+let getKeyAuthorForUpdate: ((key: { fromMe?: boolean; participantAlt?: string | null; remoteJidAlt?: string | null; participant?: string | null; remoteJid?: string | null }, meId?: string) => string) | null | undefined;
+async function resolveGetKeyAuthorForUpdate(): Promise<NonNullable<typeof getKeyAuthorForUpdate> | null> {
+  if (getKeyAuthorForUpdate !== undefined) return getKeyAuthorForUpdate;
+  try {
+    const baileys = await import('@crysnovax/baileys') as { getKeyAuthor?: typeof getKeyAuthorForUpdate };
+    getKeyAuthorForUpdate = baileys.getKeyAuthor ?? null;
+  } catch {
+    getKeyAuthorForUpdate = null;
+  }
+  return getKeyAuthorForUpdate;
+}
 
 export async function handleWAEvent(
   sessionId: string,
@@ -337,6 +515,54 @@ export async function handleWAEvent(
         // Fork-native revoke: message nulled + stub type set; top-level key = original.
         const isForkRevoke = update?.message === null && update?.messageStubType !== undefined && !!u?.key?.id;
         // Cross-version revoke: update.protocolMessage.type === 0 (REVOKE).
+        // Baileys 2.7.1 can expose a decrypted poll result through
+        // messages.update as { key: creationKey, update: { pollUpdates: [...] } }.
+        // Prefer this native event when present; the raw pollUpdateMessage path
+        // below is retained because this fork's auto-decrypt block is disabled.
+        const pollUpdates = (update as { pollUpdates?: Array<{
+          pollUpdateMessageKey?: { fromMe?: boolean; participantAlt?: string | null; remoteJidAlt?: string | null; participant?: string | null; remoteJid?: string | null };
+          vote?: { selectedOptions?: Array<Uint8Array | Buffer | string> };
+          senderTimestampMs?: number;
+        }>} | undefined)?.pollUpdates;
+        if (pollUpdates?.length && u?.key?.id && u.key.remoteJid) {
+          const ownId = (socket as unknown as { user?: { id?: string; lid?: string } }).user?.id ?? '';
+          const author = await resolveGetKeyAuthorForUpdate();
+          for (const pollUpdate of pollUpdates) {
+            const voterKey = pollUpdate.pollUpdateMessageKey;
+            const voterJid = author?.(voterKey ?? {}, ownId) ?? voterKey?.participant ?? voterKey?.remoteJid ?? '';
+            const selected = (pollUpdate.vote?.selectedOptions ?? []).map((value) => {
+              if (typeof value === 'string') return /^[0-9a-f]{64}$/i.test(value) ? value.toLowerCase() : Buffer.from(value, 'latin1').toString('hex');
+              return Buffer.from(value).toString('hex');
+            });
+            const hashes = pollGameEngine.getGame({ sessionId, chatJid: u.key.remoteJid }, 'wyr')?.questions
+              .concat(pollGameEngine.getGame({ sessionId, chatJid: u.key.remoteJid }, 'quiz')?.questions ?? [])
+              .flatMap((q) => q.options.map((option) => optionHashHex(option))) ?? [];
+            const ownerQuestions = [
+              ...(pollGameEngine.getGame({ sessionId, chatJid: u.key.remoteJid }, 'wyr')?.questions ?? []),
+              ...(pollGameEngine.getGame({ sessionId, chatJid: u.key.remoteJid }, 'quiz')?.questions ?? []),
+            ];
+            const ownerQuestion = ownerQuestions.find((q) => q.pollMsgId === u.key!.id);
+            if (!ownerQuestion) continue;
+            // Single-select polls must resolve to exactly one option of the
+            // associated question; never match against another active poll.
+            const matchedIndexes = selected.flatMap((digest) => ownerQuestion.options
+              .map((option, index) => optionHashHex(option) === digest ? index : -1)
+              .filter((index) => index >= 0));
+            const uniqueIndexes = [...new Set(matchedIndexes)];
+            const questionOption = uniqueIndexes.length === 1 ? uniqueIndexes[0]! : -1;
+            if (questionOption >= 0 || selected.length === 0) {
+              await pollGameEngine.handleVote({
+                scope: { sessionId, chatJid: u.key.remoteJid },
+                pollMsgId: u.key.id,
+                voterJid,
+                vote: {},
+                decrypted: { optionIndex: questionOption, selectedHex: selected, removed: selected.length === 0 },
+                meId: ownId,
+                meLid: (socket as unknown as { user?: { lid?: string } }).user?.lid,
+              });
+            }
+          }
+        }
         const proto = update?.protocolMessage;
         const revokeKey = isForkRevoke
           ? { remoteJid: u.key?.remoteJid, id: u.key?.id, participant: u.key?.participant }
@@ -769,6 +995,59 @@ async function handleMessages(
       if (handled) continue;
     }
 
+// ── Poll Game Engine: poll vote updates ─────────────────
+// The fork's auto-decrypt block is disabled, so raw pollUpdateMessage
+// votes arrive here via messages.upsert. The engine decrypts them with
+// the messageSecret we set at poll creation and validates scope / poll
+// id / expiry — unknown, expired or ambiguous votes are safely ignored.
+
+// Voter JID extraction uses the fork's OWN getKeyAuthor() (the same
+// helper the reference decrypt block used: participantAlt →
+// remoteJidAlt → participant → remoteJid) so the decrypt HMAC sign + GCM
+// AAD receive the exact key-author bytes the voters used. Lazy singleton
+// — resolved once, reused for every vote.
+let getKeyAuthorFn: ((key: { fromMe?: boolean; participantAlt?: string | null; remoteJidAlt?: string | null; participant?: string | null; remoteJid?: string | null }, meId?: string) => string) | null | undefined;
+async function resolveGetKeyAuthor(): Promise<typeof getKeyAuthorFn> {
+  if (getKeyAuthorFn !== undefined) return getKeyAuthorFn;
+  try {
+    const baileys = await import('@crysnovax/baileys') as { getKeyAuthor?: typeof getKeyAuthorFn };
+    getKeyAuthorFn = baileys.getKeyAuthor ?? null;
+  } catch {
+    getKeyAuthorFn = null;
+  }
+  return getKeyAuthorFn;
+}
+
+    const pollUpdate = (msg.message as { pollUpdateMessage?: {
+      pollCreationMessageKey?: { id?: string | null; remoteJid?: string | null } | null;
+      vote?: { encPayload?: Uint8Array | null; encIv?: Uint8Array | null } | null;
+    } | null } | null)?.pollUpdateMessage;
+
+    if (pollUpdate?.pollCreationMessageKey?.id && pollUpdate.vote) {
+      try {
+        const sockUser = (socket as unknown as { user?: { id?: string; lid?: string } }).user;
+        const meId = sockUser?.id ?? '';
+        const meLid = sockUser?.lid;
+        // Voter JID extraction mirrors the fork's reference decrypt block
+        // (getKeyAuthor ordering: participantAlt → remoteJidAlt →
+        // participant → remoteJid) so the HMAC sign + GCM AAD receive the
+        // exact key-author bytes the voters used.
+        const authorFn = await resolveGetKeyAuthor();
+        const voterJid = authorFn?.(msg.key as never, '') ?? msg.key.participant ?? msg.key.remoteJid ?? '';
+        await pollGameEngine.handleVote({
+          scope: { sessionId, chatJid: msg.key.remoteJid ?? '' },
+          pollMsgId: pollUpdate.pollCreationMessageKey.id,
+          voterJid,
+          vote: { encPayload: pollUpdate.vote.encPayload ?? undefined, encIv: pollUpdate.vote.encIv ?? undefined },
+          meId,
+          meLid,
+        });
+      } catch (err) {
+        logger.warn('[PollGame] vote ingestion error', { err: String(err) });
+      }
+      continue; // poll updates are never commands or anti-targets
+    }
+
     // ── Anti System: run BEFORE command dispatch ──────────────
     // Non-throwing; errors in anti modules are isolated internally.
     try {
@@ -1118,7 +1397,8 @@ async function processMessageWithConfig(
     body: string,
     navButtons?: { name: string; buttonParamsJson: string }[],
     enableButtons = true,
-    textOnly = false
+    textOnly = false,
+    tutorialMedia?: { buffer: Buffer; type: 'image' | 'video'; mimetype: string }
   ): Promise<void> => {
     const meta = loadSessionMeta(telegramId, sessionId);
     
@@ -1131,7 +1411,15 @@ async function processMessageWithConfig(
 
     if (navButtons?.length) options.extra = { buttons: navButtons };
 
-    if (!textOnly) {
+    if (tutorialMedia) {
+      // Tutorial attachment: the configured media for this command wins.
+      options.media = {
+        buffer: tutorialMedia.buffer,
+        type: tutorialMedia.type,
+        mimetype: tutorialMedia.mimetype,
+        caption: body,
+      };
+    } else if (!textOnly) {
       const media = await resolveMenuMedia({
         prefix: config.prefix,
         menuTarget: isGroup ? 'group' : 'main',
@@ -1392,7 +1680,24 @@ async function processMessageWithConfig(
           // .help <command> → detailed single-command card
           const { generateWhatsAppHelp } = await import('../services/help.js');
           const detail = generateWhatsAppHelp(config.prefix, menuTarget === 'group', args[0].toLowerCase());
-          await sendMenuResponse(`HELP: ${args[0].toUpperCase()}`, detail);
+          // Tutorial attachment (platform-wide): if the admin attached a
+          // tutorial image/video to this command, attach it to the help card.
+          const { getTutorial } = await import('../services/tutorials.js');
+          const tutorial = getTutorial(args[0].toLowerCase());
+          let tutorialMedia: { buffer: Buffer; type: 'image' | 'video'; mimetype: string } | undefined;
+          if (tutorial && tutorial.filePath) {
+            try {
+              const buf = fs.readFileSync(tutorial.filePath);
+              if (buf && buf.length > 0) tutorialMedia = {
+                buffer: buf,
+                type: tutorial.type,
+                mimetype: tutorial.mimeType,
+              };
+            } catch (err) {
+              logger.warn('[Help] tutorial media read failed', { command: args[0], err: String(err) });
+            }
+          }
+          await sendMenuResponse(`HELP: ${args[0].toUpperCase()}`, detail, undefined, false, true, tutorialMedia);
           break;
         }
       }
@@ -2509,6 +2814,110 @@ async function processMessageWithConfig(
         onEvent: async (event) => sendGameResponse(socket, telegramId, event),
       });
       if (gameResult) await sendGameResponse(socket, telegramId, gameResult);
+      break;
+    }
+
+    // ── AI Poll Games (WYR / Quiz) ───────────────────────────
+    // .wyr [duration] → fresh AI question as a native timed poll
+    // .quiz <duration> → AI quiz split into timed questions + leaderboard
+    // Games are per-group isolated; the engine emits polls/tables/results
+    // through sendPollGameEvent (native timed polls + decryption secret).
+    case 'wyr':
+    case 'quiz': {
+      if (!isGroup) {
+        await reply(warningCard('GROUP ONLY', `${command.toUpperCase()} can only run inside a WhatsApp group.`));
+        break;
+      }
+      const gameOutcome = await pollGameEngine.start(
+        { sessionId, chatJid: groupJid },
+        command,
+        args,
+        { onEvent: async (event) => sendPollGameEvent(socket, telegramId, event) }
+      );
+      // Ground truth: log exactly what the engine produced (poll / text / error
+      // card) so a silent AI or send failure is visible in the app log.
+      logger.info('[Game] start outcome', {
+        command,
+        sessionId,
+        chatJid: groupJid,
+        events: gameOutcome.map((e) => e.poll ? 'poll' : (e.text ?? '').slice(0, 120)),
+      });
+      break;
+    }
+
+    // ── Game API configuration (per-session, never exposed) ──
+    // .gameapi <key>             → set the AI key for THIS session
+    // .gameapi model <model>     → override the model (default grok-2-latest)
+    // .gameapi endpoint <url>    → override the endpoint (any OpenAI-compatible
+    //                              provider — e.g. Groq). Falls back to the
+    //                              built-in provider default.
+    // .gameapi clear             → remove key + model + endpoint
+    // .gameapi                   → show status (key always masked)
+    case 'gameapi': {
+      const sub = args[0]?.toLowerCase();
+      if (sub === 'model') {
+        const model = (args[1] ?? '').trim();
+        if (!model) {
+          await reply(warningCard('GAME API', `Usage: ${config.prefix}gameapi model <model>`));
+          break;
+        }
+        updateSessionConfig(telegramId, sessionId, { gameApiModel: model.slice(0, 64) });
+        await reply(successCard('GAME API MODEL', 'Model override saved for this session.', [['Model', model.slice(0, 64)], ['Session', sessionId]]));
+        break;
+      }
+      if (sub === 'endpoint') {
+        const endpoint = (args[1] ?? '').trim();
+        if (!endpoint) {
+          await reply(warningCard('GAME API', `Usage: ${config.prefix}gameapi endpoint <url>`));
+          break;
+        }
+        // Accept a bare host like "groq" → expand to the Groq endpoint;
+        // otherwise expect an http(s) OpenAI-compatible chat URL.
+        const known: Record<string, string> = {
+          groq: 'https://api.groq.com/openai/v1/chat/completions',
+          xai: 'https://api.x.ai/v1/chat/completions',
+          openai: 'https://api.openai.com/v1/chat/completions',
+        };
+        const resolved = known[endpoint.toLowerCase()] ?? endpoint;
+        if (!/^https?:\/\//.test(resolved) || resolved.length > 300) {
+          await reply(warningCard('GAME API', 'Invalid endpoint. Use an https URL (e.g. https://api.groq.com/openai/v1/chat/completions) or a shortcut: groq, xai, openai.'));
+          break;
+        }
+        updateSessionConfig(telegramId, sessionId, { gameApiEndpoint: resolved });
+        await reply(successCard('GAME API ENDPOINT', 'Endpoint override saved for this session.', [['Endpoint', resolved], ['Session', sessionId]]));
+        break;
+      }
+      if (sub === 'clear') {
+        updateSessionConfig(telegramId, sessionId, { gameApiKey: undefined, gameApiModel: undefined, gameApiEndpoint: undefined });
+        await reply(successCard('GAME API CLEARED', 'The Game API key, model and endpoint were removed for this session.'));
+        break;
+      }
+      // Per-session setup tutorial — the full guide is available right here
+      // on WhatsApp (.gameapi guide / .gameapi help), no Telegram needed.
+      if (sub === 'guide' || sub === 'help') {
+        await reply(gameApiGuideCard(config.prefix));
+        break;
+      }
+      const key = (args[0] ?? '').trim();
+      if (key) {
+        if (key.length < 20 || /\s/.test(key)) {
+          await reply(warningCard('GAME API', 'Invalid key. Paste the full API key (at least 20 characters, no spaces).'));
+          break;
+        }
+        updateSessionConfig(telegramId, sessionId, { gameApiKey: key });
+        await reply(successCard('GAME API SET', 'Game API key saved for this session. Stored privately — it is never shown again.'));
+        break;
+      }
+      // Status view — the key itself is NEVER rendered. When nothing is
+      // configured, the full per-session setup tutorial is shown instead.
+      const hasKey = gameAi.isConfigured(sessionId);
+      const activeModel = gameAi.configuredModel(sessionId);
+      const cfg = loadSessionConfig(telegramId, sessionId);
+      const activeEndpoint = cfg.gameApiEndpoint ?? 'Groq (default)';
+      const keySource = cfg.gameApiKey ? 'per-session' : 'none';
+      await reply(hasKey
+        ? successCard('GAME API', 'Configured for this session.', [['Provider', activeEndpoint], ['Model', activeModel], ['Key', '•••••••• (hidden)'], ['Key source', keySource], ['Tutorial', `${config.prefix}gameapi guide`]])
+        : gameApiGuideCard(config.prefix));
       break;
     }
 

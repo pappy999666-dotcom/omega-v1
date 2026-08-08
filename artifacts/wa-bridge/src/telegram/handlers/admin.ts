@@ -124,6 +124,53 @@ export async function handlePermissionInput(
 }
 
 
+// ── Game API Setup Guide ──────────────────────────────────
+
+/**
+ * Admin card with the exact per-session .gameapi commands for the two
+ * supported AI providers (Grok default + Groq). The key/model/endpoint
+ * are always stored PER SESSION and never shown again after being set.
+ */
+export async function handleGameApiGuide(ctx: Context): Promise<void> {
+  const steps = (prefix: string) => `1. ${H.code(`${prefix}gameapi <key>`)} — set the API key (per session)\n2. ${H.code(`${prefix}gameapi model <model>`)} — pick the model\n3. ${H.code(`${prefix}gameapi endpoint <url|groq|xai|openai>`)} — pick the provider\n4. ${H.code(`${prefix}gameapi`)} — check status (key is always hidden)\n\nRun ${H.code(`${prefix}wyr`)} or ${H.code(`${prefix}quiz`)} in a group to play.`;
+
+  const text = [
+    header('Game API Setup', '🎮'),
+    '',
+    'AI games (.wyr / .quiz) generate their content through the Game API configured on each WhatsApp session. Configure each session separately — keys are stored privately and never shown again.',
+    '',
+    H.bold('🅐  Groq (default)'),
+    '',
+    `Key:      ${H.code('gsk_…')} (from console.groq.com)`,
+    `Model:    ${H.code('llama-3.3-70b-versatile')} (default)`,
+    `Endpoint: ${H.code('groq')} (default)`,
+    '',
+    steps('.'),
+    '',
+    H.bold('🅑  Grok (xAI) — alternative'),
+    '',
+    `Key:      ${H.code('xai-…')}`,
+    `Model:    ${H.code('grok-2-latest')}`,
+    `Endpoint: ${H.code('xai')}`,
+    '',
+    steps('.'),
+    '',
+    noticeCard('Tip', 'Each WhatsApp session must set its own Game API key with .gameapi <key>. Credentials never fall back across sessions. Endpoint shortcuts: groq · xai · openai — or paste any full OpenAI-compatible URL.', 'info'),
+  ].join('\n');
+
+  const keyboard = {
+    inline_keyboard: [
+      [btn('🔙 Back', 'admin:panel', 'primary')],
+    ],
+  };
+
+  if (ctx.callbackQuery) {
+    await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard }).catch(() => {});
+  } else {
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard }).catch(() => {});
+  }
+}
+
 // ── Admin Panel ───────────────────────────────────────────
 
 export async function handleAdminPanel(ctx: Context): Promise<void> {

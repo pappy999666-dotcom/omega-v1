@@ -149,6 +149,10 @@ function defaultConfig(telegramId: string): UserConfig {
     antiCallEnabled: false,
     responseMode: 'txt',
     timezone: undefined,
+    // Game API (AI-powered poll games) — per-session, never exposed.
+    gameApiKey: undefined,
+    gameApiModel: undefined,
+    gameApiEndpoint: undefined,
   };
 }
 

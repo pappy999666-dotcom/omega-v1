@@ -145,7 +145,18 @@ export interface IMessage {
   pollCreationMessage?: { name?: string | null; contextInfo?: MessageContextInfo | null } | null;
   pollCreationMessageV2?: { name?: string | null } | null;
   pollCreationMessageV3?: { name?: string | null } | null;
-  pollUpdateMessage?: { pollEncryptedV1?: Record<string, unknown> | null; voterEncryptedV1?: unknown | null } | null;
+  /** Incoming poll vote — the fork's auto-decrypt block is disabled, so the raw encrypted vote arrives here. */
+  pollUpdateMessage?: {
+    pollCreationMessageKey?: {
+      remoteJid?: string | null;
+      fromMe?: boolean | null;
+      id?: string | null;
+      participant?: string | null;
+      participantAlt?: string | null;
+    } | null;
+    vote?: { encPayload?: Uint8Array | null; encIv?: Uint8Array | null } | null;
+    senderTimestampMs?: number | null;
+  } | null;
   groupStatusMessage?: { message?: IMessage | null; contextInfo?: MessageContextInfo | null } | null;
   groupStatusMessageV2?: { message?: IMessage | null; contextInfo?: MessageContextInfo | null } | null;
   /** Native WhatsApp Status "@Group" mention. Only present with REAL inner content when a user mentions the group from their Status. */

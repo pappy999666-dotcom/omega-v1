@@ -74,6 +74,7 @@ import {
   handleReleaseToggle,
   handleSetReleaseUsername,
   processReleaseUsername,
+  handleGameApiGuide,
   handleAdminMenuUrlManager,
   handleAdminMenuUrlEdit,
   handleAdminMenuUrlToggle,
@@ -94,6 +95,15 @@ import {
   generateTelegramHelp,
   generateTelegramCategoryHelp,
 } from '../services/help.js';
+import {
+  handleTutorialsMenu,
+  handleTutorialAdd,
+  processTutorialCommand,
+  handleTutorialType,
+  saveTutorialUpload,
+  handleTutorialDelete,
+  handleTutorialDeleteConfirm,
+} from './handlers/tutorials.js';
 import {
   mainMenuKeyboard,
   helpKeyboard,
@@ -189,6 +199,9 @@ interface BotContext extends Context {
     editingMenuButtonId?: string;
     awaitingApproveAmountSessionId?: string;
     awaitingApproveAmountGcJid?: string;
+    // ── Tutorial Manager (admin) ──
+    awaitingTutorialCommand?: boolean;
+    tutorialPending?: { command: string; type?: 'image' | 'video' };
     awaitingApproveCountrySessionId?: string;
     awaitingApproveCountryGcJid?: string;
     awaitingPromoteSessionId?: string;
@@ -524,6 +537,32 @@ export function createBot(): Telegraf<BotContext> {
     await handleReleaseToggle(ctx, false);
   });
 
+  // ── Game API Setup Guide (Admin) ─────────────────────
+  bot.action('admin:gameapi:guide', ownerOnly() as never, async (ctx) => {
+    await handleGameApiGuide(ctx);
+  });
+
+  // ── Tutorial Manager (Admin) ─────────────────────────
+  bot.action('admin:tutorials', ownerOnly() as never, async (ctx) => {
+    await handleTutorialsMenu(ctx);
+  });
+
+  bot.action('admin:tutorials:add', ownerOnly() as never, async (ctx) => {
+    await handleTutorialAdd(ctx as BotContext);
+  });
+
+  bot.action(/^admin:tutorials:type:(image|video)$/, ownerOnly() as never, async (ctx) => {
+    await handleTutorialType(ctx as BotContext, ctx.match[1] as 'image' | 'video');
+  });
+
+  bot.action(/^admin:tutorials:del:([a-z0-9_-]+)$/, ownerOnly() as never, async (ctx) => {
+    await handleTutorialDelete(ctx, ctx.match[1]);
+  });
+
+  bot.action(/^admin:tutorials:delconfirm:([a-z0-9_-]+)$/, ownerOnly() as never, async (ctx) => {
+    await handleTutorialDeleteConfirm(ctx, ctx.match[1]);
+  });
+
   // ── Text Message Handler ──────────────────────────────
 
   bot.on('message', async (ctx, next) => {
@@ -537,6 +576,9 @@ export function createBot(): Telegraf<BotContext> {
 
     await processReleaseUsername(ctx as BotContext);
     await processAdminIdeaReply(ctx as BotContext);
+    await processTutorialCommand(ctx as BotContext);
+    if (ctx.session?.awaitingTutorialCommand) return; // handled above (retry loop)
+
 
     // Set WhatsApp display name
     if (ctx.session?.awaitingSetNameSessionId) {
@@ -1455,6 +1497,22 @@ export function createBot(): Telegraf<BotContext> {
   });
 
   bot.on('photo', async (ctx) => {
+    // Tutorial Manager: image upload for a pending command
+    if (ctx.session?.tutorialPending?.type === 'image') {
+      try {
+        const photo = ctx.message.photo.at(-1);
+        if (!photo) throw new Error('No photo');
+        const fileUrl = await ctx.telegram.getFileLink(photo.file_id);
+        const res = await fetch(fileUrl.toString());
+        if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+        const buffer = Buffer.from(await res.arrayBuffer());
+        await saveTutorialUpload(ctx as BotContext, buffer, 'image/jpeg');
+      } catch (error) {
+        delete ctx.session.tutorialPending;
+        await ctx.reply(noticeCard('Tutorial Upload Failed', String(error), 'error'), { parse_mode: 'HTML', reply_markup: backKeyboard('admin:tutorials') });
+      }
+      return;
+    }
     if (ctx.session?.awaitingBroadcast) {
       ctx.session.awaitingBroadcast = false;
       const { getAllUserIds } = await import('../services/workspace.js');
@@ -1554,6 +1612,25 @@ export function createBot(): Telegraf<BotContext> {
   });
 
 
+  bot.on('video', async (ctx) => {
+    // Tutorial Manager: video upload for a pending command
+    if (ctx.session?.tutorialPending?.type === 'video') {
+      try {
+        const video = ctx.message.video;
+        if (!video) throw new Error('No video');
+        const fileUrl = await ctx.telegram.getFileLink(video.file_id);
+        const res = await fetch(fileUrl.toString());
+        if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+        const buffer = Buffer.from(await res.arrayBuffer());
+        await saveTutorialUpload(ctx as BotContext, buffer, video.mime_type ?? 'video/mp4');
+      } catch (error) {
+        delete ctx.session.tutorialPending;
+        await ctx.reply(noticeCard('Tutorial Upload Failed', String(error), 'error'), { parse_mode: 'HTML', reply_markup: backKeyboard('admin:tutorials') });
+      }
+      return;
+    }
+  });
+
   bot.on('document', async (ctx) => {
     if (ctx.session?.awaitingBroadcast) {
       ctx.session.awaitingBroadcast = false;
@@ -1648,6 +1725,8 @@ function clearAllAwaitingStates(ctx: BotContext): void {
   delete ctx.session.awaitingBroadcast;
   delete ctx.session.awaitingForceJoin;
   delete ctx.session.awaitingGlobalMenuUrl;
+  delete ctx.session.awaitingTutorialCommand;
+  delete ctx.session.tutorialPending;
   delete ctx.session.awaitingProfilePhotoSessionId;
   delete ctx.session.awaitingGcPfpSessionId;
   delete ctx.session.awaitingGcPfpJid;

@@ -142,6 +142,25 @@ export const MENU_CATALOG: Record<string, MenuEntry> = {
     output: 'Text board with strict player/turn validation.' },
   tictactoe: { section: '🎮 GAMES', syntax: 'tictactoe @user', desc: 'Alias for Tic-Tac-Toe', target: 'both', hidden: true },
 
+  // ── Poll Game Engine (AI-powered) ───────────────────────────
+  wyr: { section: '🎮 GAMES', syntax: 'wyr [duration]', desc: 'AI Would You Rather poll game', target: 'group',
+    usage: 'Generates a fresh Would You Rather question with the configured Game AI and creates a real WhatsApp poll. Duration defaults to 60s; minimum 30s.',
+    permissions: 'Owner / Sudo',
+    examples: ['wyr', 'wyr 30s', 'wyr 2min', 'wyr 5min'],
+    args: 'Optional duration: 30s | 1min | 2min | 5min',
+    output: 'Native poll + results table with player mentions.' },
+  quiz: { section: '🎮 GAMES', syntax: 'quiz <duration>', desc: 'AI multi-question Quiz poll game', target: 'group',
+    usage: 'Splits the duration into question intervals (e.g. 15min → 3 questions × 5min). Minimum 5 minutes.',
+    permissions: 'Owner / Sudo',
+    examples: ['quiz 5min', 'quiz 10min', 'quiz 15min', 'quiz 1h'],
+    args: 'Duration: 5min | 10min | 15min | 1h',
+    output: 'Sequential quiz polls, answer reveals, top-5 leaderboard, final result.' },
+  gameapi: { section: '🎮 GAMES', syntax: 'gameapi [key] | gameapi model <model> | gameapi endpoint <url|groq|xai|openai>', desc: 'Configure the per-session Game AI key', target: 'both', hidden: true,
+    usage: 'Sets the AI key used for game content (.wyr / .quiz) for THIS WhatsApp session only. Stored privately and never shown again. Default provider is Groq (llama-3.3-70b-versatile). Use .gameapi model <model> to override the model and .gameapi endpoint <url|groq|xai|openai> to pick any OpenAI-compatible provider (Grok, OpenAI, ...). Use .gameapi guide for the full per-session setup tutorial. Credentials never fall back across sessions.',
+    permissions: 'Owner / Sudo',
+    examples: ['gameapi gsk_1234...', 'gameapi model llama-3.3-70b-versatile', 'gameapi endpoint xai', 'gameapi clear', 'gameapi guide'],
+    output: 'Confirmation with masked key status.' },
+
   // ── Tag Engine ────────────────────────────────────────────
   tag: { section: '📊 UTILITY', syntax: 'tag', desc: 'Hidetag all group members', target: 'both' },
   mtag: { section: '📊 UTILITY', syntax: 'mtag', desc: 'Visibly mention all group members', target: 'both' },
@@ -890,6 +909,7 @@ const HELP_CATEGORY_DEFINITIONS: HelpCategoryDefinition[] = [
   { title: 'Groups', commands: ['tag', 'mtag', 'join', 'left', 'leave', 'joinall', 'leaveall'] },
   { title: 'Sessions', commands: ['ls', 'curr', 'switch', 'sinfo', 'restart', 'disconnect', 'delete', 'rename', 'freeze', 'unfreeze', 'pair'] },
   { title: 'Stickers & Menu', commands: ['sticker', 'setpackname', 'setauthor', 'setcmd', 'delcmd', 'listcmd', 'setmenupic', 'setmenuvideo'] },
+  { title: 'Games', commands: ['wcg', 'ttt', 'tictactoe', 'wyr', 'quiz'] },
   { title: 'Misc', commands: ['addlink', 'setprefix', 'prefix'] },
   { title: 'Moderation', commands: [] },
   { title: 'Anti-System', commands: [] },
@@ -926,13 +946,13 @@ function helpFooter(prefix: string, page: number, totalPages: number): string[] 
       '· · ────────────────────── · ·',
       `Next: ${next}`,
       `Send ${next} to continue.`,
-      '· · ——— 𝕻𝕬𝕻𝕻𝖄 ×͜× ——— · ·',
+      '· · ——— 𝗢𝗠𝗘𝗚𝗔 • 𝗩𝟭 ——— · ·',
     ];
   }
   return [
     '· · ────────────────────── · ·',
     'Last help page.',
-    '· · ——— 𝕻𝕬𝕻𝕻𝖄 ×͜× ——— · ·',
+    '· · ——— 𝗢𝗠𝗘𝗚𝗔 • 𝗩𝟭 ——— · ·',
   ];
 }
 
@@ -944,10 +964,10 @@ export function helpPageText(
 ): { text: string; totalPages: number } {
   const categories = helpCategoryEntries(prefix, menuTarget, knownCommands);
   // Page 1 intentionally mirrors the requested guide: Status Tools through
-  // Stickers & Menu all remain together. Split the larger registry remainder
-  // into three readable pages without breaking the order of commands.
-  const firstPage = [0, 1, 2, 3, 4, 5, 6].flatMap((index) => categories[index] ?? []);
-  const remaining = [7, 8, 9, 10, 11, 12].flatMap((index) => categories[index] ?? []);
+  // Games all remain together (AI games included). Split the larger registry
+  // remainder into three readable pages without breaking the order of commands.
+  const firstPage = [0, 1, 2, 3, 4, 5, 6, 7].flatMap((index) => categories[index] ?? []);
+  const remaining = [8, 9, 10, 11, 12, 13].flatMap((index) => categories[index] ?? []);
   const blockLength = (line: NavCommandLine): number =>
     `✦ ${compactMenuCommand(line.cmd, prefix)}${line.premium ? ' 💎' : ''}\n  └─ ${line.desc}`.length + 2;
   const remainingPages: NavCommandLine[][] = [[], [], []];

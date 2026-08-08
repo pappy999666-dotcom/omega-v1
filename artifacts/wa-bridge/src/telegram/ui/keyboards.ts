@@ -263,6 +263,7 @@ export function adminPanelKeyboard(paused = false, maintenance = false): InlineK
       // Global Sudo is per-Telegram-user and lives in each user's Settings hub.
       [btn('🛡 Omni Owner (Bot-wide)', 'admin:omniowner', 'primary')],
       [btn('💡 Idea Inbox', 'admin:ideas:0', 'primary'), btn('📋 Logs', 'admin:logs', 'primary')],
+      [btn('🎮 Game API Setup', 'admin:gameapi:guide', 'primary'), btn('🎬 Tutorials', 'admin:tutorials', 'primary')],
       [btn('🔙 Back', 'menu:main', 'primary')],
     ],
   };

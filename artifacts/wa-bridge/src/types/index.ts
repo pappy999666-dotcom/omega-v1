@@ -47,6 +47,21 @@ export interface UserConfig {
   responseMode?: 'txt' | 'table';
   /** IANA timezone for this session (e.g. Africa/Lagos). Overrides OMEGA_TZ/TZ. */
   timezone?: string;
+  /**
+   * Per-session Game API key for AI-powered poll games (.wyr / .quiz).
+   * Stored securely per session — NEVER logged, shown in menus, or exposed
+   * in any response / error report / session information.
+   */
+  gameApiKey?: string;
+  /** Per-session Game API model override (default: llama-3.3-70b-versatile). */
+  gameApiModel?: string;
+  /**
+   * Per-session Game API endpoint override — any OpenAI-compatible chat
+   * completions URL (e.g. Groq: https://api.groq.com/openai/v1/chat/completions).
+   * Falls back only to the built-in provider endpoint; credentials never fall back across sessions.
+   * Stored per session like the key — never exposed in responses.
+   */
+  gameApiEndpoint?: string;
 }
 
 export interface MenuButton {
