@@ -30,8 +30,35 @@ import { logger } from '../../utils/logger.js';
 
 type TutorialContext = Context & { session: any; telegramId: string; isOwner: boolean };
 
+type TelegramRenderContext = Context & {
+  callbackQuery?: unknown;
+  answerCbQuery: (text?: string, extra?: { show_alert?: boolean }) => Promise<unknown>;
+  editMessageText: (text: string, extra?: Record<string, unknown>) => Promise<unknown>;
+};
+
+async function acknowledgeCallback(ctx: Context, text?: string): Promise<void> {
+  if (ctx.callbackQuery) await ctx.answerCbQuery(text).catch(() => {});
+}
+
+async function editOrReply(
+  ctx: TelegramRenderContext,
+  text: string,
+  extra: Record<string, unknown>,
+): Promise<void> {
+  if (!ctx.callbackQuery) {
+    await ctx.reply(text, extra as never);
+    return;
+  }
+  try {
+    await ctx.editMessageText(text, extra);
+  } catch (error) {
+    logger.warn('[Tutorials] callback message edit failed, replying fresh', { err: String(error) });
+    await ctx.reply(text, extra as never).catch(() => {});
+  }
+}
+
 /** Render the tutorial list + actions. */
-export async function handleTutorialsMenu(ctx: Context): Promise<void> {
+export async function handleTutorialsMenu(ctx: Context, acknowledge = true): Promise<void> {
   const tutorials = listTutorials();
   const lines = [
     header('Tutorial Manager', '🎬'),
@@ -60,22 +87,13 @@ export async function handleTutorialsMenu(ctx: Context): Promise<void> {
 
   const markup = { inline_keyboard: rows };
   const text = lines.join('\n');
-  try {
-    if (ctx.callbackQuery) {
-      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: markup });
-    } else {
-      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: markup });
-    }
-  } catch (err) {
-    // A stale/older message may no longer be editable — fall back to a
-    // fresh reply so the Tutorial Manager always opens.
-    logger.warn('[Tutorials] menu edit failed, replying fresh', { err: String(err) });
-    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: markup }).catch(() => {});
-  }
+  if (acknowledge) await acknowledgeCallback(ctx);
+  await editOrReply(ctx as TelegramRenderContext, text, { parse_mode: 'HTML', reply_markup: markup });
 }
 
 /** Step 2 — prompt for a command name (registry list shown). */
 export async function handleTutorialAdd(ctx: TutorialContext): Promise<void> {
+  await acknowledgeCallback(ctx, 'Add Tutorial');
   ctx.session.awaitingTutorialCommand = true;
   delete ctx.session.tutorialPending;
 
@@ -84,20 +102,17 @@ export async function handleTutorialAdd(ctx: TutorialContext): Promise<void> {
     .map((c) => `• ${H.code(c)}`)
     .join('\n');
 
-  await ctx.editMessageText(
-    [
-      header('Add Tutorial', '➕'),
-      '',
-      'Send the exact command name you want to attach a tutorial to.',
-      '',
-      H.blockquote('Registered commands (central registry):'),
-      list,
-    ].join('\n'),
-    {
-      parse_mode: 'HTML',
-      reply_markup: backKeyboard('admin:tutorials'),
-    }
-  ).catch(() => {});
+  await editOrReply(ctx as TelegramRenderContext, [
+    header('Add Tutorial', '➕'),
+    '',
+    'Send the exact command name you want to attach a tutorial to.',
+    '',
+    H.blockquote('Registered commands (central registry):'),
+    list,
+  ].join('\n'), {
+    parse_mode: 'HTML',
+    reply_markup: backKeyboard('admin:tutorials'),
+  });
 }
 
 /** Step 3 — validate the typed command name. */
@@ -156,26 +171,23 @@ export async function handleTutorialType(ctx: TutorialContext, type: TutorialMed
   const pending = ctx.session.tutorialPending as { command: string; type?: TutorialMediaType } | undefined;
   if (!pending?.command) {
     await ctx.answerCbQuery('Start over — press Add Tutorial').catch(() => {});
-    await handleTutorialsMenu(ctx);
+    await handleTutorialsMenu(ctx, false);
     return;
   }
   pending.type = type;
   ctx.session.tutorialPending = pending;
 
-  await ctx.answerCbQuery(type === 'image' ? 'Send an image now' : 'Send a video now').catch(() => {});
-  await ctx.editMessageText(
-    [
-      header(type === 'image' ? 'Send Image' : 'Send Video', type === 'image' ? '🖼' : '🎞'),
-      '',
-      kv('Command:', H.code(pending.command)),
-      '',
-      H.blockquote(`Upload the ${type} now. It will be stored against .help ${pending.command}.`),
-    ].join('\n'),
-    {
-      parse_mode: 'HTML',
-      reply_markup: backKeyboard('admin:tutorials'),
-    }
-  ).catch(() => {});
+  await acknowledgeCallback(ctx, type === 'image' ? 'Send an image now' : 'Send a video now');
+  await editOrReply(ctx as TelegramRenderContext, [
+    header(type === 'image' ? 'Send Image' : 'Send Video', type === 'image' ? '🖼' : '🎞'),
+    '',
+    kv('Command:', H.code(pending.command)),
+    '',
+    H.blockquote(`Upload the ${type} now. It will be stored against .help ${pending.command}.`),
+  ].join('\n'), {
+    parse_mode: 'HTML',
+    reply_markup: backKeyboard('admin:tutorials'),
+  });
 }
 
 /** Step 5 — save the uploaded media buffer against the pending command. */
@@ -260,6 +272,7 @@ export async function handleTutorialPreview(ctx: Context, command: string): Prom
     await ctx.answerCbQuery('No helper media is stored for this tutorial', { show_alert: true }).catch(() => {});
     return;
   }
+  await acknowledgeCallback(ctx, 'Sending preview…');
   const caption = tutorial?.title ?? `Tutorial preview: ${command}`;
   try {
     for (const [index, asset] of media.entries()) {
@@ -269,9 +282,7 @@ export async function handleTutorialPreview(ctx: Context, command: string): Prom
         await ctx.replyWithVideo({ source: asset.buffer }, { caption: index === 0 ? caption : undefined });
       }
     }
-    await ctx.answerCbQuery('Preview sent').catch(() => {});
   } catch (error) {
-    await ctx.answerCbQuery('Preview failed', { show_alert: true }).catch(() => {});
     await ctx.reply(noticeCard('Tutorial Preview Failed', String(error), 'error'), {
       parse_mode: 'HTML',
       reply_markup: backKeyboard('admin:tutorials'),
@@ -287,22 +298,20 @@ export async function handleTutorialDelete(ctx: Context, command: string): Promi
     await handleTutorialsMenu(ctx);
     return;
   }
-  await ctx.editMessageText(
-    [
-      header('Confirm: Remove Tutorial', '⚠️'),
-      '',
-      `Remove the ${t.type} tutorial attached to ${H.code(t.command)}?`,
-    ].join('\n'),
-    {
-      parse_mode: 'HTML',
-      reply_markup: confirmKeyboard(`admin:tutorials:delconfirm:${t.command}`, 'admin:tutorials'),
-    }
-  ).catch(() => {});
+  await acknowledgeCallback(ctx, 'Review removal');
+  await editOrReply(ctx as TelegramRenderContext, [
+    header('Confirm: Remove Tutorial', '⚠️'),
+    '',
+    `Remove the ${t.type} tutorial attached to ${H.code(t.command)}?`,
+  ].join('\n'), {
+    parse_mode: 'HTML',
+    reply_markup: confirmKeyboard(`admin:tutorials:delconfirm:${t.command}`, 'admin:tutorials'),
+  });
 }
 
 /** Delete — execute. */
 export async function handleTutorialDeleteConfirm(ctx: Context, command: string): Promise<void> {
-  const removed = removeTutorial(command);
-  await ctx.answerCbQuery(removed ? 'Tutorial removed' : 'Tutorial not found').catch(() => {});
-  await handleTutorialsMenu(ctx);
+  removeTutorial(command);
+  await acknowledgeCallback(ctx, 'Tutorial removed');
+  await handleTutorialsMenu(ctx, false);
 }

@@ -1992,23 +1992,40 @@ async function routeCallback(
       const meta = loadSessionMeta(ownerId, sessionId);
       if (!meta) { await ctx.answerCbQuery('Session not found', { show_alert: true }).catch(() => {}); return; }
       const cfg = loadSessionConfig(ownerId, sessionId);
-      await ctx.answerCbQuery().catch(() => {});
       await ctx.editMessageText([
         header('Game API • Session Tutorial', '🎮'),
         '',
         'Quiz and Would You Rather use the Game API configured only for this WhatsApp session.',
         '',
         '1. Create an API key with your chosen OpenAI-compatible provider.',
-        '2. Open the paired WhatsApp session and send .gameapi guide.',
-        '3. Send .gameapi <key> to save it privately for this session.',
-        '4. Optionally set .gameapi model <model> and .gameapi endpoint <groq|xai|openai|url>.',
-        '5. Send .gameapi test to make a real provider request.',
-        '6. Start .wyr or .quiz in a group.',
+        `2. Open the paired WhatsApp session and send ${H.code('.gameapi guide')}.`,
+        `3. Send ${H.code('.gameapi <key>')} to save it privately for this session.`,
+        `4. Optionally set ${H.code('.gameapi model <model>')} and ${H.code('.gameapi endpoint <groq|xai|openai|url>')}.`,
+        `5. Send ${H.code('.gameapi test')} to make a real provider request.`,
+        `6. Start ${H.code('.wyr')} or ${H.code('.quiz')} in a group.`,
         '',
         cfg.gameApiKey ? 'Status: configured (key hidden)' : 'Status: not configured',
         '',
         H.blockquote('The administrator panel manages instructional media only. It never configures this session\'s key.'),
-      ].join('\\n'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }).catch(() => {});
+      ].join('\\n'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }).catch(async (error) => {
+        logger.warn('[Bot] Game API tutorial edit failed, replying fresh', { sessionId, err: String(error) });
+        await ctx.reply([
+          header('Game API • Session Tutorial', '🎮'),
+          '',
+          'Quiz and Would You Rather use the Game API configured only for this WhatsApp session.',
+          '',
+          '1. Create an API key with your chosen OpenAI-compatible provider.',
+          `2. Open the paired WhatsApp session and send ${H.code('.gameapi guide')}.`,
+          `3. Send ${H.code('.gameapi <key>')} to save it privately for this session.`,
+          `4. Optionally set ${H.code('.gameapi model <model>')} and ${H.code('.gameapi endpoint <groq|xai|openai|url>')}.`,
+          `5. Send ${H.code('.gameapi test')} to make a real provider request.`,
+          `6. Start ${H.code('.wyr')} or ${H.code('.quiz')} in a group.`,
+          '',
+          cfg.gameApiKey ? 'Status: configured (key hidden)' : 'Status: not configured',
+          '',
+          H.blockquote("The administrator panel manages instructional media only. It never configures this session's key."),
+        ].join('\\n'), { parse_mode: 'HTML', reply_markup: backKeyboard(`session:${sessionId}:menu`) }).catch(() => {});
+      });
       return;
     }
     if (sub === 'info') {
